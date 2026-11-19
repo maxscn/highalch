@@ -6,7 +6,7 @@ import {
   Deferred,
   Effect,
   Exit,
-  Fiber,
+  type Fiber,
   Option,
   Predicate,
   Pull,
@@ -27,7 +27,7 @@ import { keyOf, type Answer, type Input, type Row } from "./values";
 // A slower read model can still answer stale, and an omitted new row waits for another change
 // or reload. One query runs at a time, with one waiting request that can preempt retry backoff
 // after its debounce. Rule-based subsets keep cursor-based settlement and only re-ask on
-// explicit reload. With live disabled, a subset only loads once.
+// explicit reload. Subsets with live disabled never request a reload on their own.
 
 type Params = Parameters<SyncConfig<Row, string>["sync"]>[0];
 
@@ -131,11 +131,11 @@ export class Subset {
   private stop = () => {
     if (this.stopping) return this.stopping;
 
-    this.stopping = Promise.resolve().then(() =>
-      Effect.runPromise(Scope.close(this.scope, Exit.void)),
-    );
+    this.stopping = Promise.resolve()
+      .then(() => Effect.runPromise(Scope.close(this.scope, Exit.void)))
+      .finally(() => feedClosed);
     this.release();
-    this.feed?.release(this);
+    const feedClosed = this.feed?.release(this);
 
     return this.stopping;
   };
@@ -178,7 +178,7 @@ export class Subset {
   };
 
   schedule = () => {
-    if (!this.connection.live || this.stopping) return;
+    if (this.stopping) return;
 
     this.triggers = [];
     this.corrections = 0;
@@ -191,7 +191,7 @@ export class Subset {
         const request = this.pending;
 
         request.reason = reason;
-        if (request.timer) Effect.runFork(Fiber.interrupt(request.timer));
+        request.timer?.interruptUnsafe();
         this.arm(request, delay);
       } else if (reason === "reload") this.pending.reason = reason;
 
@@ -211,6 +211,11 @@ export class Subset {
         Effect.andThen(Deferred.succeed(request.elapsed, undefined)),
         Effect.asVoid,
         Effect.provideService(waitKind, "reload"),
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+
+          return Effect.sync(() => this.stopped(failureOf(this.name, cause)));
+        }),
       ),
       this.scope,
     );
@@ -222,7 +227,7 @@ export class Subset {
     this.pending = undefined;
     this.queued = Deferred.makeUnsafe();
 
-    if (request?.timer) Effect.runFork(Fiber.interrupt(request.timer));
+    request?.timer?.interruptUnsafe();
 
     return request?.reason;
   }
@@ -231,8 +236,12 @@ export class Subset {
     Deferred.await(this.queued).pipe(Effect.flatMap(({ elapsed }) => Deferred.await(elapsed))),
   );
 
+  private get name() {
+    return `${this.entity.entityName}/${this.spec.query.queryName}`;
+  }
+
   private work() {
-    const name = `${this.entity.entityName}/${this.spec.query.queryName}`;
+    const name = this.name;
 
     return Effect.gen({ self: this }, function* () {
       yield* Effect.yieldNow;
@@ -246,7 +255,7 @@ export class Subset {
       }
     }).pipe(
       Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+        if (this.stopping && Cause.hasInterruptsOnly(cause)) return Effect.void;
 
         return Effect.sync(() => this.stopped(failureOf(name, cause)));
       }),
@@ -303,13 +312,7 @@ export class Subset {
       const { entity, query, input, page } = this.spec;
       let cursor = 0;
 
-      if (this.feed) {
-        const stream = yield* this.connection.stream(entity.feed.streamName);
-
-        cursor = cursorOf(yield* stream.peek(this.connection.scope));
-      }
-
-      const ask = yield* this.connection.query(query.queryName);
+      if (this.feed) cursor = cursorOf(yield* this.connection.peek(entity.feed.streamName));
 
       // A request whose debounce expired during the cursor read can use this query.
       if (this.byQuery) {
@@ -323,7 +326,7 @@ export class Subset {
       }
 
       const deliveries = this.deliveries;
-      const result = yield* ask(input, page);
+      const result = yield* this.connection.query(query.queryName, input, page);
 
       if (this.feed) yield* this.feed.ready;
 

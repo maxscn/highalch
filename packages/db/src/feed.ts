@@ -77,7 +77,8 @@ export class Subscription {
   acquire = (subset: Subset) => {
     this.listeners.add(subset);
 
-    if (!this.fiber) this.fiber = this.connection.fork(this.follow());
+    if (!this.fiber)
+      this.fiber = this.connection.fork(Effect.yieldNow.pipe(Effect.andThen(this.follow())));
   };
 
   /** Removes a listener; the last one (of any entity) stops the subscription and forgets it. */
@@ -86,7 +87,7 @@ export class Subscription {
 
     if (this.listeners.size > 0) return;
 
-    this.stop();
+    return this.stop();
   };
 
   /** Whether any subset listens: the subscription then delivers every entry of its scope. */
@@ -147,12 +148,12 @@ export class Subscription {
 
     this.fiber = undefined;
 
-    if (fiber) Effect.runFork(Fiber.interrupt(fiber));
-
     for (const waiter of this.waiters.values()) for (const each of waiter) confirm(each, false);
 
     this.waiters.clear();
     this.cursors.clear();
+
+    if (fiber) return Effect.runPromise(Fiber.interrupt(fiber));
   }
 
   /** The entities listening now, by name: an entry of any other entity has no subset to reach. */
@@ -266,17 +267,16 @@ export class Subscription {
   /** One connection: the starting cursor once, then the entries after the last applied `seq`. */
   private session() {
     return Effect.gen({ self: this }, function* () {
-      const stream = yield* this.connection.stream(this.feed.streamName);
-      const scope = this.connection.scope;
+      const name = this.feed.streamName;
 
       if (!this.started) {
-        const latest = yield* stream.peek(scope);
+        const latest = yield* this.connection.peek(name);
 
         this.seq = cursorOf(latest);
         this.started = true;
       }
 
-      yield* Stream.runForEachArray(stream.events(scope, { after: this.seq }), (frames) =>
+      yield* Stream.runForEachArray(this.connection.events(name, { after: this.seq }), (frames) =>
         Effect.sync(() => this.receive(frames)),
       );
     });
@@ -312,7 +312,7 @@ export class Subscription {
       }
     }).pipe(
       Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+        if (this.listeners.size === 0 && Cause.hasInterruptsOnly(cause)) return Effect.void;
 
         return Effect.sync(() => this.fail(failureOf(name, cause)));
       }),

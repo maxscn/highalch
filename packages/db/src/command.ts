@@ -18,6 +18,7 @@ import {
   cursorOf,
   read,
   waitKind,
+  withEndpointFiber,
   type Connection,
 } from "./client";
 import type * as Rows from "./rows";
@@ -148,9 +149,7 @@ const persist = <A>(
 
       return yield* Effect.gen(function* () {
         const answer = yield* connection.awaitReply(
-          connection
-            .command(command.tag)
-            .pipe(Effect.flatMap((send) => send(call.target, call.input, { commandId }))),
+          connection.command(command.tag, call.target, call.input, { commandId }),
         );
 
         if (Option.isNone(answer)) return Option.none<Settled<A>>();
@@ -163,15 +162,14 @@ const persist = <A>(
 
         // A deferred change can only be confirmed by its delivery.
         if (!entity.rows.deferred) {
-          const peek = Effect.gen(function* () {
-            const stream = yield* connection.stream(entity.feed.streamName);
-            const latest = yield* stream.peek(connection.scope, {
+          const peek = withEndpointFiber(
+            connection.peek(entity.feed.streamName, {
               atLeast: { stream: receipt.stream, version: receipt.version },
-            });
+            }),
+            (latest) => Effect.map(latest, (entry) => waiter.passed(cursorOf(entry))),
+          );
 
-            waiter.passed(cursorOf(latest));
-          });
-
+          // The live feed can still confirm the command if this optional cursor check fails.
           yield* Effect.forkScoped(Effect.ignoreCause(peek));
         }
 
@@ -233,7 +231,7 @@ const start = <A, E extends TaggedFailure>(
   options: Options<A, E> & { readonly id?: string },
 ) => {
   const connection = connectionOf(db);
-  const call = Option.liftPredicate(connection, (client) => !client.closedToCommands).pipe(
+  const call = Option.liftPredicate(connection, (client) => !client.closingOrClosed).pipe(
     Option.map(({ scope }) => edit.resolve(input, scope, Option.none())),
     Option.getOrUndefined,
   );
@@ -286,7 +284,7 @@ const start = <A, E extends TaggedFailure>(
 
   const result = { transaction, outcome: Deferred.await(outcome) };
 
-  if (!call || connection.closedToCommands) {
+  if (!call || connection.closingOrClosed) {
     transaction.rollback({ error: closedClientError() });
 
     return result;
@@ -316,7 +314,7 @@ const start = <A, E extends TaggedFailure>(
 
 /** Rejects before running an optimistic action on a closing client. */
 const rejectClosed = (connection: Connection, transaction: Transaction | undefined) => {
-  if (!connection.closedToCommands) return false;
+  if (!connection.closingOrClosed) return false;
 
   const error = closedClientError();
 
@@ -489,22 +487,35 @@ const pace = <C extends Domain.Command.Any>(
   inputOf: (row: Entity) => Input,
   clientOf: () => DbClient,
 ): Omit<PacedMutationsConfig<InputOf<C>>, "strategy"> => {
-  const targets = new Map<string, string>();
+  const targets = new WeakMap<Transaction, Map<string, string>>();
 
   return {
     onMutate: (input) => {
       const connection = connectionOf(clientOf());
 
-      if (rejectClosed(connection, getActiveTransaction())) return;
+      const transaction = getActiveTransaction();
+
+      if (rejectClosed(connection, transaction)) return;
 
       const call = edit.resolve(input, connection.scope, Option.none());
 
-      targets.set(call.key, call.target);
+      if (transaction) {
+        const addressed = targets.get(transaction) ?? new Map<string, string>();
+
+        addressed.set(call.key, call.target);
+        targets.set(transaction, addressed);
+      }
+
       Option.map(edit.entity, (entity) => edit.apply(connection.ready(entity.entityName), call));
+
+      if (!rejectClosed(connection, transaction) && transaction) connection.trackPaced(transaction);
     },
     mutationFn: ({ transaction }) => {
       const connection = connectionOf(clientOf());
       const rows = new Map<string, Row>();
+      const addressed = targets.get(transaction);
+
+      targets.delete(transaction);
 
       // Only the fields the merged calls changed are sent, with the row's key.
       const field = Option.match(edit.entity, {
@@ -524,9 +535,7 @@ const pace = <C extends Domain.Command.Any>(
           [...rows].map(([key, row]) => {
             const input = inputOf(row);
             const resolved = edit.resolve(input, connection.scope, Option.some(key));
-            const target = targets.get(key) ?? resolved.target;
-
-            targets.delete(key);
+            const target = addressed?.get(key) ?? resolved.target;
 
             return Effect.exit(
               persist(

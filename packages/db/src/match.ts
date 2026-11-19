@@ -1,5 +1,5 @@
 import { fromLive, type Controls, type LiveResult, type LiveState } from "./live";
-import type { TaggedFailure } from "./state";
+import { ClientClosed, type TaggedFailure } from "./state";
 
 /** Joins the tags of one `anyOf` key. A tag never contains a space, so it cannot occur in a tag. */
 const separator = " | ";
@@ -53,17 +53,23 @@ type Twice<K extends string> = {
     : { readonly "states named twice": Repeated }
   : never;
 
-type Missing<S extends TaggedFailure, K extends string> = "orElse" extends K
+type Missing<
+  S extends TaggedFailure,
+  K extends string,
+  Optional extends string,
+> = "orElse" extends K
   ? unknown
-  : [Exclude<Tags<S>, Covered<K>>] extends [never]
+  : [Exclude<Tags<S>, Covered<K> | Optional>] extends [never]
     ? unknown
-    : { readonly "missing states": Exclude<Tags<S>, Covered<K>> };
+    : { readonly "missing states": Exclude<Tags<S>, Covered<K> | Optional> };
 
 /** Every check `on` makes of its handlers; each failing one names its tags in the error. */
-export type Checked<S extends TaggedFailure, K extends string, C = void> = Handlers<S, K, C> &
-  Impossible<S, K> &
-  Twice<K> &
-  Missing<S, K>;
+export type Checked<
+  S extends TaggedFailure,
+  K extends string,
+  C = void,
+  Optional extends string = never,
+> = Handlers<S, K, C> & Impossible<S, K> & Twice<K> & Missing<S, K, Optional>;
 
 /**
  * One key for several tags: `[anyOf("Loading", "Retrying")]: () => <Skeleton />`. The key is the
@@ -87,6 +93,7 @@ const dispatch = <R, C>(
 
   const fallback = handlers["orElse"];
 
+  if (!fallback && state instanceof ClientClosed) throw state;
   if (!fallback) throw new Error(`No match branch for ${state._tag}`);
 
   return fallback(state, controls);
@@ -123,13 +130,13 @@ export type ControlsOf<V extends Matchable> = V extends TaggedFailure
 
 /**
  * Renders one state with a handler per tag. A key is a tag or an `anyOf(...)` key naming
- * several; each handler receives exactly the states its key names. Without `orElse` every state
- * must be named; `orElse` receives the rest. A tag the state cannot be, or one named twice, is a
+ * several; each handler receives exactly the states its key names. Without `orElse` every required
+ * state must be named; `orElse` receives the rest. A tag the state cannot be, or one named twice, is a
  * type error that names it. Returns the union of the handlers' results.
  */
-export type Matcher<S extends TaggedFailure, C = void> = {
+export type Matcher<S extends TaggedFailure, C = void, Optional extends string = never> = {
   readonly on: <const K extends string, H extends Handlers<S, K, C>>(
-    handlers: Checked<S, K, C> & H,
+    handlers: Checked<S, K, C, Optional> & H,
   ) => ReturnType<H[K]>;
 };
 
@@ -142,13 +149,18 @@ const read = (value: Matchable): Reading => {
   return fromLive(value);
 };
 
+// Keep exhaustive Domain handlers valid while allowing a lifecycle error branch on live reads.
+type OptionalOf<V extends Matchable> = V extends LiveResult ? ClientClosed["_tag"] : never;
+
 /**
  * `match(value).on(handlers)`: renders a tagged state or a stock
  * `useLiveQuery` result. A live query result is read once, when `match` is called: its tagged
  * failure is the original error instance, a defect (an untagged failure) is thrown, and every
  * handler receives `{ retry }` as its second argument.
  */
-export const match = <V extends Matchable>(value: V): Matcher<StateOf<V>, ControlsOf<V>> => {
+export const match = <V extends Matchable>(
+  value: V,
+): Matcher<StateOf<V>, ControlsOf<V>, OptionalOf<V>> => {
   const { state, controls } = read(value);
 
   return {
@@ -158,6 +170,10 @@ export const match = <V extends Matchable>(value: V): Matcher<StateOf<V>, Contro
       handlers: Readonly<
         Partial<Record<string, (state: TaggedFailure, controls: Controls | undefined) => R>>
       >,
-    ) => dispatch(state, controls, handlers)) as Matcher<StateOf<V>, ControlsOf<V>>["on"],
+    ) => dispatch(state, controls, handlers)) as Matcher<
+      StateOf<V>,
+      ControlsOf<V>,
+      OptionalOf<V>
+    >["on"],
   };
 };

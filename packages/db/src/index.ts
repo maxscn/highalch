@@ -90,7 +90,7 @@ export { Suspend } from "./live";
 
 export type { AnyOf, Matchable, Matcher, StateOf } from "./match";
 
-export { Defect } from "./state";
+export { ClientClosed, Defect } from "./state";
 
 export type { TaggedFailure } from "./state";
 
