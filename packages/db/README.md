@@ -1,0 +1,473 @@
+# @highalch/db
+
+Makes an [alchemy Domain](https://alchemy.run/domain) sync into TanStack DB 1.0 collections, with
+typed errors taken from the Domain definitions and no plumbing at call sites. Reads are stock
+TanStack DB `useLiveQuery`; writes are native TanStack DB transactions; states are rendered with
+`match`. The package knows nothing about the application: the Api, its transport and the scope
+(an account, say) are supplied by the app.
+
+| Entry point             | What                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------- |
+| `@highalch/db`          | The whole client-side API, React-free. Import it as `HighAlch`.                          |
+| `@highalch/db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect      |
+| `@highalch/db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                           |
+| `@highalch/db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`    |
+| `@highalch/db/internal` | Unstable seams for `@highalch/story` (timers, connection, state constructors); no semver |
+
+```ts
+import * as HighAlch from "@highalch/db";
+```
+
+Peer dependencies: `effect` 4.1.4, `@alchemy.run/domain` 2.0.0-beta.87, `@tanstack/db` and
+`@tanstack/react-db` 1.0.0-rc.1.5, `react` 19.2.7; optional `xstate` 6.0.0-alpha.60 and
+`@xstate/effect` 0.1.0-alpha.2 (only for `@highalch/db/xstate`).
+
+## Server: one feed per scope, one entity per row type, one projection
+
+The server side is alchemy's own primitives: a **`Domain.Stream`** per scope (for example per
+account), a keyed, replayable, append-only log, written by exactly one **`Domain.Projection`**.
+One feed carries the row changes of several entities.
+
+```ts
+import * as HighAlch from "@highalch/db/server";
+
+// The feed: one stream per account. Its reads are guarded like any stream's.
+export class RecordChanges extends HighAlch.Feed("RecordChanges", {
+  scope: AccountKey, // a string Schema: the stream's (and its projection's) key
+  middleware: [Session], // optional
+  rejects: [NotMember], // optional: typed read rejections
+}) {}
+
+// A reader reads only its own scope: the feed's Layer (`validate`).
+export const RecordChangesLive = RecordChanges.readers({
+  scope: Effect.map(CurrentMember, (member) => member.account), // the reader's own scope
+  reject: () => new NotMember(),
+});
+
+// One entity on the feed.
+export class CustomerRows extends HighAlch.Rows("CustomerRows", {
+  feed: RecordChanges,
+  row: Customer, // the row schema
+  key: "CustomerId", // its key field (a string)
+  from: [CustomerRecord], // aggregates or views
+  scope: ({ event }) => event.account, // the feed (scope) an event belongs to
+  target: (key, scope) => JSON.stringify([scope, key]), // optional: the aggregate a row's commands address
+  on: {
+    CustomerCreated: (event) => HighAlch.upserted(event.customer),
+    CustomerChanged: (event) => HighAlch.upserted(event.customer),
+    CustomerDeleted: (event) => HighAlch.removed(event.CustomerId),
+  },
+}) {}
+
+// The feed's one writer, built from its entities: adding an entity is one line here.
+export class RecordChangesWriter extends HighAlch.Projection("RecordChanges", {
+  feed: RecordChanges,
+  entities: [CustomerRows, MessageRows],
+}) {}
+
+// The model lists the stream and the projection; its layer gets their Layers.
+class App extends Domain.Model("App", {
+  // …
+  projections: [RecordChangesWriter],
+  streams: [RecordChanges],
+}) {}
+
+App.layer(Layer.mergeAll(handlers, RecordChangesWriter.layer, RecordChangesLive));
+```
+
+- The feed's entries are `<feed>.Upserted { entity, row, cause? }` and
+  `<feed>.Removed { entity, key, cause? }`. `entity` names the entity; `row` is the whole row as
+  its row schema encodes it (the browser decodes it with the same schema, so rows stay typed per
+  entity); `cause` is the command whose change the entry delivers, when the entity names one.
+- `on` is keyed by event tag (or source name) and answers `upserted(row)`, `removed(key)`, an
+  array of them, or nothing. The feed keeps no row, so **the event (or a source view's state,
+  passed as the handler's second argument) must carry the whole row after it**: events carry the
+  outcome.
+- `scope(input)` returns the feed (the stream key) the event belongs to, or `undefined` to leave
+  it out of every feed. Events without an `on` handler are routed nowhere.
+- `target(key, scope)` gives the alchemy target (the aggregate instance) of a command that
+  addresses the row with that key, in the client's scope. It is declared here because this is
+  where the aggregate is known (for example, aggregates keyed by `[scope, key]` as JSON,
+  which alchemy's types cannot reveal). Without it the target is the row key itself. Its return
+  type is checked against every command of the entity's collection that uses it.
+- `cause(event)` names the command whose change an event delivers when that is not the command
+  that recorded it, for example a policy that settles a command's write after it persisted, under
+  its own command id. The entry carries it (`cause`), and the browser settles that command with
+  it. An entity that declares `cause` makes its commands settle only on delivery (or as
+  `Unconfirmed` after `settleTimeout`), not when the feed passes the command's own receipt, since
+  the change arrives later.
+- `Projection` consumes every event an entity maps and routes it to that entity's scope (one
+  named route per entity and source), then appends the entity's entries. Its `options` are the
+  projection's (`batch`, `version`). Every entity of the projection must be on its feed (a type
+  error otherwise). A feed has exactly one writer: list one `Projection` per feed.
+- Serve the stream in the Api like any stream (`streams: ["RecordChanges"]`). A model's server
+  code imports these from `@highalch/db/server`, which bundles no TanStack DB.
+
+**Delivery.** Like every projection, it runs at least once per input, in order per scope; alchemy
+drops a repeated append for the same input. Entries are whole rows (or removed keys), so a
+redelivered entry is harmless, and the browser also drops any entry at or before the last `seq`
+it applied.
+
+**Hosting cost.** On Cloudflare a feed is **three Durable Object classes, however many entities
+it carries**: `<feed>Stream` (the stream), and `<projection>Projection` and
+`<projection>ProjectionRun` (the projection's keys and its backfill run). Projections cannot be
+`lazy`.
+
+**Backfill.** Every projection replays history: **added to a deployment that already has
+history, it first receives every earlier event of its sources** (alchemy's backfill; for a feed
+keyed by a scope rather than by its source aggregate, two passes with a global barrier). There is
+no "start from now" option. On Cloudflare the deploy that adds it waits for that backfill (see
+`DomainCloudflare.layerDurableObjects({ backfillTimeout })`, 30 minutes by default); where no
+deploy-time backfill ran, the first Domain call in each isolate starts it. While it runs, live
+changes of the feed are routed through the backfill, so the feed reaches the present only once it
+completes. Bumping the projection's `version` (or changing the sources it reads) replays it again.
+
+## Declaring (module level)
+
+Declarations are module-level values. They are self-describing: their types come from the
+Domain definitions, not from an Api object.
+
+```ts
+export const customers = HighAlch.collection(CustomerRows, {
+  queries: {
+    list: Customers, // a Domain.Query
+    get: HighAlch.one(Customer, (row, input) => row.CustomerId === input.CustomerId),
+    byProject: HighAlch.where(
+      CustomersByProject,
+      (row, input) => row.ProjectId === input.ProjectId,
+    ),
+  },
+  commands: {
+    create: HighAlch.inserts(CreateCustomer, {
+      row: (input, key) => ({ CustomerId: key, Comments: [], ...input }),
+    }),
+    update: HighAlch.updates(UpdateCustomer),
+    remove: HighAlch.deletes(DeleteCustomer),
+    addComment: HighAlch.edits(AddCustomerComment, {
+      change: (draft, input) => {
+        draft.Comments = [...draft.Comments, input.Comment];
+      },
+    }),
+    registerEmail: RegisterCustomerEmail, // bare: no optimistic change
+    // `{ CustomerId, IntoId }`: the row is `CustomerId`, the command addresses the other record.
+    merge: HighAlch.sends(MergeCustomers, {
+      target: (input, scope) => JSON.stringify([scope, input.IntoId]),
+    }),
+  },
+});
+
+export const summary = HighAlch.query(DashboardSummary); // not an entity: one row, no feed
+export const refresh = HighAlch.command(RefreshSomething, {
+  target: (_input, scope) => scope, // a command with no rows to edit declares its target
+});
+```
+
+**How a query's answer becomes rows** is read from the query itself: a `paged` query's
+`entries`, an array's elements, or one row (none for `null`). A query whose answer wraps its rows
+otherwise (`{ Items, Count, LastEvaluatedKey }`) declares where they are:
+`HighAlch.entries(Customers, (answer) => answer.Items, rule?)`, with an optional membership rule
+as for `where`. Each query's entries must be the entity's rows (a type error names the query
+otherwise). A paged query's accessor takes the page
+as a second argument: `customers.list(input, { after, take })`.
+
+**Which row a command addresses, and which aggregate.** A call passes only the command's input;
+the package resolves the rest from the declarations, in this order:
+
+1. The row key: the input's field named like the row key (`CustomerId` above), or the command's
+   `key: (input) => string` option. A command of an entity whose input has neither is a
+   **compile error** at the `collection` declaration (`updates`, `deletes`, `edits`, `sends` and
+   bare commands).
+2. The target: the command's own `target: (input, scope) => Target` option when it addresses
+   something else, else the `Rows` entity's `target(key, scope)` (by default the key). The entity's
+   target type must be the command's target type (a branded target needs the command's own
+   `target`), and a command's `target` must return it: both are compile errors otherwise.
+
+| Declaration                                         | What it does                                                           |
+| --------------------------------------------------- | ---------------------------------------------------------------------- |
+| `inserts(Cmd, { row, key?, target? })`              | a create: `row(input, key)` is the pending row (checked as a row)      |
+| `updates(Cmd, { key?, target?, fields?, input? }?)` | the input's fields that are row fields replace the row's (not the key) |
+| `deletes(Cmd, { key?, target? }?)`                  | the row leaves every subset                                            |
+| `edits(Cmd, { change, key?, target? })`             | `change(draft, input)` edits a writable draft typed from the row       |
+| `sends(Cmd, { key?, target? }?)` or a bare `Cmd`    | no optimistic change; the command settles through the feed             |
+| `HighAlch.command(Cmd, { target })`                 | not an entity: no row key; `target(input, scope)` is required          |
+
+**Nested inputs.** When a command's input holds the row fields under another field
+(`{ value: { CustomerId, … } }`), `updates` declares `fields: (input) => input.value` (the fields a
+call sets) and, for `paced`, `input: (row) => ({ value: row })` (the input sent for a merged row);
+`key: (input) => input.value.CustomerId` names the row.
+
+**Creates.** The pending row needs its key before the server answers, so `inserts` chooses it on
+the client: `key(input)` when declared (a key the caller can predict from the input), otherwise a
+fresh `crypto.randomUUID()`. The entity's `target(key, scope)` (or the command's
+`target(input, scope, key)`) addresses the new aggregate, so the server's row has the same key and
+the pending row is replaced in place.
+
+**`HighAlch.command` targets.** A command outside an entity has no row key, so it declares
+`target`. The one exception is a singleton aggregate whose target schema is one literal
+(`target: Schema.Literal("settings")`): that literal is the only possible target, so `target` may
+be omitted. Any other omission is a compile error (the declaration needs two arguments).
+
+## Reads: stock `useLiveQuery`
+
+`customers.list(input)` is a TanStack DB collection descriptor. Use it directly as a source:
+
+```tsx
+const res = useLiveQuery((q) =>
+  q.from({ customer: customers.list({ account }) }).orderBy(({ customer }) => customer.Name),
+);
+
+return HighAlch.match(res).on({
+  [HighAlch.anyOf("Loading", "Retrying")]: () => <Skeleton />,
+  Ready: ({ data, feed }) => <List rows={data} stale={Option.isSome(feed)} />,
+  NotMember: (error, { retry }) => <NoAccess onRetry={retry} />,
+  RpcClientError: (_error, { retry }) => <Offline onRetry={retry} />,
+});
+```
+
+There is no hook of ours: joins, `where`, `orderBy`, `limit`, `findOne` and `select` are
+TanStack DB's. The descriptor is materialised by the provider's `DbClient`, so the same
+module-level declaration serves every account.
+
+### States
+
+`match(res)` reads a stock live query result once and gives one of:
+
+| State                                     | When                                                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `Loading`                                 | the first load runs; nothing to show                                                                                |
+| `Retrying { error, attempt, data }`       | the data was ready and a source lost its feed; it is retrying after `error` (`health.failureReason`; first retry 2) |
+| `Ready { data, feed, retry }`             | the data is current; `feed` is `Some(error)` when a source's live updates stopped for good                          |
+| `Missing`                                 | a single-result query (`.findOne()`) is ready and found no row                                                      |
+| `Disabled`                                | the query function returned no query (only when it can)                                                             |
+| each tagged error, as the original object | the first load failed (the original instance from `res.health`; there is no `res.error`)                            |
+
+Every handler also receives `{ retry }` as its second argument; `Ready` carries it too. `retry`
+calls `res.collection.reload()`, which reloads failed sources: a failed live query does not
+recover by itself when its source does. Untagged failures (bugs, undecodable data, a server
+defect) are defects: `match` throws them to the error boundary. `Retrying` also carries `data`
+(an addition to the approved shape: after first readiness there is always data to keep showing).
+
+`match` keeps its guarantees: without `orElse` every state must be named, a tag the value
+cannot be and a tag named twice are type errors, and `anyOf(...)` names several tags.
+
+### Errors without plumbing
+
+Each subset's row type carries a type-only marker, `Row & { readonly [Errors]?: E }` (a unique
+symbol no row holds). `E` is computed from the definitions: `Api.QueryError<Query>` (rejections,
+middleware errors, `ConsistencyTimeout` for `waitsFor`, `RpcClientError`) and
+`Api.ReadError<Feed["definition"]>` (the entity's feed: its rejections, middleware errors and
+`RpcClientError`). `match` recovers the union from the result's
+`data` type through `from`, `where`, `orderBy`, `limit`, joins, `findOne`, whole-row selects and
+spread selects (`{ ...customer, extra }`).
+
+A field projection (`select(({ c }) => ({ id: c.CustomerId }))`) drops the marker. For that
+case the app declares a floor once, by module augmentation:
+
+```ts
+declare module "@highalch/db" {
+  interface Register {
+    readonly errors: HighAlch.ApiErrors<typeof AppApi>; // every read error of the Api
+  }
+}
+```
+
+Without a registered floor, a projection's errors are any tagged failure, so `match` then needs
+`orElse`.
+
+## Writes: TanStack DB transactions
+
+A command is a callable that returns TanStack DB's own `Transaction`:
+
+```ts
+const tx = customers.update(
+  { CustomerId: id, Name },
+  {
+    onCommitted: (settled) => toast.saved(),
+    onRejected: { NotFound: () => toast.gone(), orElse: (error) => toast.failed(error) },
+  },
+);
+
+await tx.when("settled"); // rejects with the original tagged rejection
+
+customers.addComment({ CustomerId: id, Comment });
+```
+
+- A call takes the command's input only; a `target` at a call site is a type error. The package
+  resolves the target from the declarations and sends plain, serialisable data,
+  `{ target, input }`. The transaction's id is the Domain `commandId` (pass `id` to choose it), so
+  a resend with the same id is idempotent.
+- The client's scope is part of the target, so a call needs a client: with none registered it
+  throws before anything is sent.
+- It applies the optimistic change (`inserts`/`updates`/`deletes`/`edits`) to every
+  materialised subset of the entity that shows the row (an insert goes where the subset's rule
+  holds, or to subsets without a rule), sends the command, and **settles when the feed has
+  delivered the change** caused by that command id: the waiter resolves right after the feed's
+  sync `commit()`, so the optimistic value is replaced by the committed one in the same step
+  (never back to the old one). A command whose change the feed does not carry (a no-op, or an
+  event `on` ignores) settles once the feed passed the stream's cursor after the command
+  (the latest entry's `seq` from `stream.peek(scope, { atLeast: receipt })`). A command with no
+  row feed settles when it returns.
+- A typed rejection rolls back and reaches `onRejected`, `when("settled")`, `effect` and
+  `result` as the original instance. `onRejected` takes one handler per tag or `anyOf(...)` key,
+  with `orElse` required unless every error is listed; it is checked against
+  `Api.CommandClient`'s errors for that command.
+- If the feed does not deliver within the client's `settleTimeout`, the command settles as
+  `Unconfirmed` (the server accepted it) and the entity's subsets reload; it never hangs.
+- `command.with({ client?, onCommitted?, onRejected? })` binds a client and default reactions.
+- `command.effect(input)`: an `Effect<Settled, E>` with the typed error channel (state machines,
+  tests). `command.result(input)`: a promise of `Committed | Unconfirmed | E` for `match`; it
+  never rejects for a typed error.
+- `command.options`: `{ onMutate, mutationFn }` for `createOptimisticAction`. A call that edits
+  no loaded row runs the command beside the (empty) transaction, which TanStack completes at once.
+  `onMutate` resolves the call (a create's key is chosen there) and `mutationFn` sends that same
+  key and target.
+- `updates` commands also have `command.paced`: `{ onMutate, mutationFn }` for
+  `usePacedMutations` (add a `strategy`). Each call resolves its row key and target as a direct
+  call does; the merged transaction sends one command per edited row to that target, with its
+  input read from the merged row (so the input fields must be row fields), under the id
+  `<transaction id>:<row key>` (paced transactions cannot take a caller id).
+
+### The created key
+
+An `inserts` call returns a `HighAlch.Created` transaction: its `metadata` holds the new row's key
+under `HighAlch.createdKey`, set before the call returns. Read it with `HighAlch.created`, for
+example to navigate to the new record without awaiting the server:
+
+```ts
+const tx = customers.create({ Name, Email });
+
+navigate({ to: "/customers/$id", params: { id: HighAlch.created(tx) } });
+```
+
+`created` only accepts an `inserts` transaction (a type error otherwise). Every entity call's
+transaction carries the addressed row's key under the same `metadata` key, including those made
+by `createOptimisticAction(command.options)`.
+
+Module-level commands cannot read React context: the `Provider` registers its client while it is
+mounted. A command called with no registered client (during server rendering, outside the
+provider) or with two different clients mounted throws; pass one with `command.with({ client })`.
+
+Pending UI comes from TanStack DB: rows carry `$hasPendingWrites`. An action with no row to show
+uses React's `useTransition` around `await command(input).when("settled")`.
+
+Commands are designed so `@tanstack/offline-transactions` can be adopted later (idempotent on the
+id, serialisable call); it is not integrated.
+
+## Configuration
+
+```tsx
+import { Provider } from "@highalch/db/react";
+
+const db = HighAlch.make({
+  api: AppApi,
+  layer: AppApi.layerClientWebSocket(url).pipe(Layer.provide(clients)), // or `runtime: ...`
+  scope: accountKey, // the scope (stream key) every feed reads
+  retry: HighAlch.transient, // optional; transport failures 3×, nothing else
+  settleTimeout: 10_000, // optional
+});
+
+<Provider client={db}>{children}</Provider>;
+```
+
+`make` returns a TanStack `DbClient` holding the Domain connection as a dependency
+(`client.requireDependency(...)`); `Provider` renders TanStack's `DbProvider` with it. Give the
+client a `layer` (the connection builds and, on `HighAlch.close(db)`, disposes it) or a
+`runtime` that already holds the Api client. `HighAlch.close(db)` first waits until every
+command the client sent has settled (committed, `Unconfirmed` or rolled back, while its rows are
+still shown), then cleans up its collections and the connection.
+
+`HighAlch.reload(db, Rows)` reloads every loaded subset of an entity in one client (one snapshot
+transaction each, no flicker; calls within `reloadDelay` reload once). Use it for a change the
+feed does not carry: a write through another path than the entity's commands, while that path
+exists. For server rendering make one client per request
+with `live: false` (subsets load once, no feed), `dehydrate()` it, and `hydrate(state)` the
+browser's client: collection ids are derived from the declaration, the query and its input, so
+they match.
+
+`retry(error, attempt)` returns the delay before the next attempt, or `Option.none()` to stop.
+Before a subset's first readiness a stop fails it (its error state); after it, failures are
+reported as `failureReason` (`Retrying`) and a stop keeps the rows (`Ready.feed`).
+
+## The subset model and its trade-offs
+
+An account can have too many rows to load a whole entity, so there is **one collection per
+(query, input)**, a subset, created through a module-level descriptor that each `DbClient`
+materialises. All subsets of all entities on one feed in one client listen to the **same**
+subscription of that feed's stream for the client's scope: one subscription per feed per client,
+started with the first subset of any of its entities and released with the last. It hands each
+subset the entries of its own entity (an entry of an entity no subset reads passes by).
+
+Each subset loads with cursor-then-events: `stream.peek(scope)` for the cursor (the latest
+entry's `seq`, `0` before any), then the query, then the feed's entries for its entity after that
+cursor (buffered meanwhile), applied in one sync transaction before `markReady()`. Nothing is
+missed and nothing is applied twice: entries are deduplicated by `seq`. The subscription resumes
+from its last `seq` after a failure.
+
+The package fans feed events and optimistic edits out to every materialised subset:
+
+- `Removed` deletes the row where present.
+- `Upserted` replaces it where present. With a membership rule that no longer holds, it leaves
+  that subset.
+- A row a subset does not have is inserted when the query has a rule (`one`/`where`) that
+  holds; without a rule the subset schedules a debounced reload (`reloadDelay`), since only the
+  query knows where the row belongs. A row this client already shows optimistically (its own
+  insert) is kept until that reload, so it does not flicker away.
+
+Trade-offs: a bare query (no rule) reloads on every unknown row of its entity; a page does not
+backfill after a removal until it reloads; rule-based subsets trust the rule to match the
+server's query. Creates use client-chosen keys (`inserts` chooses one and the entity's `target`
+addresses it): a create whose server row has another key (a per-command `target` that ignores the
+key) appears through the rule or the reload, not in place.
+
+## XState: `@highalch/db/xstate`
+
+A machine invokes a command through `invoke(command)` from
+`@highalch/db/xstate` (production code imports it there, never from a testing entry;
+`story/xstate` re-exports it), registered as an actor and run with `@xstate/effect`'s
+`createEffectActor`:
+
+```ts
+const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }).createMachine({
+  states: {
+    Saving: {
+      invoke: {
+        src: "rename",
+        input: ({ context }) => ({ NoteId: context.NoteId, title: context.draft }),
+        onDone: () => ({ target: "Saved" }),
+        onError: ({ event }) => ({
+          target: isTagged(event.error, "NoteMissing") ? "Stale" : "Failed",
+        }),
+      },
+    },
+  },
+});
+```
+
+It is `fromEffect` over `command.effect(input)`: the invoked actor's output is the `Settled` value
+and its error the typed rejection (the original instance). The logic is marked with its command,
+which is what makes "the command it asked for" observable: XState 6's pure `transition` returns,
+for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
+and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
+is registered under in `setup({ actors })`. Plain XState logic works the same once marked:
+`mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`. In production
+the invoked command runs on the client the `Provider` registered; for a running machine in a story
+the `Runner` service the story provides runs it on the story's client.
+
+## Seams for test kits: `@highalch/db/internal`
+
+`@highalch/story` needs a few behaviour-preserving seams of the core, published as
+`@highalch/db/internal` and **not covered by semver**: `Timers`/`Wait` (where retries, reload
+debounces and settle timeouts wait; `make({ timers })`, default `setTimeout`), `connectionOf` and
+`Connection` (a client's feeds, each with a read-only `current`: caught up and not failed, and its
+materialised subsets), the constructors of `match`'s live states (`Live`, `fromLive`) and of
+`Settled`, and `keyOf`. Applications import `@highalch/db`.
+
+## Deliberately not done
+
+- On-demand loading (`syncMode: "on-demand"`, `loadSubset`): subsets are whole query answers.
+- Offline: no persistence or queueing of transactions (the design leaves room for
+  `@tanstack/offline-transactions`).
+- Accumulating pages (infinite lists): each page is its own subset.
+- Live refresh of `HighAlch.query` results: they have no feed; `retry` (or a remount after GC)
+  reloads them.
+- A command never edits a `HighAlch.query` row.

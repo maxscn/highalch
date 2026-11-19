@@ -1,0 +1,55 @@
+name: Publish
+
+# Releases @highalch/db and @highalch/story with Changesets and npm trusted publishing (OIDC): no
+# npm token is stored. On npmjs.com each package's trusted publisher names this repository and
+# this workflow file (publish.yml).
+#
+# Every push to main:
+# - with pending changesets, opens or updates the "Version Packages" pull request;
+# - without any (that pull request was just merged), publishes the versions npm does not have.
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # the version pull request's branch, and release tags
+      pull-requests: write # the version pull request
+      id-token: write # lets the registry exchange the workflow's OIDC token for a publish credential
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          node-version: "24"
+          cache: true
+
+      # Changesets calls `pnpm` directly to look up and publish packages. Installed from outside the
+      # checkout: npm refuses to run next to a package.json whose devEngines names pnpm.
+      - name: Make sure pnpm is on the PATH
+        working-directory: ${{ runner.temp }}
+        run: command -v pnpm || npm install --global pnpm@12.21.0
+
+      - name: Check, test and build
+        run: vp run ready
+
+      - uses: changesets/action@v2.1.2
+        with:
+          version: vp run release:version
+          publish: vp run release:publish
+          title: Version Packages
+          commit: Version packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

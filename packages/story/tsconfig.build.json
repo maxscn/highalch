@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    // Built against @highalch/db as published (its dist), not its source.
+    "paths": {}
+  },
+  "include": ["src"]
+}

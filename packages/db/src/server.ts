@@ -1,0 +1,23 @@
+/**
+ * The server side of the Domain-backed layer: a feed (one `Domain.Stream` per scope), the
+ * entities on it and the one projection that writes it. It imports only `@alchemy.run/domain`
+ * and `effect`, so a Domain model (and the Worker hosting it) can declare row feeds without
+ * bundling TanStack DB, and Node can load it from source (its relative import names the `.ts`
+ * file). `@highalch/db` re-exports it.
+ *
+ * ```ts
+ * import * as HighAlch from "@highalch/db/server";
+ * ```
+ */
+export { Feed, Rows, Projection, upserted, removed } from "./rows.ts";
+
+export type {
+  AnyFeed,
+  Change,
+  FeedDefinition,
+  FeedError,
+  ProjectionOptions,
+  RowOf,
+  RowsDefinition,
+  ScopeSchema,
+} from "./rows.ts";

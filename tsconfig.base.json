@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "types": ["node"],
+    "paths": {
+      "@highalch/db": ["./packages/db/src/index.ts"],
+      "@highalch/db/server": ["./packages/db/src/server.ts"],
+      "@highalch/db/react": ["./packages/db/src/react.tsx"],
+      "@highalch/db/xstate": ["./packages/db/src/xstate/index.ts"],
+      "@highalch/db/internal": ["./packages/db/src/internal.ts"],
+      "@highalch/story": ["./packages/story/src/index.ts"],
+      "@highalch/story/xstate": ["./packages/story/src/xstate/index.ts"],
+      "@highalch/story/screen": ["./packages/story/src/screen/index.ts"]
+    }
+  }
+}

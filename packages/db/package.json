@@ -1,0 +1,91 @@
+{
+  "name": "@highalch/db",
+  "version": "0.0.1",
+  "description": "Alchemy Domains synced into TanStack DB collections, with typed errors from the Domain definitions.",
+  "keywords": [
+    "alchemy",
+    "domain",
+    "effect",
+    "tanstack-db",
+    "xstate"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/db#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/db"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.mts",
+      "default": "./dist/server.mjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.mts",
+      "default": "./dist/react.mjs"
+    },
+    "./xstate": {
+      "types": "./dist/xstate.d.mts",
+      "default": "./dist/xstate.mjs"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.mts",
+      "default": "./dist/internal.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@alchemy.run/domain": "catalog:",
+    "@tanstack/db": "catalog:",
+    "@tanstack/react-db": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@xstate/effect": "catalog:",
+    "effect": "catalog:",
+    "happy-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "xstate": "catalog:"
+  },
+  "peerDependencies": {
+    "@alchemy.run/domain": "2.0.0-beta.87",
+    "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/react-db": "1.0.0-rc.1.5",
+    "@xstate/effect": "0.1.0-alpha.2",
+    "effect": "^4.1.4",
+    "react": "^19.2.7",
+    "xstate": "6.0.0-alpha.60"
+  },
+  "peerDependenciesMeta": {
+    "@xstate/effect": {
+      "optional": true
+    },
+    "xstate": {
+      "optional": true
+    }
+  }
+}
