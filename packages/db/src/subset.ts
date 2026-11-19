@@ -247,8 +247,10 @@ export class Subset {
 
       if (rows.has(key) && !Option.getOrElse(belongs, () => true)) rows.delete(key);
       else if (rows.has(key) || Option.getOrElse(belongs, () => false)) rows.set(key, change.row);
-      // The in-flight answer can predate confirmation. Keep the insert until the next answer.
-      else if (buffered.inserted.has(seq)) rows.set(key, change.row);
+      // The in-flight answer can predate the change. Keep a row this window shows (a confirmed
+      // insert, or a held row the older answer no longer places) until the next answer.
+      else if (buffered.inserted.has(seq) || (this.spec.windowed && this.synced.has(key)))
+        rows.set(key, change.row);
       else reload ||= Option.isNone(belongs);
     }
 
@@ -283,8 +285,12 @@ export class Subset {
         this.buffer = undefined;
         this.write(rows);
 
-        if (buffered.reload) void this.load(1);
-        else if (reload) this.schedule();
+        if (buffered.reload) {
+          // This query answers every change so far, so a reload still scheduled is not needed.
+          this.reloading?.();
+          this.reloading = undefined;
+          void this.load(1);
+        } else if (reload) this.schedule();
 
         return Option.none();
       },

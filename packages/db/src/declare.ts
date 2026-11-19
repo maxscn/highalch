@@ -350,11 +350,16 @@ export type CommandSpec<Row extends object> =
   // oxlint-disable-next-line typescript/no-explicit-any
   | Sends<any, boolean, boolean>;
 
-type QueryOf<S> = S extends { readonly query: infer Q extends Domain.Query.Any }
-  ? Q
-  : S extends Domain.Query.Any
-    ? S
-    : never;
+type QueryOf<S> =
+  S extends Membership<infer Q>
+    ? Q
+    : S extends Entries<infer Q, infer _Entry>
+      ? Q
+      : S extends Windowed<infer Q, infer _Entry>
+        ? Q
+        : S extends Domain.Query.Any
+          ? S
+          : never;
 
 /** The rows a query spec answers: its selected rows, else its query's entries. */
 type SpecEntryOf<S> = S extends Entries<infer _Q, infer Entry> | Windowed<infer _Q, infer Entry>
@@ -660,14 +665,15 @@ export const collection = <
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
     const reader = readerOf(spec);
     const { query } = reader;
-    let prefix = "";
+    // After the page's JSON, which ends every other id, so no entity or query name can collide.
+    let suffix = "";
 
-    if (reader.windowed) prefix = "windowed:";
+    if (reader.windowed) suffix = ":windowed";
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
         { ...reader, entity: rows, input, page },
-        `${prefix}${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
+        `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}${suffix}`,
       );
 
     return [name, accessor] as const;

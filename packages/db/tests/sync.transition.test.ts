@@ -493,6 +493,93 @@ describe("f(offset/limit window, feed change)", () => {
     },
   );
 
+  it("f(window reloading, a held row the older answer drops is renamed again) → it stays until the next answer", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const page = window(db);
+
+    await ready(page);
+
+    const seen: Array<string | undefined> = [];
+    const subscription = page.subscribeChanges(() => seen.push(page.get(ada.NoteId)?.title));
+
+    cleanup.push(async () => subscription.unsubscribe());
+
+    const rename = async (title: string) => {
+      await server.send((client) =>
+        client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title }),
+      );
+      await until(() => page.get(ada.NoteId)?.title === title, title);
+      await server.indexed((stored) => stored.get(ada.NoteId)?.title === title);
+    };
+
+    await rename("Zed");
+
+    // The older answer, asked while the note is Zed, places it outside the window.
+    const release = server.hold();
+
+    clock.advance();
+    await until(() => countAsked(server).NotesByTitle === 2, "older query held");
+    await rename("Abel");
+
+    release();
+    await tick();
+    expect(page.get(ada.NoteId)?.title).toBe("Abel");
+
+    clock.advance();
+    await until(() => countAsked(server).NotesByTitle === 3, "corrective query asked");
+    await tick();
+
+    expect(titles(page)).toEqual(["n1:Abel", "n2:Bob"]);
+    expect(seen).not.toContain(undefined);
+  });
+
+  it("f(window reloading, one change's delay passes, then another change) → one more query, not two", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const page = window(db);
+
+    await ready(page);
+
+    const rename = async (title: string) => {
+      await server.send((client) =>
+        client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title }),
+      );
+      await until(() => page.get(ada.NoteId)?.title === title, title);
+      await server.indexed((stored) => stored.get(ada.NoteId)?.title === title);
+    };
+
+    await rename("Ada 2");
+
+    const release = server.hold();
+
+    clock.advance();
+    await until(() => countAsked(server).NotesByTitle === 2, "first reload held");
+
+    // Its delay passes while the first reload is in flight; the next change schedules again.
+    await rename("Ada 3");
+    clock.advance();
+    await rename("Ada 4");
+
+    release();
+    await until(() => countAsked(server).NotesByTitle === 3, "follow-up reload asked");
+
+    clock.advance();
+    await tick();
+    await tick();
+
+    expect(countAsked(server).NotesByTitle).toBe(3);
+    expect(titles(page)).toEqual(["n1:Ada 4", "n2:Bob"]);
+  });
+
   it("f(window, unknown row removed) → no reload; a server-rendering window also stays as loaded", async () => {
     const server = await open();
 
