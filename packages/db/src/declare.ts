@@ -9,7 +9,7 @@ import {
 import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
 import type { TaggedFailure } from "./state";
-import { connectionOf, failureOf, read as readAnswer } from "./client";
+import { connectionOf, failureOf, read } from "./client";
 import {
   make,
   type Command,
@@ -62,6 +62,7 @@ type ReadOptions<Q extends Domain.Query.Any, Entry> = {
   readonly query: Q;
   readonly select?: (answer: never) => ReadonlyArray<Entry>;
   readonly rule?: (row: never, input: never) => boolean;
+  /** A distinct declaration for duplicate checking, with the same subset descriptor. */
   readonly single?: boolean;
 };
 
@@ -128,8 +129,10 @@ const buildRead = <Q extends Domain.Query.Any, Entry, const Used extends ReadFac
 };
 
 /** Declares an entity read. Until a membership rule is supplied, the query decides membership. */
-export const read = <Q extends Domain.Query.Any>(query: Q): ReadBuilder<Q, EntryOf<Q>, {}> =>
+const readBuilder = <Q extends Domain.Query.Any>(query: Q): ReadBuilder<Q, EntryOf<Q>, {}> =>
   buildRead({ query }, {});
+
+export { readBuilder as read };
 
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
@@ -722,7 +725,7 @@ export const query =
 
           connection.fork(
             Effect.yieldNow.pipe(
-              Effect.andThen(readAnswer(source.queryName, ask)),
+              Effect.andThen(read(source.queryName, ask)),
               Effect.retry(connection.retry),
               Effect.tap((answer) =>
                 Effect.sync(() => {

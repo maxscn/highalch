@@ -6,7 +6,7 @@ import { useLiveQuery } from "@tanstack/react-db";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 import * as HighAlch from "@highalch/db";
 import {
-  Books,
+  type Book,
   CreateNote,
   NoteAggregate,
   NoteById,
@@ -193,15 +193,14 @@ class OptionalNotes extends Domain.Query("OptionalNotes", {
   rejects: [QueryRefused],
 }) {}
 
-type ReadMethod = "rows" | "where" | "one" | "all";
-type ReadMethods<T> = Extract<keyof T, ReadMethod>;
+type ReadMethods<T> = Extract<keyof T, string>;
 
 type SourceErrors<Accessor> = Accessor extends (...args: never) => HighAlch.Source<infer Row>
   ? HighAlch.ErrorsOf<Row>
   : never;
 
 /** Every read step keeps the query's input and errors and uses the current entry type. */
-export function ReadBuilder() {
+export function ReadBuilder(otherRow: Book) {
   const start = HighAlch.read(Notes);
   const selected = HighAlch.read(NotesByTitle).rows((answer) => answer.Items);
   const all = start.all();
@@ -213,7 +212,7 @@ export function ReadBuilder() {
   });
   const one = HighAlch.read(NoteById).one((row, input) => row.NoteId === input.NoteId);
 
-  expectTypeOf<ReadMethods<typeof start>>().toEqualTypeOf<ReadMethod>();
+  expectTypeOf<ReadMethods<typeof start>>().toEqualTypeOf<"rows" | "where" | "one" | "all">();
   expectTypeOf<ReadMethods<typeof selected>>().toEqualTypeOf<"where" | "one" | "all">();
   expectTypeOf<ReadMethods<typeof all>>().toBeNever();
   expectTypeOf<ReadMethods<typeof where>>().toBeNever();
@@ -262,6 +261,26 @@ export function ReadBuilder() {
     Record<keyof Subsets, Read>
   >();
 
+  const combined = useLiveQuery((q) =>
+    q.from({ note: subsets.selectedWhere({ account: "a", Offset: 0, Limit: 10 }) }),
+  );
+
+  HighAlch.match(combined).on({
+    Loading: () => null,
+    Retrying: () => null,
+    Ready: ({ data }) => data.map((row) => row.NoteId),
+    QueryRefused: (error) => expectTypeOf(error).toEqualTypeOf<QueryRefused>(),
+    RpcClientError: (error) => expectTypeOf(error).toEqualTypeOf<RpcClientError>(),
+  });
+
+  // @ts-expect-error the selected and filtered read still requires its typed rejection
+  HighAlch.match(combined).on({
+    Loading: () => null,
+    Retrying: () => null,
+    Ready: () => null,
+    RpcClientError: () => null,
+  });
+
   // @ts-expect-error rows can be selected only once
   selected.rows(() => []);
 
@@ -279,6 +298,16 @@ export function ReadBuilder() {
 
   expectTypeOf<ReadMethods<typeof cursor>>().toEqualTypeOf<"rows" | "where" | "one">();
   expectTypeOf<ReadMethods<typeof paged>>().toEqualTypeOf<"where" | "one">();
+
+  const pages = HighAlch.collection(NoteRows, {
+    queries: { byCursor: paged.where((row, input) => row.account === input.account) },
+  });
+
+  expectTypeOf(pages.byCursor).toEqualTypeOf<
+    HighAlch.Subsets<typeof NoteRows, typeof NotesByCursor>
+  >();
+  expectTypeOf<SourceErrors<typeof pages.byCursor>>().toEqualTypeOf<Read>();
+  pages.byCursor({ account: "a" }, { after: "2", take: 10 });
 
   // @ts-expect-error a page cannot be the whole list
   cursor.all();
@@ -301,13 +330,16 @@ export function ReadBuilder() {
   // @ts-expect-error the selector receives the wrapped answer, not a note
   HighAlch.read(OptionalNotes).rows((answer) => answer.title);
 
+  // @ts-expect-error the selector only receives non-null answers
+  HighAlch.read(OptionalNotes).rows((_answer: null) => []);
+
   // @ts-expect-error the selector must return an array of rows
   HighAlch.read(OptionalNotes).rows((answer) => answer.Items[0]);
 
   HighAlch.collection(NoteRows, {
     queries: {
-      // @ts-expect-error Books selects another entity's rows
-      wrongEntity: HighAlch.read(Books).rows((answer) => answer),
+      // @ts-expect-error the selected book does not belong to NoteRows
+      wrongEntity: HighAlch.read(Notes).rows(() => [otherRow]),
     },
   });
 
@@ -409,8 +441,12 @@ class RefreshAll extends Domain.Command("RefreshAll", {
 
 /** Declarations: rows, queries, keys and targets are checked against the entity. */
 export const Declarations = () => {
-  // @ts-expect-error NoteStats answers `{ count }`, not notes
-  HighAlch.collection(NoteRows, { queries: { stats: NoteStats } });
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error NoteStats answers `{ count }`, not notes
+      stats: NoteStats,
+    },
+  });
 
   HighAlch.collection(NoteRows, {
     queries: { get: NoteById },
