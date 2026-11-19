@@ -68,3 +68,4 @@ parallel, and start no dev servers.
   `UPDATE_SCREENS=1 vp test packages/story/tests/screen.transition.test.tsx`, open the changed
   PNGs to review them, and keep them with the change. A normal run compares pixels exactly. The
   filmstrips go to `packages/story/artifacts/` (ignored).
+- Releases and CI follow the supply-chain rules in the README's Releasing section: actions pinned to commit SHAs, no `pull_request_target`, no `id-token: write` in a job that installs dependencies, and the pnpm policies in `pnpm-workspace.yaml` stay on. Never add an npm token.

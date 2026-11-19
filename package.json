@@ -11,8 +11,7 @@
     "test": "vp test --maxWorkers=2",
     "ready": "vp check && vp run check:patterns && vp run typecheck && vp run test && vp run build",
     "changeset": "changeset",
-    "release:version": "changeset version && vp install --no-frozen-lockfile && vp fmt",
-    "release:publish": "vp run build && changeset publish"
+    "release:version": "changeset version && vp fmt"
   },
   "devDependencies": {
     "@alchemy.run/domain": "catalog:",

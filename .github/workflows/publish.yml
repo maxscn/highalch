@@ -1,12 +1,20 @@
 name: Publish
 
 # Releases @highalch/db and @highalch/story with Changesets and npm trusted publishing (OIDC): no
-# npm token is stored. On npmjs.com each package's trusted publisher names this repository and
-# this workflow file (publish.yml).
+# npm token exists anywhere.
 #
-# Every push to main:
-# - with pending changesets, opens or updates the "Version Packages" pull request;
-# - without any (that pull request was just merged), publishes the versions npm does not have.
+# The jobs are split so that the right to publish never meets third-party code:
+#
+# - `version` opens or updates the "Version Packages" pull request. It cannot publish.
+# - `pack` installs, checks, builds and packs. It runs dependency code, so it has read access only.
+# - `publish` waits for approval in the `npm` environment, then hands the packed tarballs to npm.
+#   It installs nothing and checks out nothing: only npm and two pinned actions run with the
+#   publish credential.
+# - `tag` records the release as git tags.
+#
+# Rules for this file: every action is pinned to a commit SHA; no dependency cache is restored
+# (a cache is shared state another run could have written); never add `pull_request_target`, and
+# never give a job that installs dependencies `id-token: write`.
 
 on:
   push:
@@ -17,39 +25,141 @@ concurrency:
   group: publish
   cancel-in-progress: false
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  publish:
+  version:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     permissions:
-      contents: write # the version pull request's branch, and release tags
+      contents: write # the version pull request's branch
       pull-requests: write # the version pull request
-      id-token: write # lets the registry exchange the workflow's OIDC token for a publish credential
+    outputs:
+      pending: ${{ steps.changesets.outputs.hasChangesets }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: voidzero-dev/setup-vp@v1.22.0
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           node-version: "24"
-          cache: true
+          cache: false
 
-      # Changesets calls `pnpm` directly to look up and publish packages. Installed from outside the
-      # checkout: npm refuses to run next to a package.json whose devEngines names pnpm.
-      - name: Make sure pnpm is on the PATH
-        working-directory: ${{ runner.temp }}
-        run: command -v pnpm || npm install --global pnpm@12.21.0
-
-      - name: Check, test and build
-        run: vp run ready
-
-      - uses: changesets/action@v2.1.2
+      # With pending changesets this opens or updates the pull request. Without any it does nothing.
+      - id: changesets
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           version-script: vp run release:version
-          publish-script: vp run release:publish
           pr-title: Version Packages
           commit-message: Version packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pack:
+    needs: version
+    if: needs.version.outputs.pending == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      releases: ${{ steps.pack.outputs.releases }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version: "24"
+          cache: false
+
+      - name: Check, test and build
+        run: vp run ready
+
+      # Packs only the versions npm does not have. pnpm writes the tarballs, so `workspace:` and
+      # `catalog:` ranges become real versions.
+      - id: pack
+        name: Pack unpublished versions
+        run: |
+          vp exec changeset pack --out-dir "$RUNNER_TEMP/packed"
+          mkdir -p "$RUNNER_TEMP/release"
+          releases=""
+          for tarball in $(find "$RUNNER_TEMP/packed" -name '*.tgz' | sort); do
+            release="$(tar -xOf "$tarball" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0, "utf8")); p.name + "@" + p.version')"
+            releases="$releases $release"
+            cp "$tarball" "$RUNNER_TEMP/release/"
+          done
+          echo "releases=${releases# }" >> "$GITHUB_OUTPUT"
+          echo "To publish: ${releases:- nothing}"
+
+      - if: steps.pack.outputs.releases != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarballs
+          path: ${{ runner.temp }}/release/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: pack
+    if: needs.pack.outputs.releases != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Required reviewer: the run stops here until it is approved. The npm trusted publisher names
+    # this environment, so no other job or workflow can publish.
+    environment: npm
+    permissions:
+      id-token: write # lets npm exchange the workflow's OIDC token for a publish credential
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarballs
+          path: ${{ runner.temp }}/release
+
+      - name: Check that npm supports trusted publishing
+        run: |
+          node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
+            if (!ok) { console.error(`npm ${process.argv[1]} is older than 11.5.1`); process.exit(1); }
+          ' "$(npm --version)"
+
+      # @highalch/db first: @highalch/story depends on it. Lifecycle scripts stay off. A version
+      # with a prerelease suffix has one more hyphen in its file name and goes to `next`.
+      - name: Publish
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          for package in db story; do
+            for tarball in highalch-"$package"-*.tgz; do
+              [ -e "$tarball" ] || continue
+              tag=latest
+              case "$tarball" in *-*-*-*) tag=next ;; esac
+              npm publish "./$tarball" --tag "$tag" --ignore-scripts
+            done
+          done
+
+  tag:
+    needs: [pack, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # release tags
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag the release
+        env:
+          RELEASES: ${{ needs.pack.outputs.releases }}
+        run: |
+          for release in $RELEASES; do
+            if git ls-remote --exit-code --tags origin "refs/tags/$release" > /dev/null; then
+              echo "$release is already tagged"
+            else
+              git tag "$release"
+              git push origin "refs/tags/$release"
+            fi
+          done

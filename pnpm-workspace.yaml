@@ -3,6 +3,14 @@ packages:
 
 catalogMode: prefer
 
+# Supply-chain policy. A version must have been on the registry for three days before it can be
+# installed, so a hijacked release is likely to be pulled before it reaches this repository.
+# Dependencies may not run install scripts unless listed under `allowBuilds`, and transitive
+# dependencies may not come from git or tarball URLs.
+minimumReleaseAge: 4320
+strictDepBuilds: true
+blockExoticSubdeps: true
+
 catalog:
   "@alchemy.run/domain": 2.0.0-beta.87
   "@changesets/cli": ^3.0.3
