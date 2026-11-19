@@ -250,6 +250,44 @@ defect) are defects: `match` throws them to the error boundary. `Retrying` also 
 `match` keeps its guarantees: without `orElse` every state must be named, a tag the value
 cannot be and a tag named twice are type errors, and `anyOf(...)` names several tags.
 
+### Suspense
+
+`HighAlch.Suspend` is a `Loading` handler that suspends to the nearest `<Suspense>` instead of
+rendering a placeholder. Everything else stays a branch: a typed rejection of the first load
+renders its own handler (it never reaches an error boundary), `Retrying`, `Ready` and `Missing`
+are unchanged, and a defect still throws to the error boundary.
+
+```tsx
+const res = useLiveQuery((q) => q.from({ note: notes.list({ account }) }));
+
+return HighAlch.match(res).on({
+  Loading: HighAlch.Suspend,
+  QueryRefused: () => <Refused />,
+  RpcClientError: (_error, { retry }) => <Offline onRetry={retry} />,
+  Retrying: ({ data }) => <NoteList notes={data} reconnecting />,
+  Ready: ({ data }) => <NoteList notes={data} />,
+});
+```
+
+It is still the stock `useLiveQuery`. A suspended render never commits, so its subscription
+never starts: `Suspend` observes the result's collection itself until the first load ends (ready,
+a typed rejection, a crash or a cleanup) and throws one promise, shared by every render waiting
+on the same source collections of the same client (another client's read of the same
+declaration waits on its own load), that resolves then and never rejects. The retried render builds a new live
+query over the loaded sources and is `Ready` (or the error) at once: a first mount renders twice
+suspended (React pre-renders a suspended tree once more) and once with the data. `Suspend` is a
+type error on any key but `Loading`.
+
+- **Input change.** A reader that was ready and suspends on a new input (a subset not loaded
+  yet) replaces its content with the fallback, as any suspending update does. Make the change in
+  `startTransition`, or read the input through `useDeferredValue`, to keep the old list on
+  screen until the new one is loaded.
+- **React's reveal throttle.** Once React shows a fallback it keeps it about 300 ms before it
+  reveals the content, however soon the data arrives.
+- **Observer lifetime.** After the load ends, `Suspend` keeps observing the collection until a
+  committed reader subscribes, or for 5 s (TanStack DB's suspense `gcTime`), so a retry that
+  reuses it finds it loaded; an unmounted or discarded render's collection is released then.
+
 ### Errors without plumbing
 
 Each subset's row type carries a type-only marker, `Row & { readonly [Errors]?: E }` (a unique

@@ -109,6 +109,249 @@ export type LiveState<V extends LiveResult> =
 
 const none = () => {};
 
+/** The stock live query result each `Loading` state `fromLive` built was read from. */
+const loads = new WeakMap<object, LiveResult>();
+
+/** What `Suspend` uses of a stock live query collection (a TanStack DB `Collection`). */
+type Pinnable = {
+  readonly status: string;
+  readonly subscriberCount: number;
+  readonly subscribeChanges: (
+    callback: () => void,
+    options: { readonly includeInitialState: boolean },
+  ) => { readonly unsubscribe: () => void };
+  readonly on: (
+    event: "status:change" | "subscribers:change",
+    callback: (event: { readonly status?: string; readonly subscriberCount?: number }) => void,
+  ) => () => void;
+};
+
+const pinnable = (collection: unknown): collection is Pinnable =>
+  Predicate.hasProperty(collection, "subscribeChanges") &&
+  Predicate.hasProperty(collection, "subscriberCount") &&
+  Predicate.hasProperty(collection, "on") &&
+  Predicate.hasProperty(collection, "status");
+
+/** Whether a collection's first load still runs: not yet ready, failed, crashed or cleaned up. */
+const loading = (status: string) => status === "idle" || status === "loading";
+
+/**
+ * How long a settled read keeps its collection observed for a retry that has not subscribed yet
+ * (TanStack DB's own suspense `gcTime`). A reader that commits and subscribes ends it earlier.
+ */
+const linger = 5_000;
+
+/** A pending read: the promise its suspended renders throw, and the collection it observes. */
+type Wait = { readonly promise: Promise<void>; readonly collection: Pinnable };
+
+/**
+ * Observes a loading live query collection until its first load ends (ready, a typed rejection,
+ * a crash or a cleanup), then resolves. A suspended render never commits its `useLiveQuery`
+ * subscription, so without this observer nothing would load its sources. The promise never
+ * rejects: the retried render reads how the load ended and `match` dispatches it. The observer
+ * stays until a committed reader subscribes, the collection is cleaned up, or `linger` passes,
+ * so a retry that reuses this collection (an input change) finds it loaded.
+ */
+const pin = (collection: Pinnable): Promise<void> =>
+  new Promise<void>((resolve) => {
+    let loaded = false;
+    let released = false;
+    let subscription: { readonly unsubscribe: () => void } | undefined;
+    const stops: Array<() => void> = [];
+
+    const release = () => {
+      if (released) return;
+
+      released = true;
+
+      for (const stop of stops.splice(0)) stop();
+
+      subscription?.unsubscribe();
+    };
+
+    const settle = () => {
+      if (loaded) return;
+
+      loaded = true;
+      resolve();
+
+      if (collection.status === "cleaned-up" || collection.subscriberCount > 1) return release();
+
+      const timer = setTimeout(release, linger);
+
+      stops.push(() => clearTimeout(timer));
+    };
+
+    stops.push(
+      collection.on("status:change", ({ status = "" }) => {
+        if (status === "cleaned-up") release();
+
+        if (!loading(status)) settle();
+      }),
+      collection.on("subscribers:change", ({ subscriberCount = 0 }) => {
+        if (loaded && subscriberCount > 1) release();
+      }),
+    );
+
+    // Subscribing starts the load; it may end synchronously, before the subscription is returned.
+    subscription = collection.subscribeChanges(none, { includeInitialState: true });
+
+    if (released) subscription.unsubscribe();
+    else if (!loading(collection.status)) settle();
+  });
+
+/** The load each collection's observer waits for, while it waits. */
+const observed = new WeakMap<Pinnable, Promise<void>>();
+
+/** Observes `collection` (once while it loads); resolves when its first load ends. */
+const observe = (collection: Pinnable) => {
+  const known = observed.get(collection);
+
+  if (known) return known;
+
+  const promise = pin(collection);
+
+  if (loading(collection.status)) {
+    observed.set(collection, promise);
+    void promise.then(() => observed.delete(collection));
+  }
+
+  return promise;
+};
+
+/** A source collection of a live query: the object its client materialised, and its id. */
+type Source = { readonly id: string };
+
+const isSource = (collection: unknown): collection is Source =>
+  Predicate.hasProperty(collection, "id") && Predicate.isString(collection.id);
+
+/** A source as TanStack DB's live query builder lists it: `{ id, alias, collection }`. */
+const collectionOf = (source: unknown): ReadonlyArray<Source> => {
+  if (!Predicate.hasProperty(source, "collection") || !isSource(source.collection)) return [];
+
+  return [source.collection];
+};
+
+/**
+ * The source collections a live query collection reads: the objects its client materialised.
+ * TanStack DB 1.0 exposes them only on the live query's builder, under its internal
+ * `liveQueryInternal` utils key; a version without it gives none, and a read is then not shared.
+ */
+const sourcesOf = (collection: Pinnable): ReadonlyArray<Source> => {
+  const config: unknown = Reflect.get(collection, "config");
+  const utils: unknown = Predicate.hasProperty(config, "utils") && config.utils;
+
+  if (!Predicate.isObject(utils)) return [];
+
+  const key = Object.getOwnPropertySymbols(utils).find(
+    (symbol) => symbol.description === "liveQueryInternal",
+  );
+  const internal: unknown = key && Reflect.get(utils, key);
+
+  if (!Predicate.hasProperty(internal, "getBuilder") || !Predicate.isFunction(internal.getBuilder))
+    return [];
+
+  const builder: unknown = internal.getBuilder();
+
+  if (
+    !Predicate.hasProperty(builder, "healthSources") ||
+    !Predicate.isFunction(builder.healthSources)
+  )
+    return [];
+
+  const sources: unknown = builder.healthSources();
+
+  if (!Array.isArray(sources)) return [];
+
+  return sources.flatMap(collectionOf);
+};
+
+/** One step of the shared reads: the reads of exactly the sources on the path to it. */
+type Node = { readonly next: WeakMap<object, Node>; wait: Wait | undefined };
+
+/**
+ * The pending reads shared between renders, by the exact source collection objects they read:
+ * a path of `WeakMap`s, one step per source (in id order). The objects belong to one client;
+ * two clients materialise the same declaration under the same id, so only the objects tell
+ * their reads apart. A render that suspends is discarded with its hooks, and a retry of a first
+ * mount builds a new live query collection over the same source objects: it finds the read this
+ * way. An entry leaves when its load ends.
+ */
+const shared: Node = { next: new WeakMap(), wait: undefined };
+
+const step = (node: Node, source: object): Node => {
+  const known = node.next.get(source);
+
+  if (known) return known;
+
+  const created: Node = { next: new WeakMap(), wait: undefined };
+
+  node.next.set(source, created);
+
+  return created;
+};
+
+/** Where a live query's read is shared: the node of its source objects (none without them). */
+const placeOf = (collection: Pinnable) => {
+  const sources = [...new Set(sourcesOf(collection))].sort((a, b) => a.id.localeCompare(b.id));
+
+  return Option.map(
+    Option.liftPredicate(sources, (found) => found.length > 0),
+    (found) => found.reduce<Node>(step, shared),
+  );
+};
+
+/**
+ * The stable promise a render suspended on `result`'s first load throws. It shares a pending
+ * read only with live queries over the same source objects of the same client, whose observer
+ * already loads exactly those sources; otherwise it observes the render's own collection.
+ */
+const whenLoaded = (result: LiveResult): Promise<void> => {
+  const collection = result.collection;
+
+  if (!pinnable(collection))
+    throw new Error("HighAlch.Suspend needs a stock useLiveQuery result with its collection");
+
+  return Option.match(placeOf(collection), {
+    onNone: () => observe(collection),
+    onSome: (node) => {
+      const known = node.wait;
+
+      if (known && loading(known.collection.status)) return known.promise;
+
+      const promise = observe(collection);
+
+      if (loading(collection.status)) {
+        const wait = { promise, collection };
+
+        node.wait = wait;
+        void promise.then(() => {
+          if (node.wait === wait) node.wait = undefined;
+        });
+      }
+
+      return promise;
+    },
+  });
+};
+
+/**
+ * The `Loading` handler that suspends: `match(res).on({ Loading: HighAlch.Suspend, ... })` throws
+ * a promise to the nearest `<Suspense>`. The promise is shared by every render waiting on the same
+ * source collections of one client and resolves (never rejects) when the first load ends for any reason; the retried render
+ * then matches `Ready`, a typed error or `Missing` as usual, and a defect still throws.
+ */
+export const Suspend = (state: Data.TaggedEnum.Value<Live<unknown, unknown>, "Loading">): never => {
+  const result = loads.get(state);
+
+  if (!result)
+    throw new Error(
+      "HighAlch.Suspend handles only the Loading state of match(res) over a stock useLiveQuery result",
+    );
+
+  throw whenLoaded(result);
+};
+
 /** A problem's original value when it is a typed failure; a defect or untyped value is thrown. */
 const typed = (cause: unknown): TaggedFailure => {
   if (cause instanceof Defect || !Predicate.hasProperty(cause, "_tag")) throw cause;
@@ -137,7 +380,13 @@ export const fromLive = (result: LiveResult) => {
     return { state: typed(failed.error.cause), controls };
   }
 
-  if (!result.isReady) return { state: states.Loading(), controls };
+  if (!result.isReady) {
+    const state = states.Loading();
+
+    loads.set(state, result);
+
+    return { state, controls };
+  }
 
   const retrying = found.find((node) => node.failureReason !== null)?.failureReason;
 

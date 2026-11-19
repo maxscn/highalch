@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
 import * as HighAlch from "@highalch/db";
 import { notes } from "./notes";
@@ -18,18 +19,58 @@ export function NoteList({ account }: { readonly account: string }) {
             Reconnecting after {error._tag} (attempt {attempt})…
           </p>
         ),
-        Ready: ({ data }) => (
-          <ul>
-            {data.map((note) => (
-              <li key={note.NoteId} className={note.$hasPendingWrites ? "note pending" : "note"}>
-                <span className="title">{note.title}</span>
-                {note.$hasPendingWrites ? <span className="badge">saving</span> : null}
-              </li>
-            ))}
-          </ul>
-        ),
+        Ready: ({ data }) => <Items notes={data} />,
         orElse: (error) => <p className="status error">Could not load notes: {error._tag}</p>,
       })}
+    </section>
+  );
+}
+
+type Row = {
+  readonly NoteId: string;
+  readonly title: string;
+  readonly $hasPendingWrites?: boolean;
+};
+
+function Items({ notes: rows }: { readonly notes: ReadonlyArray<Row> }) {
+  return (
+    <ul>
+      {rows.map((note) => (
+        <li key={note.NoteId} className={note.$hasPendingWrites ? "note pending" : "note"}>
+          <span className="title">{note.title}</span>
+          {note.$hasPendingWrites ? <span className="badge">saving</span> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The same notes read with `Loading: HighAlch.Suspend`: the first load suspends. */
+function SuspendingItems({ account }: { readonly account: string }) {
+  const result = useLiveQuery((q) =>
+    q.from({ note: notes.list({ account }) }).orderBy(({ note }) => note.NoteId),
+  );
+
+  return HighAlch.match(result).on({
+    Loading: HighAlch.Suspend,
+    Retrying: ({ error, attempt }) => (
+      <p className="status retrying">
+        Reconnecting after {error._tag} (attempt {attempt})…
+      </p>
+    ),
+    Ready: ({ data }) => <Items notes={data} />,
+    orElse: (error) => <p className="status error">Could not load notes: {error._tag}</p>,
+  });
+}
+
+/** A demo view whose list suspends to a `<Suspense>` fallback until its first load ends. */
+export function SuspendingNoteList({ account }: { readonly account: string }) {
+  return (
+    <section className="notes">
+      <h1>Notes</h1>
+      <Suspense fallback={<p className="status loading">Waiting for notes…</p>}>
+        <SuspendingItems account={account} />
+      </Suspense>
     </section>
   );
 }

@@ -4,7 +4,7 @@ import * as Screen from "@highalch/story/screen";
 import { install, serialize } from "../src/screen/dom";
 import { Machine } from "@highalch/story/xstate";
 import { editor } from "../../../fixtures/editor";
-import { css, NoteList } from "../../../fixtures/note-list";
+import { css, NoteList, SuspendingNoteList } from "../../../fixtures/note-list";
 import {
   address,
   NoteAggregate,
@@ -54,6 +54,21 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
       screen.render(<NoteList account="acc-1" />),
       Story.release(),
       Story.shows(list, [{ title: "Ada" }, { title: "Bob" }]),
+    );
+  });
+
+  it("f(query held behind Suspense, released) → the fallback, then the notes", async () => {
+    await story.with({ name: "list suspends", invariants: Story.invariants })(
+      exist(ada, bob),
+      Story.hold(),
+      // Frames only where they do not depend on the wall clock: React keeps a fallback it just
+      // showed for 300 ms before it reveals content, however soon the data is there.
+      screen.render(<SuspendingNoteList account="acc-1" />, { every: false }),
+      screen.shot("fallback"),
+      Story.release(),
+      Story.shows(list, [{ title: "Ada" }, { title: "Bob" }]),
+      Story.check("fallback throttle passed", () => new Promise((done) => setTimeout(done, 350))),
+      screen.shot("list"),
     );
   });
 
