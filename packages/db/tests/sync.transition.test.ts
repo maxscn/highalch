@@ -2599,6 +2599,56 @@ describe("f(client, close)", () => {
     },
   );
 
+  it("f(ready single row with no row, reloaded while the client closes) → match throws the defect, not Missing", async () => {
+    const server = await open();
+    const db = account(server, ada.account, cleanup);
+    const one = observe(db, notes.get({ NoteId: "absent" }), cleanup);
+
+    await until(() => one.isReady(), "ready with no row");
+
+    const live = createLiveQueryCollection({
+      query: (q) => q.from({ note: one }).findOne(),
+    });
+
+    cleanup.push(() => live.cleanup());
+    live.startSyncImmediate();
+    await until(() => live.isReady(), "live ready");
+
+    const started = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const dispose = db.cleanup.bind(db);
+
+    db.cleanup = async () => {
+      started.resolve();
+      await gate.promise;
+      await dispose();
+    };
+
+    const closed = Effect.runPromise(HighAlch.close(db));
+
+    try {
+      await started.promise;
+      await one.reload().catch(() => {});
+
+      const read = () =>
+        HighAlch.match({
+          data: undefined as Note | undefined,
+          status: live.status,
+          isEnabled: true,
+          isReady: live.isReady(),
+          isLoadingError: false,
+          isCrashed: false,
+          health: live.health,
+          collection: live,
+        }).on({ orElse: (state) => state._tag });
+
+      expect(read).toThrow(HighAlch.Defect);
+    } finally {
+      gate.resolve();
+      await closed;
+    }
+  });
+
   it.each(["last subset cleanup", "client close"] as const)(
     "f(live feed with a held finalizer, %s) → waits for the finalizer",
     async (action) => {
@@ -2729,23 +2779,6 @@ describe("f(client, close)", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("f(a collection's cleanup awaits close) → close completes", async () => {
-    const server = await open();
-    const db = account(server, ada.account, cleanup);
-    const dispose = db.cleanup.bind(db);
-    let inner = 0;
-
-    db.cleanup = async () => {
-      await Effect.runPromise(HighAlch.close(db));
-      inner += 1;
-      await dispose();
-    };
-
-    await Effect.runPromise(HighAlch.close(db));
-
-    expect(inner).toBe(1);
   });
 
   it("f(scoped client, user fails) → closes its feed and owned runtime once", async () => {

@@ -439,8 +439,9 @@ new commands and paced transactions still waiting for their strategy fail immedi
 starts syncing during or after close is a bug in the caller: its collection fails immediately
 with a `HighAlch.Defect` whose cause says the client is closing or closed, which `match` throws
 to the error boundary, and it registers no subset or feed. A subscriber that throws while its
-transaction rolls back does not stop the shutdown, and a `close` called from a collection's
-cleanup returns at once.
+transaction rolls back does not stop the shutdown; its error is logged. Every caller of `close`
+waits for the same shutdown, so do not await `close` from inside a collection's own cleanup: it
+would wait for itself.
 
 Close keeps the collections and feeds available while admitted commands settle. A server
 rejection rolls back with the original error. A reply received before the deadline gets the

@@ -180,8 +180,6 @@ export class Connection {
   private readonly paced = new Set<Transaction>();
   private readonly replyDeadline = Deferred.makeUnsafe<void>();
   private closing: Effect.Effect<void> | undefined;
-  /** The collections are being cleaned up: a close called from a cleanup must not wait for itself. */
-  private cleaning = false;
   /** One subscription per feed (stream name), shared by every subset of every entity on it. */
   readonly feeds = new Map<string, Subscription>();
   /** The subsets of each entity whose sync runs, by entity name. */
@@ -325,23 +323,10 @@ export class Connection {
 
   close = (db: DbClient) =>
     Effect.suspend(() => {
-      if (this.cleaning) return Effect.void;
-
       this.closing ??= Effect.runSync(
         Effect.cached(
           this.drainCommands().pipe(
-            Effect.andThen(
-              Effect.promise(() => {
-                this.cleaning = true;
-
-                return db.cleanup();
-              }),
-            ),
-            Effect.ensuring(
-              Effect.sync(() => {
-                this.cleaning = false;
-              }),
-            ),
+            Effect.andThen(Effect.promise(() => db.cleanup())),
             Effect.ensuring(Scope.close(this.scopeOfRun, Exit.void)),
             Effect.ensuring(this.runtime.dispose),
           ),
@@ -364,11 +349,9 @@ export class Connection {
       // A subscriber that throws while its transaction rolls back must not stop the shutdown.
       for (const transaction of this.paced)
         if (transaction.state === "pending")
-          yield* Effect.ignore(
-            Effect.try(() =>
-              transaction.rollback({ error: closedClientError(), isSecondaryRollback: true }),
-            ),
-          );
+          yield* Effect.try(() =>
+            transaction.rollback({ error: closedClientError(), isSecondaryRollback: true }),
+          ).pipe(Effect.ignore({ log: "Warn", message: "HighAlch: a rollback at close threw" }));
 
       this.paced.clear();
       yield* FiberSet.awaitEmpty(this.commands);
