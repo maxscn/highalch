@@ -262,8 +262,11 @@ recover by itself when its source does. Untagged failures (bugs, undecodable dat
 defect) are defects: `match` throws them to the error boundary. `Retrying` also carries `data`
 (an addition to the approved shape: after first readiness there is always data to keep showing).
 
-`match` keeps its guarantees: without `orElse` every state must be named, a tag the value
-cannot be and a tag named twice are type errors, and `anyOf(...)` names several tags.
+Without `orElse`, name every live state and Domain error. The optional
+`"HighAlch.ClientClosed"` branch handles reads started on a closing or closed client.
+`orElse` also handles this error. If neither handler is present, `match` throws the
+original `HighAlch.ClientClosed` error. Unknown and duplicate tags are type errors.
+Use `anyOf(...)` to share a handler across tags.
 
 ### Suspense
 
@@ -428,16 +431,30 @@ const db = HighAlch.make({
 `make` returns a TanStack `DbClient` holding the Domain connection as a dependency
 (`client.requireDependency(...)`); `Provider` renders TanStack's `DbProvider` with it. Give the
 client a `layer` (the connection builds and, on `HighAlch.close(db)`, disposes it) or a
-`runtime` that already holds the Api client. Run `yield* HighAlch.close(db)` in an Effect or
-`await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. Close rejects new
-commands immediately and keeps the subsets and feed open while commands already sent settle.
-A command that receives a reply settles as usual, including `Unconfirmed` if its feed
-confirmation times out. If a reply is still outstanding after `settleTimeout` from the
-start of close, HighAlch interrupts the call and rolls back its optimistic edit. Close
-then cleans up the collections and connection once.
+`runtime` that already holds the Api client. Queries, commands, and stream `peek` and
+`events` run in that runtime's Effect context. The `clock` setting overrides its Clock
+for endpoint calls and supplies the clock for HighAlch's own waits.
+
+Run `yield* HighAlch.close(db)` in an Effect or
+`await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. When close begins,
+new commands and paced transactions still waiting for their strategy fail immediately with
+`HighAlch client is closing or closed`. Pending optimistic edits roll back. A read that
+starts syncing during or after close fails immediately with `HighAlch.ClientClosed` and
+registers no subset or feed.
+
+Close keeps the collections and feeds available while admitted commands settle. A server
+rejection rolls back with the original error. A reply received before the deadline gets the
+full feed confirmation timeout and settles as `Committed` or `Unconfirmed`. A reply still
+outstanding `settleTimeout` milliseconds after close began fails with
+`HighAlch client closed before the server replied` and rolls back. HighAlch requests
+interruption and ignores any later reply. Close waits for collection cleanup and feed
+finalizers, then disposes the runtime it built. Concurrent and repeated calls share one
+close operation. The caller owns a supplied runtime.
 
 Use `HighAlch.layer(config)` to give an Effect application a client scoped to its layer.
-It provides the TanStack client as `HighAlch.Client` and closes it when the layer's scope closes.
+It provides the TanStack client as `HighAlch.Client` and closes it when the scope exits,
+including failure and interruption. HighAlch's own waits use the ambient Clock by default
+in a scoped layer.
 Pass the layer to `Atom.runtime` or compose it with your application's layers.
 
 ```ts
@@ -456,10 +473,10 @@ const refresh = Effect.gen(function* () {
 `HighAlch.reload(db, Rows)` reloads every loaded subset of an entity in one client (one snapshot
 transaction each, no flicker; calls within `reloadDelay` reload once). Use it for a change the
 feed does not carry: a write through another path than the entity's commands, while that path
-exists. For server rendering make one client per request
-with `live: false` (subsets load once, no feed), `dehydrate()` it, and `hydrate(state)` the
-browser's client: collection ids are derived from the declaration, the query and its input, so
-they match.
+exists. A client with `live: false` loads subsets on observation and on explicit reload.
+It opens no feed and never re-asks automatically. For server rendering, make one such client
+per request, call `dehydrate()` on it, then `hydrate(state)` on the browser's client. The
+collection ids match because both clients derive them from the declaration, query and input.
 
 `retry` is an Effect `Schedule`. The default, `HighAlch.transient`, retries transport failures
 after 250, 500 and 1,000 ms. Use `Schedule.while` to select which typed failures to retry.
@@ -513,7 +530,7 @@ entries extend it.
 `reloadDelay` coalesces feed changes and explicit reloads into one request. Each subset can have
 one query in flight and one waiting. A debounced feed change or explicit reload can preempt a
 retry backoff. A ready subset writes each accepted answer in one snapshot transaction and
-keeps its readiness. With `live: false`, subsets load once.
+keeps its readiness. With `live: false`, the same debounce coalesces explicit reloads.
 
 A read model that lags the feed longer than the corrections wait can still return stale rows.
 A new row omitted by a lagging answer appears at the next change or reload. Domain's `waitsFor`
