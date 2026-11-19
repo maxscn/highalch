@@ -185,9 +185,9 @@ describe("f(a component reading its machine through atoms, machine steps) → a 
       Editor.render(<NoteEditor NoteId="n1" />, { every: false }),
       Machine.mounted(editing("n1")),
       Machine.when({ type: "Edit", title: "Ada 2" }),
-      Story.check("the component shows the draft and the state", () => {
-        expect(document.querySelector(".field")?.getAttribute("value")).toBe("Ada 2");
-        expect(document.querySelector(".status")?.textContent).toBe("Unsaved changes");
+      Editor.check("the component shows the draft and the state", (container) => {
+        expect(container.querySelector(".field")?.getAttribute("value")).toBe("Ada 2");
+        expect(container.querySelector(".status")?.textContent).toBe("Unsaved changes");
       }),
     );
   });
@@ -211,6 +211,55 @@ describe("f(a component reading its machine through atoms, machine steps) → a 
 
   it("f(a second story) → a fresh registry: the editor starts Idle again", async () => {
     await story(exist(ada), Machine.mounted(editing("n1")), Machine.then({ state: "Idle" }));
+  });
+});
+
+describe("f(mounted DOM, check) → what is rendered, as elements", () => {
+  it("f(note list) → the heading is an h1, each note a list item", async () => {
+    await story.with({ name: "list is checked" })(
+      exist(ada, bob),
+      Screen.render(<NoteList account="acc-1" />, { every: false }),
+      Screen.check("the heading and the notes", (container) => {
+        expect(container.querySelector("h1")?.textContent).toBe("Notes");
+        expect(
+          [...container.querySelectorAll("li .title")].map((each) => each.textContent),
+        ).toEqual(["Ada", "Bob"]);
+      }),
+      Story.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
+      Screen.check("the pending row is marked", (container) => {
+        expect(container.querySelector("li.pending .badge")?.textContent).toBe("saving");
+      }),
+      Story.settled("Committed"),
+      Screen.check("nothing is pending", (container) => {
+        expect(container.querySelector("li.pending")).toBeNull();
+      }),
+    );
+  });
+
+  it("f(a failed expectation) → the step fails with it", async () => {
+    const failure = await story
+      .with({ name: "check fails" })(
+        exist(ada),
+        Screen.render(<NoteList account="acc-1" />, { every: false }),
+        Screen.check("a heading that is not there", (container) => {
+          expect(container.querySelector("h2")?.textContent).toBe("Notes");
+        }),
+      )
+      .then(
+        () => undefined,
+        (error: Story.StoryFailure) => error,
+      );
+
+    expect(failure?.message).toContain("Step 3 (check a heading that is not there) failed");
+  });
+
+  it("f(check before render) → fails naming what to do", async () => {
+    const failure = await story(Screen.check("too early", () => {})).then(
+      () => undefined,
+      (error: Story.StoryFailure) => error,
+    );
+
+    expect(failure?.message).toContain("nothing is rendered yet: Screen.render(element) first");
   });
 });
 

@@ -277,6 +277,12 @@ await story.with({ name: "rename is rejected" })(
   (command replies still held, so a pending row stays pending) and React has flushed, the DOM is
   serialised and painted. `every: false` captures only at `Screen.shot(label?)` steps. One screen per
   story; it is unmounted when the story ends, passed or failed.
+- `Screen.check(label, (container) => …)` asserts on the mounted DOM: it is given the container
+  the element is mounted in, once the world is quiet and React has flushed, so it sees what a
+  frame taken now would paint. Use it for what a picture does not say: that the title is an `h1`
+  (`container.querySelector("h1")`), that a button is disabled, what a control's value is. The
+  container is an ordinary DOM node, so a testing library's queries (`within(container)`) work on
+  it; do not use such a library's own `render`, which mounts outside the story's client.
 - A frame is named by the story's name and the step: `<story>/<step>-<label>.png`. A screen story
   needs `story.with({ name })`; without one, and in a hostless story, `render` fails naming
   itself. Screen steps compose with machine steps (a running editor's frames) like any other.

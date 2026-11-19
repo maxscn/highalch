@@ -198,7 +198,8 @@ const index = async (output: string) => {
  * step: once the world is quiet (command replies still held) and React has flushed, the DOM is
  * serialised (current control values) and painted by takumi's WASM renderer with `css`, then
  * compared pixel by pixel with its baseline. `Screen.shot(label?)` captures a frame on demand (with
- * `Screen.render(element, { every: false })`, only there).
+ * `Screen.render(element, { every: false })`, only there). `Screen.check(label, run)` asserts on
+ * the mounted DOM.
  */
 export const make = (options: Options) => {
   const baselines = pathOf(options.baselines);
@@ -352,8 +353,25 @@ export const make = (options: Options) => {
       if (!mounted.every) await capture(stage, mounted, { step: stage.step, label }, label);
     });
 
-  return { render, shot };
+  /**
+   * Checks the mounted DOM: `run` is given the container the element is mounted in, once the
+   * world is quiet and React has flushed, so it sees what a frame taken now would paint. Query it
+   * as any DOM (`container.querySelector("h1")`, or a testing library's `within(container)`);
+   * what `run` throws fails the step.
+   */
+  const check = (label: string, run: (container: HTMLElement) => void | Promise<void>): Step =>
+    staged(`check ${label}`, async (stage) => {
+      const mounted = Option.getOrThrowWith(
+        stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
+        () => new Mismatch("nothing is rendered yet: Screen.render(element) first"),
+      );
+
+      await quiet(stage.hosted(label));
+      await run(mounted.container);
+    });
+
+  return { render, shot, check };
 };
 
-/** A screen of a viewport: its `render` and `shot` steps (`const Screen = Viewport.make(…)`). */
+/** A screen of a viewport: its `render`, `shot` and `check` steps (`const Screen = Viewport.make(…)`). */
 export type Screen = ReturnType<typeof make>;
