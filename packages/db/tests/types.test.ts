@@ -77,6 +77,14 @@ export function Recovered() {
 
   expectTypeOf<HighAlch.ErrorsOf<typeof spread.data>>().toEqualTypeOf<Read>();
 
+  // A non-entity result whose field is an open record (a page cursor) keeps its own errors.
+  type Page = HighAlch.Marked<
+    { readonly Items: ReadonlyArray<Note>; readonly After?: Record<string, number> },
+    Read
+  >;
+
+  expectTypeOf<HighAlch.ErrorsOf<Page | undefined>>().toEqualTypeOf<Read>();
+
   // A field projection drops the marker: the registered floor applies.
   const fields = useLiveQuery((q) =>
     q.from({ note: notes.list({ account: "a" }) }).select(({ note }) => ({ id: note.NoteId })),

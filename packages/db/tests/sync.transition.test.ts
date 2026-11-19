@@ -477,6 +477,53 @@ describe("f(ready subsets, command)", () => {
     await server.indexed((stored) => stored.get("n1")?.title === "Ada 3");
     expect(one.get("n1")?.title).toBe("Ada 3");
   });
+
+  it("f(paced updates, a changed and an unchanged field) → the input reads only the key and the changed fields; an unchanged save sends nothing", async () => {
+    const server = await open();
+
+    await seed(server, ada);
+
+    const db = account(server, "acc-1", cleanup);
+    const one = observe<Note>(db, notes.get({ NoteId: "n1" }), cleanup);
+    const release = HighAlch.activate(db);
+
+    cleanup.push(async () => release());
+    await ready(one);
+
+    const read: Array<Partial<Note>> = [];
+
+    const saved = HighAlch.collection(NoteRows, {
+      queries: { list: Notes },
+      commands: {
+        rename: HighAlch.updates(RenameNote, {
+          // A call also sets the note's book, as a form sends every field it shows.
+          fields: (input) => ({ ...input, BookId: "b1" }),
+          input: (row: Partial<Note>) => {
+            read.push(row);
+
+            return { NoteId: String(row.NoteId), title: String(row.title) };
+          },
+        }),
+      },
+    });
+
+    const mutate = createPacedMutations({
+      ...saved.rename.paced,
+      strategy: debounceStrategy({ wait: 20 }),
+    });
+
+    // The call sets `title` and `BookId`; only the title differs from the row.
+    await mutate({ NoteId: "n1", title: "Ada 2" }).when("settled");
+
+    expect(read).toEqual([{ NoteId: "n1", title: "Ada 2" }]);
+    await server.indexed((stored) => stored.get("n1")?.title === "Ada 2");
+
+    // Nothing differs: no mutation, so no command.
+    await mutate({ NoteId: "n1", title: "Ada 2" }).when("settled");
+
+    expect(read).toHaveLength(1);
+    expect(server.wire.counts.commands.filter((name) => name === "RenameNote")).toHaveLength(1);
+  });
 });
 
 describe("f(declared targets, input-only command)", () => {

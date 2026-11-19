@@ -171,8 +171,11 @@ export class Inserts<C extends Domain.Command.Any, P extends object, HasTarget e
 export type UpdateOptions<C extends Domain.Command.Any, P extends object> = Addressing<C> & {
   /** The row fields a call sets; by default the input's own fields. */
   readonly fields?: (input: CommandInput<C>) => Partial<P>;
-  /** The input a paced call sends for a merged row; by default the row's fields that are inputs. */
-  readonly input?: (row: P) => CommandInput<C>;
+  /**
+   * The input a paced call sends for a merged row; by default the row's fields that are inputs.
+   * `row` holds the row's key and only the fields the merged calls changed.
+   */
+  readonly input?: (row: Partial<P>) => CommandInput<C>;
 };
 
 /** Where an update's row fields are, at runtime. */

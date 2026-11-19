@@ -317,8 +317,9 @@ export type Paced<C extends Domain.Command.Any> = Command<
   {
     /**
      * `onMutate` and `mutationFn` for `usePacedMutations` (add a `strategy`). The `mutationFn`
-     * sends one command per edited row, its input read from the merged row (the row's fields that
-     * are input fields, or the declaration's `input(row)`), with the command id
+     * sends one command per edited row, its input read from the row's key and the fields the
+     * merged calls changed (those that are input fields, or the declaration's `input(row)`), with
+     * the command id
      * `<transaction id>:<row key>`.
      */
     readonly paced: Omit<PacedMutationsConfig<InputOf<C>>, "strategy">;
@@ -437,8 +438,18 @@ const pace = <C extends Domain.Command.Any>(
       const connection = connectionOf(clientOf());
       const rows = new Map<string, Row>();
 
+      // Only the fields the merged calls changed are sent, with the row's key.
+      const field = Option.match(edit.entity, {
+        onNone: () => "",
+        onSome: (entity) => entity.rows.key,
+      });
+
       for (const mutation of transaction.mutations)
-        rows.set(String(mutation.key), mutation.modified);
+        rows.set(String(mutation.key), {
+          ...rows.get(String(mutation.key)),
+          ...mutation.changes,
+          [field]: mutation.key,
+        });
 
       await connection.track(
         Promise.all(
