@@ -39,7 +39,7 @@ export type Spec = {
   readonly page: { readonly after?: string; readonly take?: number };
   /** Whether a row belongs to this subset. Without a rule, the query decides. */
   readonly rule: Option.Option<(row: Row, input: Input) => boolean>;
-  /** Reads the rows of one answer, when the declaration says where they are (`entries`). */
+  /** Reads the rows of one answer, when the declaration selects them with `.rows()`. */
   readonly select: Option.Option<(answer: Answer) => ReadonlyArray<Row>>;
 };
 

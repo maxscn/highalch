@@ -48,8 +48,10 @@ parallel, and start no dev servers.
   That entry is unstable and outside semver. Never import another package's `src` by a relative
   path.
 - **Reads and writes.** Reads use TanStack DB's stock `useLiveQuery` over a declaration's subset
-  and render with `match(res).on(...)`. Do not add hooks of ours. Commands take their input only
-  and return TanStack DB transactions.
+  and render with `match(res).on(...)`. Declare entity reads with a bare query or `read(Query)`.
+  Select wrapped rows with `.rows(select)` and set membership with `.where(rule)`, `.one(rule)`
+  or `.all()`. Do not add hooks of ours. Commands take their input only and return TanStack DB
+  transactions.
 - **Suspense.** `Loading: HighAlch.Suspend` suspends a stock `useLiveQuery` read to the nearest
   `<Suspense>`; typed errors stay `match` branches. It is not a hook and needs no React import.
 - **Comments and errors** name the package as HighAlch (`HighAlch.Defect`, "No HighAlch client
