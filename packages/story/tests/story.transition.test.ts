@@ -24,8 +24,10 @@ import {
   NoteRows,
   NotesApi,
   NoteStore,
+  NotesByCursor,
   QueryRefused,
   RenameNote,
+  WrappedNotes,
   notebook,
   store,
   type Client,
@@ -58,6 +60,77 @@ const list = notes.list({ account: "acc-1" });
 const one = notes.get({ NoteId: "n1" });
 
 const book = notes.byBook({ BookId: "b1" });
+
+describe("f(read declarations, feed burst) as stories", () => {
+  it("places rows by rule and re-asks each query-decided subset once", async () => {
+    const reads = HighAlch.collection(NoteRows, {
+      queries: {
+        read: HighAlch.read(NotesByCursor),
+        bare: NotesByCursor,
+        wrapped: HighAlch.read(WrappedNotes)
+          .rows((answer) => answer.Items)
+          .where((row, input) => row.account === input.account),
+      },
+    });
+
+    const input = { account: "acc-1" };
+    const explicit = reads.read(input, { take: 10 });
+    const bare = reads.bare(input, { take: 20 });
+    const selected = notes.page({ ...input, Offset: 0, Limit: 10 });
+    const wrapped = reads.wrapped({ ...input, Offset: 0, Limit: 10 });
+    const single = notes.get({ NoteId: "n3" });
+    const queryDecided = [explicit, bare, selected];
+    const allSources = [list, single, book, wrapped, ...queryDecided];
+    const cyd: Note = { ...ada, NoteId: "n3", title: "Cyd" };
+    const initial = [{ title: "Ada" }, { title: "Bob" }];
+    const patched = [{ title: "Ada 2" }, { title: "Bob" }];
+    const added = [...patched, { title: "Cyd" }];
+
+    await story.with({ invariants: Story.invariants })(
+      exist(ada, bob),
+      allSources.map((source) => Story.open(source)),
+      Story.shows(list, initial),
+      Story.shows(single, []),
+      Story.shows(book, [{ title: "Ada" }]),
+      Story.shows(wrapped, initial),
+      queryDecided.map((source) => Story.shows(source, initial)),
+      Story.check("each subset loads once", (world) => {
+        expect(world.client().wire.asked.toSorted()).toEqual([
+          "NoteById",
+          "Notes",
+          "NotesByBook",
+          "NotesByCursor",
+          "NotesByCursor",
+          "NotesByTitle",
+          "WrappedNotes",
+        ]);
+      }),
+      Story.remote(refOf(ada), new RenameNote({ NoteId: "n1", title: "Ada 2" })),
+      Story.remote(refOf(cyd), new CreateNote({ ...input, BookId: cyd.BookId, title: cyd.title })),
+      Story.shows(list, added),
+      Story.shows(single, [{ title: "Cyd" }]),
+      Story.shows(book, [{ title: "Ada 2" }, { title: "Cyd" }]),
+      Story.shows(wrapped, added),
+      queryDecided.map((source) => Story.shows(source, patched)),
+      Story.check("feed patches arrive before another query is sent", (world) => {
+        expect(world.client().wire.asked).toHaveLength(allSources.length);
+      }),
+      Story.advance(10),
+      queryDecided.map((source) => Story.shows(source, added)),
+      Story.advance(10),
+      Story.check(
+        "each query-decided subset re-asks once and rule-based subsets send no query",
+        (world) => {
+          expect(world.client().wire.asked.slice(allSources.length).toSorted()).toEqual([
+            "NotesByCursor",
+            "NotesByCursor",
+            "NotesByTitle",
+          ]);
+        },
+      ),
+    );
+  });
+});
 
 describe("f(ready subsets, command) as stories", () => {
   it("f(ready, rename) → optimistic at once, then committed in every subset; never back", async () => {

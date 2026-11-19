@@ -57,7 +57,7 @@ import { Provider } from "@highalch/db/react";
 import { useLiveQuery } from "@tanstack/react-db";
 
 export const notes = HighAlch.collection(NoteRows, {
-  queries: { list: HighAlch.all(Notes) },
+  queries: { list: HighAlch.read(Notes).all() },
   commands: { rename: HighAlch.updates(RenameNote) },
 });
 

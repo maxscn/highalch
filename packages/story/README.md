@@ -36,7 +36,7 @@ the repository's `vp run check:patterns` enforces both.
 
 ## Making a story
 
-In this example, the whole-list declaration for `notes.list` is `HighAlch.all(Notes)`.
+In this example, the whole-list declaration for `notes.list` is `HighAlch.read(Notes).all()`.
 
 ```ts
 // Hosted: the consumer's Domain in memory, real HighAlch clients (one per scope) behind a wire the

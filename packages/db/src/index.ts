@@ -24,10 +24,7 @@ export type {
 
 export {
   collection,
-  one,
-  where,
-  entries,
-  all,
+  read,
   query,
   command,
   inserts,
@@ -35,8 +32,6 @@ export {
   deletes,
   edits,
   sends,
-  Membership,
-  Entries,
   Inserts,
   Keyed,
   Edits,

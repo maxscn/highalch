@@ -130,11 +130,10 @@ Domain definitions, not from an Api object.
 ```ts
 export const customers = HighAlch.collection(CustomerRows, {
   queries: {
-    list: HighAlch.all(Customers),
+    list: HighAlch.read(Customers).all(),
     page: CustomersByName,
-    get: HighAlch.one(Customer, (row, input) => row.CustomerId === input.CustomerId),
-    byProject: HighAlch.where(
-      CustomersByProject,
+    get: HighAlch.read(Customer).one((row, input) => row.CustomerId === input.CustomerId),
+    byProject: HighAlch.read(CustomersByProject).where(
       (row, input) => row.ProjectId === input.ProjectId,
     ),
   },
@@ -163,27 +162,38 @@ export const refresh = HighAlch.command(RefreshSomething, {
 });
 ```
 
-**Who decides which rows belong?** Use `all(Query)` for the whole list in the client's scope.
-Use `where(Query, rule)` for a list whose membership can be tested against a feed row and the
-query input, or `one(Query, rule)` for a single row read with `.findOne()`. Use a bare query when
-the answer decides membership. For example, if `CustomersByName` sorts by name and then key,
-`customers.page({ Offset: 0, Limit: 101 })` reads 100 rows and one lookahead row.
+### Entity reads
 
-The query's answer supplies the rows as a `paged` query's `entries`, an array's elements, or one
-row (none for `null`). Use `entries(Query, select)` when the answer wraps its rows, such as
-`{ Items, Count }`. Compose it with a membership helper when the client can decide:
+Use `HighAlch.read(Query)` when the query decides which rows belong. A bare Domain query is
+equivalent. By default HighAlch reads a paged answer's `entries`, an array's elements or one
+row (none for `null`). For an answer that wraps its rows, such as `{ Items, Count }`, use
+`.rows((answer) => answer.Items)`. The selector receives the non-null answer.
+
+| Declaration so far                             | Steps available next                                                         |
+| ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| `read(Query)`                                  | `.rows(select)`, `.where(rule)`, `.one(rule)`, `.all()` for an unpaged query |
+| `read(Query).rows(select)`                     | `.where(rule)`, `.one(rule)`, `.all()` for an unpaged query                  |
+| After `.where(rule)`, `.one(rule)` or `.all()` | None                                                                         |
+| A bare `Query`                                 | Use `read(Query)` to add steps                                               |
+
+- `.where(rule)` uses a boolean `(row, input)` rule to decide membership in a list. After
+  `.rows(select)`, the rule's row type comes from the selector.
+- `.one(rule)` uses the same kind of rule for a single row. Read it with `.findOne()` to render
+  the `Missing` state.
+- `.all()` includes every row in the client's scope. For a paged query the method is absent
+  from the type, and calling it from JavaScript throws at declaration time.
 
 ```ts
-const projectRows = HighAlch.entries(WrappedCustomersByProject, (answer) => answer.Items);
-const byProject = HighAlch.where(projectRows, (row, input) => row.ProjectId === input.ProjectId);
+const byProject = HighAlch.read(WrappedCustomersByProject)
+  .rows((answer) => answer.Items)
+  .where((row, input) => row.ProjectId === input.ProjectId);
 ```
 
-Use `projectRows` by itself when the query decides. `one` and `all` can also take an `entries`
-declaration. Each query must return the entity's rows after selection. A `paged` query's accessor
-takes its page as the second argument, for example `customers.search(input, { after, take })`.
-`all` rejects paged queries at compile time and at declaration. Declare a Domain query with one
-membership rule and row selector per `Rows` entity. Repeating the same declaration is allowed.
-A conflicting declaration throws a HighAlch error naming the query and entity.
+Each `collection` query must return the entity's row type after selection. A paged query's
+accessor takes its page as the second argument, for example
+`customers.search(input, { after, take })`. Declare a Domain query with one membership rule
+and row selector per `Rows` entity. Repeating the same declaration is allowed. A conflicting
+declaration throws a HighAlch error naming the query and entity.
 
 **Which row a command addresses, and which aggregate.** A call passes only the command's input;
 the package resolves the rest from the declarations, in this order:
@@ -487,9 +497,9 @@ failure.
 
 The declaration determines who places rows after a feed change:
 
-- With `where`, `one` or `all`, the rule decides. An upsert inserts or updates a row when the rule
+- With `.where(rule)`, `.one(rule)` or `.all()`, the rule decides. An upsert inserts or updates a row when the rule
   holds and removes it when the rule stops holding. A removal deletes the row where present.
-  `all` always includes the row. A load reads the feed cursor before sending the query and
+  `.all()` always includes the row. A load reads the feed cursor before sending the query and
   applies entries buffered after that cursor over the answer. These declarations only re-ask
   on explicit reload, so the rule must agree with the server query.
 - Without a rule, the query decides. Every delivered entry patches the rows in place once
