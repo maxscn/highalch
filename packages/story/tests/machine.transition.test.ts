@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createAsyncLogic, setup, types } from "xstate";
-import { Effect } from "effect";
 import * as Story from "@highalch/story";
 import { explore, Machine, pathsOf } from "@highalch/story/xstate";
 import { mark } from "@highalch/db/xstate";
@@ -101,7 +100,7 @@ describe("f(editor snapshot, event) → next snapshot and the commands it asked 
         rename: mark(
           createAsyncLogic({
             run: async ({ input }: { readonly input: { NoteId: string; title: string } }) =>
-              Effect.runPromise(notes.rename.result(input)),
+              notes.rename.result(input),
           }),
           notes.rename,
         ),

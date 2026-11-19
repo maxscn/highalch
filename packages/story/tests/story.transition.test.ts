@@ -1,5 +1,5 @@
 import { createOptimisticAction, createPacedMutations, debounceStrategy } from "@tanstack/db";
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 import { Story as Alchemy } from "@alchemy.run/domain/Story";
 import { describe, expect, it } from "vite-plus/test";
 import * as HighAlch from "@highalch/db";
@@ -384,6 +384,124 @@ describe("f(deferred settlement, command) as stories", () => {
       Story.when(entries.save, { value: { EntryId: "e1", text: "" } }),
       Story.rejected(new EntryEmpty()),
       Story.shows(ledgerList, [{ text: "Ada", $hasPendingWrites: false }]),
+    );
+  });
+});
+
+describe("f(command.result, awaited in a plain function) as stories", () => {
+  type Outcome = Awaited<ReturnType<typeof notes.rename.result>>;
+
+  /** A call's promise, kept between the step that makes it and the step that reads it. */
+  const held = () => {
+    let outcome: Promise<Outcome> | undefined;
+
+    return {
+      call: (title: string, bound = true) =>
+        Story.check(`result of rename to ${title}`, async (world) => {
+          const { db } = await world.connect();
+          let command = notes.rename;
+          let release = () => {};
+
+          // Bound to the story's client, or on the client the provider registered.
+          if (bound) command = notes.rename.with({ client: db });
+          else release = HighAlch.activate(db);
+
+          try {
+            outcome = command.result({ NoteId: "n1", title });
+          } finally {
+            release();
+          }
+
+          // Nothing waits here: the next step sees what the call did before it returned.
+          outcome.catch(() => {});
+        }),
+      read: (label: string, check: (outcome: Outcome) => void) =>
+        Story.check(label, async () =>
+          check(await Option.getOrThrow(Option.fromUndefinedOr(outcome))),
+        ),
+      rejects: (label: string, message: string) =>
+        Story.check(label, async () => {
+          await expect(outcome).rejects.toThrow(message);
+        }),
+    };
+  };
+
+  it("f(rename) → the row is pending when result returns; the promise resolves Committed", async () => {
+    const rename = held();
+
+    await story.with({ invariants: Story.invariants })(
+      exist(ada),
+      Story.open(one),
+      rename.call("Ada 2"),
+      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Story.settle(),
+      rename.read("resolved Committed", (outcome) => expect(outcome._tag).toBe("Committed")),
+      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+    );
+  });
+
+  it("f(rename, on the client the provider registered) → the same, with no client passed", async () => {
+    const rename = held();
+
+    await story(
+      exist(ada),
+      Story.open(one),
+      rename.call("Ada 2", false),
+      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Story.settle(),
+      rename.read("resolved Committed", (outcome) => expect(outcome._tag).toBe("Committed")),
+    );
+  });
+
+  it("f(locked rename) → the promise resolves with the typed rejection, the original instance; the row rolls back", async () => {
+    const rename = held();
+
+    await story.with({ invariants: Story.invariants })(
+      exist(ada),
+      Story.open(one),
+      rename.call("locked"),
+      Story.shows(one, [{ title: "locked", $hasPendingWrites: true }]),
+      Story.settle(),
+      rename.read("resolved NoteLocked", (outcome) => {
+        expect(outcome).toBeInstanceOf(NoteLocked);
+        expect(outcome).toMatchObject({ _tag: "NoteLocked", title: "locked" });
+      }),
+      Story.shows(one, [{ title: "Ada", $hasPendingWrites: false }]),
+    );
+  });
+
+  it("f(rename, feed muted) → the promise resolves Unconfirmed after the settle timeout", async () => {
+    const rename = held();
+
+    await story(
+      exist(ada),
+      Story.open(one),
+      Story.mute(),
+      rename.call("Ada 2"),
+      Story.advance(10_000),
+      rename.read("resolved Unconfirmed", (outcome) => expect(outcome._tag).toBe("Unconfirmed")),
+    );
+  });
+
+  it("f(rename on a closed client) → the promise rejects: a closed client is not a typed outcome", async () => {
+    const rename = held();
+
+    await story(
+      exist(ada),
+      Story.open(one),
+      Story.check("close the client", async (world) => {
+        const { db } = await world.connect();
+
+        await Effect.runPromise(HighAlch.close(db));
+      }),
+      rename.call("Ada 2"),
+      rename.rejects("rejected", "HighAlch client is closing or closed"),
+    );
+  });
+
+  it("f(rename with no client registered) → the promise rejects; nothing is thrown at the call", async () => {
+    await expect(notes.rename.result({ NoteId: "n1", title: "Ada 2" })).rejects.toThrow(
+      "No HighAlch client is active",
     );
   });
 });

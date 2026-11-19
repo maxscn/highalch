@@ -1433,7 +1433,7 @@ describe("f(ready subsets, command)", () => {
 
     expect(failed).toBeInstanceOf(NoteLocked);
 
-    const result = await Effect.runPromise(rename.result(locked));
+    const result = await rename.result(locked);
 
     const shown = HighAlch.match(result).on({
       Committed: () => "committed",
@@ -1457,9 +1457,9 @@ describe("f(ready subsets, command)", () => {
     await ready(one);
     server.wire.mute(true);
 
-    const outcome = await Effect.runPromise(
-      notes.rename.with({ client: db }).result({ NoteId: "n1", title: "Ada 2" }),
-    );
+    const outcome = await notes.rename
+      .with({ client: db })
+      .result({ NoteId: "n1", title: "Ada 2" });
 
     server.wire.mute(false);
 
@@ -1479,9 +1479,7 @@ describe("f(ready subsets, command)", () => {
     await ready(one);
 
     const started = Date.now();
-    const outcome = await Effect.runPromise(
-      notes.touch.with({ client: db }).result({ NoteId: "n1" }),
-    );
+    const outcome = await notes.touch.with({ client: db }).result({ NoteId: "n1" });
 
     expect(outcome).toMatchObject({ _tag: "Committed", reply: { touched: true } });
     expect(Date.now() - started).toBeLessThan(1_000);
@@ -1955,9 +1953,9 @@ describe("f(one feed, two entities)", () => {
     expect(seen).toEqual(["Ada 2", "Ada 3", "Ada 4"]);
 
     // A command still settles on its (redelivered) change.
-    const settled = await Effect.runPromise(
-      notes.rename.with({ client: db }).result({ NoteId: "n1", title: "Ada 5" }),
-    );
+    const settled = await notes.rename
+      .with({ client: db })
+      .result({ NoteId: "n1", title: "Ada 5" });
 
     await tick(30);
 
@@ -1997,9 +1995,9 @@ describe("f(deployment with history, feed projection added)", () => {
 
     expect(titles(list)).toEqual(["n1:Ada", "n2:Bob"]);
 
-    const outcome = await Effect.runPromise(
-      notes.rename.with({ client: db }).result({ NoteId: "n2", title: "Bob 2" }),
-    );
+    const outcome = await notes.rename
+      .with({ client: db })
+      .result({ NoteId: "n2", title: "Bob 2" });
 
     expect(outcome).toMatchObject({ _tag: "Committed" });
     expect(list.get("n2")?.title).toBe("Bob 2");

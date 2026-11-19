@@ -355,8 +355,13 @@ export type Command<
   }) => Command<C, Extra, T>;
   /** The call as an Effect with the command's typed error channel. */
   readonly effect: (input: InputOf<C>) => Effect.Effect<Settled<ReplyOf<C>>, ErrorOf<C>>;
-  /** The call's outcome as a value for `match`; it never rejects for a typed error. */
-  readonly result: (input: InputOf<C>) => Effect.Effect<Settled<ReplyOf<C>> | ErrorOf<C>>;
+  /**
+   * The call's outcome as a promise of a value for `match`, to await in code that is not an
+   * Effect (a React transition, a form's submit). It never rejects for a typed error; a defect
+   * rejects, as does a call on a closing or closed client. The optimistic edit is applied before
+   * it returns.
+   */
+  readonly result: (input: InputOf<C>) => Promise<Settled<ReplyOf<C>> | ErrorOf<C>>;
   /**
    * `onMutate` and `mutationFn` for TanStack DB's `createOptimisticAction`. The transaction's
    * `metadata` holds the addressed row's key, as for a direct call.
@@ -467,7 +472,13 @@ export const make = <C extends Domain.Command.Any>(
   const callable = Object.assign(call, {
     with: rebind,
     effect,
-    result: (input: InputOf<C>) => Effect.catch(effect(input), Effect.succeed),
+    // The executor runs now: the edit shows before `result` returns, and a throw rejects.
+    result: (input: InputOf<C>) =>
+      new Promise<Settled<A> | E>((resolve, reject) => {
+        const { outcome } = start<A, E>(clientOf(), command, edit, input, bound);
+
+        Effect.runPromise(Effect.catch(outcome, Effect.succeed)).then(resolve, reject);
+      }),
     options,
     paced: Option.getOrUndefined(
       Option.map(edit.paced, (inputOf) => pace(command, edit, inputOf, clientOf)),

@@ -368,10 +368,12 @@ customers.addComment({ CustomerId: id, Comment });
   `Unconfirmed` (the server accepted it) and the entity's subsets reload; it never hangs.
 - `command.with({ client?, onCommitted?, onRejected? })` binds a client and default reactions.
 - `command.effect(input)`: an `Effect<Settled, E>` with the typed error channel (state machines,
-  tests). `command.result(input)` is an Effect that returns `Committed | Unconfirmed | E` for
-  `match`. It puts typed rejections in the value channel. Both forms can use a bound client,
-  the `HighAlch.Client` service, or the mounted provider. A sent transaction settles even if its
-  Effect caller stops waiting.
+  tests). `command.result(input)` is a promise of `Committed | Unconfirmed | E` for `match`, to
+  await where there is no Effect: a React transition, a form's submit. It never rejects for a
+  typed error; a defect rejects, as does a call on a closing or closed client. The optimistic
+  edit is applied before it returns. Both forms use a bound client or the mounted provider;
+  `effect` also reads the `HighAlch.Client` service. A sent transaction settles even if its
+  caller stops waiting.
 - `command.options`: `{ onMutate, mutationFn }` for `createOptimisticAction`. A call that edits
   no loaded row runs the command beside the (empty) transaction, which TanStack completes at once.
   `onMutate` resolves the call (a create's key is chosen there) and `mutationFn` sends that same
@@ -558,7 +560,7 @@ which is what makes "the command it asked for" observable: XState 6's pure `tran
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
 and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
 is registered under in `setup({ actors })`. Plain XState logic works the same once marked:
-`mark(createAsyncLogic({ run: ({ input }) => Effect.runPromise(command.result(input)) }), command)`. In production
+`mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`. In production
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 
