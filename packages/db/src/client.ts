@@ -15,9 +15,9 @@ import {
   Predicate,
   Schedule,
   Scope,
-  type Stream,
+  Stream,
 } from "effect";
-import { Defect, type TaggedFailure } from "./state";
+import { clientClosedMessage, Defect, type TaggedFailure } from "./state";
 import type { Subscription } from "./feed";
 import type { Subset } from "./subset";
 import type { Answer, Input } from "./values";
@@ -47,7 +47,7 @@ export type Settings = {
   readonly scope: string;
   /**
    * Follow each feed (default `true`). Server rendering sets `false`: subsets then load
-   * once, and a command settles when it returns.
+   * on observation and explicit reload, and a command settles when it returns.
    */
   readonly live?: boolean;
   /** Retries of loads, reloads and feeds; defaults to `transient`. */
@@ -125,7 +125,10 @@ type Endpoints = {
 };
 
 type Runtime = {
-  readonly client: Effect.Effect<Endpoints>;
+  readonly endpoints: Effect.Effect<{
+    readonly client: Endpoints;
+    readonly context: Context.Context<never>;
+  }>;
   readonly dispose: Effect.Effect<void>;
 };
 
@@ -148,6 +151,17 @@ export const read = <A>(name: string, effect: Effect.Effect<A, TaggedFailure | D
     return Effect.fail(failureOf(name, cause));
   });
 
+/** Brackets a detached endpoint so cancellation signals interruption without awaiting it. */
+export const withEndpointFiber = <A, E, B, F>(
+  endpoint: Effect.Effect<A, E>,
+  use: (result: Effect.Effect<A, E>) => Effect.Effect<B, F>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.forkDetach(endpoint, { startImmediately: true, uninterruptible: false }),
+    (fiber) => use(Fiber.join(fiber)),
+    (fiber) => Effect.sync(() => fiber.interruptUnsafe()),
+  );
+
 /**
  * One account's connection to a Domain: the Api client, one subscription per feed and the subset
  * collections materialised from module-level declarations. It lives in its `DbClient`.
@@ -159,9 +173,11 @@ export class Connection {
   readonly settleTimeout: number;
   readonly reloadDelay: number;
   readonly gcTime: number | undefined;
-  private readonly clock: Clock.Clock = Effect.runSync(Clock.Clock);
+  private readonly clock: Clock.Clock;
+  private readonly endpointClock: Clock.Clock | undefined;
   private readonly scopeOfRun = Scope.makeUnsafe();
   private readonly commands = Effect.runSync(Scope.provide(FiberSet.make(), this.scopeOfRun));
+  private readonly paced = new Set<Transaction>();
   private readonly replyDeadline = Deferred.makeUnsafe<void>();
   private closing: Effect.Effect<void> | undefined;
   /** One subscription per feed (stream name), shared by every subset of every entity on it. */
@@ -172,6 +188,7 @@ export class Connection {
   constructor(
     settings: Settings,
     private readonly runtime: Runtime,
+    ambientClock?: Clock.Clock,
   ) {
     this.scope = settings.scope;
     this.live = settings.live ?? true;
@@ -179,7 +196,8 @@ export class Connection {
     this.settleTimeout = settings.settleTimeout ?? 10_000;
     this.reloadDelay = settings.reloadDelay ?? 50;
     this.gcTime = settings.gcTime;
-    this.clock = settings.clock ?? this.clock;
+    this.endpointClock = settings.clock;
+    this.clock = settings.clock ?? ambientClock ?? Effect.runSync(Clock.Clock);
   }
 
   /** Starts an adapter worker from a synchronous TanStack callback. */
@@ -192,16 +210,32 @@ export class Connection {
 
   openScope = () => Scope.forkUnsafe(this.scopeOfRun);
 
-  /** Commands admitted before close can wait for a reply until the deadline. */
+  /** Race the reply without making the transaction worker join an abandoned endpoint. */
   awaitReply = <A, E>(reply: Effect.Effect<A, E>) =>
-    Effect.raceFirst(
-      Effect.asSome(reply),
-      Effect.as(Deferred.await(this.replyDeadline), Option.none()),
-    );
+    Effect.suspend(() => {
+      if (Deferred.isDoneUnsafe(this.replyDeadline)) return Effect.succeed(Option.none());
 
-  get closedToCommands() {
+      return withEndpointFiber(reply, (returned) =>
+        Effect.raceFirst(
+          Effect.asSome(returned),
+          Effect.as(Deferred.await(this.replyDeadline), Option.none()),
+        ),
+      );
+    });
+
+  get closingOrClosed() {
     return this.closing !== undefined;
   }
+
+  /** Keep a paced transaction cancellable until its strategy starts persistence. */
+  trackPaced = (transaction: Transaction) => {
+    if (this.paced.has(transaction)) return;
+
+    this.paced.add(transaction);
+    const release = () => this.paced.delete(transaction);
+
+    void transaction.when("settled").then(release, release);
+  };
 
   forkCommand = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.runSync(
@@ -211,8 +245,9 @@ export class Connection {
     );
 
   /** TanStack mutation functions return promises. */
-  runMutation = <A, E>(effect: Effect.Effect<A, E>, transaction: Pick<Transaction, "when">) => {
-    if (this.closedToCommands) return Promise.reject(closedClientError());
+  runMutation = <A, E>(effect: Effect.Effect<A, E>, transaction: Transaction) => {
+    this.paced.delete(transaction);
+    if (this.closingOrClosed) return Promise.reject(closedClientError());
 
     const persisted = Deferred.makeUnsafe<A, E>();
     const published = Deferred.makeUnsafe<void>();
@@ -233,14 +268,35 @@ export class Connection {
     return Effect.runPromise(Deferred.await(persisted));
   };
 
-  stream = (name: string) =>
-    Effect.map(this.runtime.client, (client) => client[name] as StreamEndpoints);
+  private contextOf(context: Context.Context<never>) {
+    if (this.endpointClock) return Context.add(context, Clock.Clock, this.endpointClock);
 
-  query = (name: string) =>
-    Effect.map(this.runtime.client, (client) => client[name] as QueryEndpoint);
+    return context;
+  }
 
-  command = (name: string) =>
-    Effect.map(this.runtime.client, (client) => client[name] as CommandEndpoint);
+  private endpoint<A>(call: (client: Endpoints) => Endpoint<A>): Endpoint<A> {
+    return Effect.flatMap(this.runtime.endpoints, ({ client, context }) =>
+      Effect.suspend(() => call(client)).pipe(Effect.provideContext(this.contextOf(context))),
+    );
+  }
+
+  peek = (name: string, options?: Parameters<StreamEndpoints["peek"]>[1]) =>
+    this.endpoint((client) => (client[name] as StreamEndpoints).peek(this.scope, options));
+
+  events = (name: string, options: Parameters<StreamEndpoints["events"]>[1]) =>
+    Stream.unwrap(
+      Effect.map(this.runtime.endpoints, ({ client, context }) =>
+        (client[name] as StreamEndpoints)
+          .events(this.scope, options)
+          .pipe(Stream.provideContext(this.contextOf(context))),
+      ),
+    );
+
+  query = (name: string, ...args: Parameters<QueryEndpoint>) =>
+    this.endpoint((client) => (client[name] as QueryEndpoint)(...args));
+
+  command = (name: string, ...args: Parameters<CommandEndpoint>) =>
+    this.endpoint((client) => (client[name] as CommandEndpoint)(...args));
 
   /** Registers a subset whose sync started; returns its release. */
   register = (entity: string, subset: Subset) => {
@@ -289,40 +345,50 @@ export class Connection {
 
     return Effect.gen({ self: this }, function* () {
       yield* Effect.forkScoped(deadline, { startImmediately: true, uninterruptible: false });
+
+      // A subscriber that throws while its transaction rolls back must not stop the shutdown.
+      for (const transaction of this.paced)
+        if (transaction.state === "pending")
+          yield* Effect.try(() =>
+            transaction.rollback({ error: closedClientError(), isSecondaryRollback: true }),
+          ).pipe(Effect.ignore({ log: "Warn", message: "HighAlch: a rollback at close threw" }));
+
+      this.paced.clear();
       yield* FiberSet.awaitEmpty(this.commands);
     }).pipe(Effect.scoped);
   }
 }
 
-export const closedClientError = () => new Error("HighAlch client is closing or closed");
+export const closedClientError = () => new Error(clientClosedMessage);
 
 /** The connection of a client made by `make`. */
 export const connectionOf = (db: DbClient) => db.requireDependency<Connection>(dependency);
 
 /** The runtime a config reaches its Api through. */
 const runtimeOf = <A extends Domain.Api.Any>(config: Config<A>): Runtime => {
-  function runtimeClient(runtime: ManagedRuntime.ManagedRuntime<Identifier<A>, never>) {
-    return Effect.map(
-      runtime.contextEffect,
-      // SAFETY: an Api's Client key yields its endpoints by name.
-      (context) => Context.get(context, config.api.Client) as Endpoints,
-    );
-  }
+  const owned = !("runtime" in config);
+  const runtime = "runtime" in config ? config.runtime : ManagedRuntime.make(config.layer);
 
-  if ("runtime" in config) return { client: runtimeClient(config.runtime), dispose: Effect.void };
+  const endpoints = Effect.map(runtime.contextEffect, (context) => ({
+    // SAFETY: an Api's Client key yields its endpoints by name.
+    client: Context.get(context, config.api.Client) as Endpoints,
+    context,
+  }));
 
-  const runtime = ManagedRuntime.make(config.layer);
+  if (owned) return { endpoints, dispose: runtime.disposeEffect };
 
-  return { client: runtimeClient(runtime), dispose: runtime.disposeEffect };
+  return { endpoints, dispose: Effect.void };
 };
+
+const makeClient = <A extends Domain.Api.Any>(config: Config<A>, ambientClock?: Clock.Clock) =>
+  new DbClient({ [dependency]: new Connection(config, runtimeOf(config), ambientClock) });
 
 /**
  * One account's TanStack `DbClient`, with its Domain connection as a dependency. Give it to the
  * `Provider` (or, on the server, make one per request). Its collections are materialised from
  * module-level declarations, so `dehydrate`/`hydrate` work with their ids.
  */
-export const make = <A extends Domain.Api.Any>(config: Config<A>) =>
-  new DbClient({ [dependency]: new Connection(config, runtimeOf(config)) });
+export const make = <A extends Domain.Api.Any>(config: Config<A>) => makeClient(config);
 
 /**
  * Closes a client: waits until the commands it sent have settled (their transactions committed
@@ -339,7 +405,7 @@ export const layer = <A extends Domain.Api.Any>(config: Config<A>) =>
   Layer.effect(
     Client,
     Effect.acquireRelease(
-      Effect.map(Clock.Clock, (clock) => make({ ...config, clock: config.clock ?? clock })),
+      Effect.map(Clock.Clock, (clock) => makeClient(config, clock)),
       close,
     ),
   );

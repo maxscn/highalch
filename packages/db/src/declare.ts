@@ -8,8 +8,8 @@ import {
 } from "@tanstack/db";
 import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
-import type { TaggedFailure } from "./state";
-import { connectionOf, failureOf, read } from "./client";
+import { Defect, type TaggedFailure } from "./state";
+import { closedClientError, connectionOf, failureOf, read } from "./client";
 import {
   make,
   type Command,
@@ -470,6 +470,9 @@ const optionsOf = (spec: QuerySpec): DeclaredRead => {
   return { query: spec };
 };
 
+/** The defect a read started on a closing or closed HighAlch client fails with. */
+const closedRead = (name: string) => new Defect({ name, cause: Cause.die(closedClientError()) });
+
 /** A subset runs the query, its optional membership rule and its optional row selector. */
 const readerOf = ({
   query,
@@ -489,7 +492,12 @@ const subset = (spec: Spec, id: string) =>
     const connection = connectionOf(db);
 
     const sync: SyncConfig<Row, string> = {
-      sync: (params) => new Subset(connection, spec, params).start(),
+      sync: (params) => {
+        // A read from a closing or closed client is a bug in the caller: a defect, not a state.
+        if (connection.closingOrClosed) return params.fail(closedRead(id));
+
+        return new Subset(connection, spec, params).start();
+      },
       rowUpdateMode: "full",
     };
 
@@ -718,10 +726,11 @@ export const query =
 
       const sync: SyncConfig<ResultRow<Q>, string> = {
         sync: (params) => {
+          if (connection.closingOrClosed) return params.fail(closedRead(source.queryName));
+
           const scope = connection.openScope();
-          const ask = connection
-            .query(source.queryName)
-            .pipe(Effect.flatMap((endpoint) => endpoint(input, page)));
+          let stopping = false;
+          const ask = connection.query(source.queryName, input, page);
 
           connection.fork(
             Effect.yieldNow.pipe(
@@ -741,7 +750,7 @@ export const query =
                 }),
               ),
               Effect.catchCause((cause) => {
-                if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+                if (stopping && Cause.hasInterruptsOnly(cause)) return Effect.void;
 
                 return Effect.sync(() => params.fail(failureOf(source.queryName, cause)));
               }),
@@ -749,7 +758,11 @@ export const query =
             scope,
           );
 
-          return () => Effect.runPromise(Scope.close(scope, Exit.void));
+          return () => {
+            stopping = true;
+
+            return Effect.runPromise(Scope.close(scope, Exit.void));
+          };
         },
       };
 

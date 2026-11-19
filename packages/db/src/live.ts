@@ -400,14 +400,16 @@ export const fromLive = (result: LiveResult) => {
       controls,
     };
 
-  if (result.data === undefined) return { state: states.Missing(), controls };
-
   const stopped = found.find((node) => node.error !== null)?.error;
+  // A defect is thrown here, before `Missing`: an empty single row must not hide it.
+  const feed = Option.map(Option.fromNullishOr(stopped), (problem) => typed(problem.cause));
+
+  if (result.data === undefined) return { state: states.Missing(), controls };
 
   return {
     state: states.Ready({
       data: result.data,
-      feed: Option.map(Option.fromNullishOr(stopped), (problem) => typed(problem.cause)),
+      feed,
       retry,
     }),
     controls,

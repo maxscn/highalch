@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import * as Domain from "@alchemy.run/domain";
 import {
+  createLiveQueryCollection,
   createOptimisticAction,
   createPacedMutations,
   debounceStrategy,
   DbClient,
 } from "@tanstack/db";
 import {
+  Cause,
   Clock,
+  Context,
   Effect,
   Exit,
   Fiber,
@@ -20,7 +23,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as HighAlch from "@highalch/db";
-import { waitKind } from "@highalch/db/internal";
+import { connectionOf, waitKind } from "@highalch/db/internal";
 import {
   account,
   observe,
@@ -147,28 +150,125 @@ describe("f(subsets, load)", () => {
 
     await seed(server, ada, bob);
 
+    const api = server.wire.client;
+    const gate = Promise.withResolvers<void>();
+    const delayed = Promise.withResolvers<void>();
+    const db = account(server, ada.account, cleanup, {
+      layer: Layer.succeed(NotesApi.Client, {
+        ...api,
+        NotebookChanges: {
+          ...api.NotebookChanges,
+          events: (...args) =>
+            api.NotebookChanges.events(...args).pipe(
+              Stream.tap((frame) =>
+                Domain.Read.isEvent(frame) && frame.envelope.seq > 3
+                  ? Effect.promise(() => {
+                      delayed.resolve();
+                      return gate.promise;
+                    })
+                  : Effect.void,
+              ),
+            ),
+        },
+      }),
+    });
+    const witness = observe(db, notes.byBook({ BookId: ada.BookId }), cleanup);
+    const removed = observe(db, notes.get({ NoteId: bob.NoteId }), cleanup);
+    await ready(witness, removed);
     const release = server.hold();
-    const db = account(server, "acc-1", cleanup);
     const list = observe<Note>(db, notes.list({ account: "acc-1" }), cleanup);
 
-    // The query answered from the store as it was; these writes land after the snapshot cursor.
-    await until(() => server.store.asked.includes("Notes"), "query asked");
-    await server.send((client) =>
-      client.RenameNote(address("acc-1", "n1"), { NoteId: "n1", title: "Ada 2" }),
-    );
-    await server.send((client) => client.DeleteNote(address("acc-1", "n2"), { NoteId: "n2" }));
-    await server.send((client) =>
-      client.CreateNote(address("acc-1", "n3"), { account: "acc-1", BookId: "b1", title: "Cyd" }),
-    );
-    await tick();
+    try {
+      // The query answered from the store as it was; these writes land after the snapshot cursor.
+      await until(() => server.store.asked.includes("Notes"), "query asked");
+      await server.send((client) =>
+        client.RenameNote(address("acc-1", "n1"), { NoteId: "n1", title: "Ada 2" }),
+      );
+      await server.send((client) => client.DeleteNote(address("acc-1", "n2"), { NoteId: "n2" }));
+      await server.send((client) =>
+        client.CreateNote(address("acc-1", "n3"), { account: "acc-1", BookId: "b1", title: "Cyd" }),
+      );
+      await delayed.promise;
+      await until(() => witness.get(ada.NoteId)?.title === "Ada 2", "rename delivered");
 
-    expect(list.isReady()).toBe(false);
+      expect(list.isReady()).toBe(false);
 
-    release();
-    await ready(list);
+      // The command receipts do not fence the feed. Wait for the last two writes to arrive.
+      gate.resolve();
+      await until(
+        () => witness.has(cyd.NoteId) && !removed.has(bob.NoteId),
+        "all writes delivered",
+      );
+      expect(list.isReady()).toBe(false);
 
-    expect(titles(list)).toEqual(["n1:Ada 2", "n3:Cyd"]);
+      release();
+      await ready(list);
+
+      expect(titles(list)).toEqual(["n1:Ada 2", "n3:Cyd"]);
+      expect(countAsked(server).Notes).toBe(1);
+    } finally {
+      gate.resolve();
+      release();
+    }
     expect(list.size).toBe(2);
+  });
+  it("f(ready rule-based subset, one feed batch) → one ordered snapshot of all changes", async () => {
+    const server = await open();
+    await seed(server, ada, bob);
+    const api = server.wire.client;
+    const started = Promise.withResolvers<number>();
+    const batch = Promise.withResolvers<Awaited<ReturnType<Host["entries"]>>>();
+    const db = account(server, ada.account, cleanup, {
+      layer: Layer.succeed(NotesApi.Client, {
+        ...api,
+        NotebookChanges: {
+          ...api.NotebookChanges,
+          events: (_scope, options) => {
+            const after = options?.after ?? 0;
+
+            started.resolve(after);
+            return Stream.make(Domain.Read.CaughtUp.make({ cursor: after })).pipe(
+              Stream.concat(Stream.fromArrayEffect(Effect.promise(() => batch.promise))),
+              Stream.concat(Stream.never),
+            );
+          },
+        },
+      }),
+    });
+    const list = observe(db, notes.list({ account: ada.account }), cleanup);
+    await ready(list);
+    const after = await started.promise;
+    const shown: Array<Array<string>> = [];
+    const published = Promise.withResolvers<void>();
+    const subscription = list.subscribeChanges(() => {
+      shown.push(titles(list));
+      if (list.has(cyd.NoteId)) published.resolve();
+    });
+    cleanup.push(async () => subscription.unsubscribe());
+
+    await server.send((client) =>
+      client.RenameNote(address(ada.account, ada.NoteId), { NoteId: ada.NoteId, title: "Ada 2" }),
+    );
+    await server.send((client) =>
+      client.DeleteNote(address(ada.account, bob.NoteId), { NoteId: bob.NoteId }),
+    );
+    const receipt = await server.send((client) =>
+      client.CreateNote(address(ada.account, cyd.NoteId), {
+        account: ada.account,
+        BookId: cyd.BookId,
+        title: cyd.title,
+      }),
+    );
+    await server.send((client) =>
+      client.NotebookChanges.peek(ada.account, {
+        atLeast: { stream: receipt.stream, version: receipt.version },
+      }),
+    );
+    batch.resolve(await server.entries(ada.account, after));
+    await published.promise;
+
+    expect(shown).toEqual([["n1:Ada 2", "n3:Cyd"]]);
+    expect(countAsked(server).Notes).toBe(1);
   });
 });
 
@@ -2026,6 +2126,103 @@ describe("f(non-entity query, load)", () => {
     expect(summary.get("result")).toMatchObject({ count: 3 });
   });
 
+  it.each([
+    ["runtime", true],
+    ["layer", true],
+    ["runtime", false],
+  ] as const)(
+    "f(client built with a %s, Clock override %s) → endpoints see runtime context and the selected Clock",
+    async (source, overrideClock) => {
+      const server = await open();
+      await seed(server, ada);
+      const clock = await manualClock();
+      const runtimeClock = await manualClock();
+      const label = Context.Reference("test/lifecycle/label", { defaultValue: () => "default" });
+      const api = server.wire.client;
+      const seen: Array<readonly [string, string, number]> = [];
+      const record = (endpoint: string) =>
+        Effect.gen(function* () {
+          seen.push([endpoint, yield* label, yield* Clock.currentTimeMillis]);
+        });
+      const layer = Layer.mergeAll(
+        Layer.succeed(NotesApi.Client, {
+          ...api,
+          Notes: (...args) => record("query").pipe(Effect.andThen(api.Notes(...args))),
+          RenameNote: (...args) => record("command").pipe(Effect.andThen(api.RenameNote(...args))),
+          NotebookChanges: {
+            ...api.NotebookChanges,
+            peek: (...args) =>
+              record("peek").pipe(Effect.andThen(api.NotebookChanges.peek(...args))),
+            events: (...args) =>
+              Stream.unwrap(record("events").pipe(Effect.as(api.NotebookChanges.events(...args)))),
+          },
+        }),
+        Layer.succeed(label, "configured"),
+        Layer.succeed(Clock.Clock, runtimeClock),
+      );
+      const runtime = ManagedRuntime.make(layer);
+      cleanup.push(() => runtime.dispose());
+      await Effect.runPromise(clock.adjust(123));
+      await Effect.runPromise(runtimeClock.adjust(456));
+      const config = source === "runtime" ? { runtime } : { layer };
+      const db = account(server, ada.account, cleanup, {
+        ...config,
+        clock: Option.getOrUndefined(Option.liftPredicate(clock, () => overrideClock)),
+      });
+      const list = observe(db, notes.list({ account: ada.account }), cleanup);
+      await ready(list);
+      await notes.rename
+        .with({ client: db })({ NoteId: ada.NoteId, title: "Abel" })
+        .when("settled");
+
+      expect(titles(list)).toEqual(["n1:Abel"]);
+      expect(new Set(seen.map(([endpoint]) => endpoint))).toEqual(
+        new Set(["query", "command", "peek", "events"]),
+      );
+      expect([...new Set(seen.map(([, value]) => value))]).toEqual(["configured"]);
+      expect([...new Set(seen.map(([, , time]) => time))]).toEqual([overrideClock ? 123 : 456]);
+    },
+  );
+
+  it.each(["entity", "standalone", "feed"] as const)(
+    "f(%s endpoint interrupts itself, observe) → fails the load with a HighAlch defect",
+    async (endpoint) => {
+      const server = await open();
+      const api = server.wire.client;
+      const db = account(server, ada.account, cleanup, {
+        layer: Layer.succeed(NotesApi.Client, {
+          ...api,
+          Notes: (...args) => {
+            if (endpoint === "entity") return Effect.interrupt;
+
+            return api.Notes(...args);
+          },
+          NoteStats: () => Effect.interrupt,
+          NotebookChanges: {
+            ...api.NotebookChanges,
+            events: (...args) => {
+              if (endpoint === "feed") return Stream.fromEffect(Effect.interrupt);
+
+              return api.NotebookChanges.events(...args);
+            },
+          },
+        }),
+      });
+      const collection = Option.match(
+        Option.liftPredicate(endpoint, (name) => name === "standalone"),
+        {
+          onSome: () => observe(db, stats({ account: ada.account }), cleanup),
+          onNone: () => observe(db, notes.list({ account: ada.account }), cleanup),
+        },
+      );
+
+      await until(() => collection.status === "error", "interrupted endpoint reported");
+      expect(collection.health.error?.cause).toBeInstanceOf(HighAlch.Defect);
+      expect(connectionOf(db).subsets.size).toBe(0);
+      expect(connectionOf(db).feeds.size).toBe(0);
+    },
+  );
+
   it("f(nothing, stats) → one row under the key result", async () => {
     const server = await open();
 
@@ -2107,6 +2304,38 @@ describe("f(ready subsets, change outside the feed)", () => {
     expect(seen).toEqual(["Ada (imported)"]);
     // Two calls within the reload delay asked the query once more, not twice.
     expect(server.store.asked.filter((name) => name === "Notes")).toHaveLength(2);
+  });
+
+  it("f(non-live subsets, two explicit reloads) → each re-asks once without opening a feed", async () => {
+    const server = await open();
+    await seed(server, ada);
+    const clock = await manualClock();
+    const db = account(server, ada.account, cleanup, { clock, live: false });
+    const { list, one, book } = subsets(db);
+    await ready(list, one, book);
+
+    await server.send((client) =>
+      client.RenameNote(address(ada.account, ada.NoteId), { NoteId: ada.NoteId, title: "Abel" }),
+    );
+    await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Abel");
+    await Effect.runPromise(clock.adjust(1_000));
+    expect(titles(list)).toEqual(["n1:Ada"]);
+    expect(titles(one)).toEqual(["n1:Ada"]);
+    const asked = server.store.asked.length;
+
+    HighAlch.reload(db, NoteRows);
+    HighAlch.reload(db, NoteRows);
+    await Effect.runPromise(clock.adjust(9));
+    expect(server.store.asked).toHaveLength(asked);
+    await Effect.runPromise(clock.adjust(1));
+    await until(
+      () => list.get(ada.NoteId)?.title === "Abel" && one.get(ada.NoteId)?.title === "Abel",
+      "non-live subsets reloaded",
+    );
+    expect(server.store.asked.slice(asked).sort()).toEqual(
+      ["NotesByBook", "NoteById", "Notes"].sort(),
+    );
+    expect(server.wire.counts).toMatchObject({ connections: 0, peeks: 0 });
   });
 });
 
@@ -2244,6 +2473,394 @@ describe("f(client, close)", () => {
       }
     },
   );
+
+  it("f(uninterruptible reply, close deadline) → rolls back and closes before the reply", async () => {
+    const server = await open();
+    await seed(server, ada);
+    const clock = await manualClock();
+    const sent = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const replied = Promise.withResolvers<void>();
+    const api = server.wire.client;
+    const db = account(server, ada.account, cleanup, {
+      clock,
+      settleTimeout: 100,
+      layer: Layer.succeed(NotesApi.Client, {
+        ...api,
+        RenameNote: () =>
+          Effect.gen(function* () {
+            sent.resolve();
+            yield* Effect.promise(() => gate.promise);
+            replied.resolve();
+            return { reply: undefined, stream: "late", version: 1 };
+          }).pipe(Effect.uninterruptible),
+      }),
+    });
+    const one = observe(db, notes.get({ NoteId: ada.NoteId }), cleanup);
+    await ready(one);
+    const committed = vi.fn();
+    const tx = notes.rename.with({ client: db })(
+      { NoteId: ada.NoteId, title: "Abel" },
+      { onCommitted: committed },
+    );
+    const failed = tx.when("settled").catch((error: unknown) => error);
+    await sent.promise;
+    const seen = history(one, ada.NoteId, (row) => row.title);
+    const closed = Effect.runPromise(HighAlch.close(db));
+
+    try {
+      await Effect.runPromise(clock.adjust(99));
+      expect(tx.state).toBe("persisting");
+      expect(titles(one)).toEqual(["n1:Abel"]);
+      await Effect.runPromise(clock.adjust(1));
+      expect(tx.state).toBe("failed");
+      await expect(failed).resolves.toMatchObject({
+        message: expect.stringMatching(/HighAlch.*closed before the server replied/i),
+      });
+      await closed;
+      expect(tx.state).toBe("failed");
+      expect(seen).toContain("Ada");
+      expect(server.wire.counts.open).toBe(0);
+      const beforeReply = [...seen];
+      const peeks = server.wire.counts.peeks;
+
+      gate.resolve();
+      await replied.promise;
+      await Effect.runPromise(clock.adjust(0));
+      expect(tx.state).toBe("failed");
+      expect(seen).toEqual(beforeReply);
+      expect(server.wire.counts.peeks).toBe(peeks);
+      expect(committed).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      await closed;
+    }
+  });
+
+  it.each(["during cleanup", "after close"] as const)(
+    "f(client %s, observe new collections) → an immediate defect and no registrations",
+    async (when) => {
+      const server = await open();
+      const db = account(server, ada.account, cleanup);
+      const started = Promise.withResolvers<void>();
+      const gate = Promise.withResolvers<void>();
+      const dispose = db.cleanup.bind(db);
+      db.cleanup = async () => {
+        started.resolve();
+        await gate.promise;
+        await dispose();
+      };
+      const closed = Effect.runPromise(HighAlch.close(db));
+
+      try {
+        await started.promise;
+        if (when === "after close") {
+          gate.resolve();
+          await closed;
+        }
+        const list = observe(db, notes.list({ account: ada.account }), cleanup);
+        const summary = observe(db, stats({ account: ada.account }), cleanup);
+        expect([list.status, summary.status]).toEqual(["error", "error"]);
+
+        const live = createLiveQueryCollection({ query: (q) => q.from({ note: list }) });
+        cleanup.push(() => live.cleanup());
+        live.startSyncImmediate();
+        expect(live.status).toBe("error");
+        // A read from a closed client is a bug in the caller: `match` throws it as a defect.
+        const thrown = (() => {
+          try {
+            HighAlch.match({
+              data: undefined as ReadonlyArray<Note> | undefined,
+              status: live.status,
+              isEnabled: true,
+              isReady: live.isReady(),
+              isLoadingError: live.status === "error",
+              isCrashed: live.status === "crashed",
+              health: live.health,
+              collection: live,
+            }).on({ orElse: (state) => state._tag });
+          } catch (error) {
+            return error;
+          }
+        })();
+
+        expect(thrown).toBeInstanceOf(HighAlch.Defect);
+        expect(String(Cause.squash((thrown as HighAlch.Defect).cause))).toContain(
+          "HighAlch client is closing or closed",
+        );
+        expect(connectionOf(db).subsets.size).toBe(0);
+        expect(connectionOf(db).feeds.size).toBe(0);
+        expect(server.wire.counts.connections).toBe(0);
+        expect(server.store.asked).toEqual([]);
+      } finally {
+        gate.resolve();
+        await closed;
+      }
+    },
+  );
+
+  it("f(ready single row with no row, reloaded while the client closes) → match throws the defect, not Missing", async () => {
+    const server = await open();
+    const db = account(server, ada.account, cleanup);
+    const one = observe(db, notes.get({ NoteId: "absent" }), cleanup);
+
+    await until(() => one.isReady(), "ready with no row");
+
+    const live = createLiveQueryCollection({
+      query: (q) => q.from({ note: one }).findOne(),
+    });
+
+    cleanup.push(() => live.cleanup());
+    live.startSyncImmediate();
+    await until(() => live.isReady(), "live ready");
+
+    const started = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const dispose = db.cleanup.bind(db);
+
+    db.cleanup = async () => {
+      started.resolve();
+      await gate.promise;
+      await dispose();
+    };
+
+    const closed = Effect.runPromise(HighAlch.close(db));
+
+    try {
+      await started.promise;
+      await one.reload().catch(() => {});
+
+      const read = () =>
+        HighAlch.match({
+          data: undefined as Note | undefined,
+          status: live.status,
+          isEnabled: true,
+          isReady: live.isReady(),
+          isLoadingError: false,
+          isCrashed: false,
+          health: live.health,
+          collection: live,
+        }).on({ orElse: (state) => state._tag });
+
+      expect(read).toThrow(HighAlch.Defect);
+    } finally {
+      gate.resolve();
+      await closed;
+    }
+  });
+
+  it.each(["last subset cleanup", "client close"] as const)(
+    "f(live feed with a held finalizer, %s) → waits for the finalizer",
+    async (action) => {
+      const server = await open();
+      await seed(server, ada);
+      const gate = Promise.withResolvers<void>();
+      const finishing = Promise.withResolvers<void>();
+      const api = server.wire.client;
+      let released = false;
+      const db = account(server, ada.account, cleanup, {
+        layer: Layer.succeed(NotesApi.Client, {
+          ...api,
+          NotebookChanges: {
+            ...api.NotebookChanges,
+            events: (...args) =>
+              api.NotebookChanges.events(...args).pipe(
+                Stream.ensuring(
+                  Effect.promise(() => {
+                    finishing.resolve();
+                    return gate.promise;
+                  }).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        released = true;
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+          },
+        }),
+      });
+      const list = observe(db, notes.list({ account: ada.account }), cleanup);
+      await ready(list);
+      const settled = vi.fn();
+      const closing = (
+        action === "client close" ? Effect.runPromise(HighAlch.close(db)) : list.cleanup()
+      ).then(settled);
+
+      try {
+        await finishing.promise;
+        // Let the collection cleanup's promise continuations run while the finalizer is held.
+        await Effect.runPromise(Effect.yieldNow);
+        expect(settled).not.toHaveBeenCalled();
+        expect(released).toBe(false);
+      } finally {
+        gate.resolve();
+        await closing;
+      }
+      expect(released).toBe(true);
+      expect(settled).toHaveBeenCalledOnce();
+      expect(connectionOf(db).feeds.size).toBe(0);
+    },
+  );
+
+  it("f(optimistic rename waiting on a debounce, close) → rolls back before the debounce", async () => {
+    const server = await open();
+    await seed(server, ada);
+    const clock = await manualClock();
+    const db = account(server, ada.account, cleanup, { clock });
+    const one = observe(db, notes.get({ NoteId: ada.NoteId }), cleanup);
+    const release = HighAlch.activate(db);
+    cleanup.push(async () => release());
+    await ready(one);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const rename = createPacedMutations({
+        ...notes.rename.paced,
+        strategy: debounceStrategy({ wait: 500 }),
+      });
+      const tx = rename({ NoteId: ada.NoteId, title: "Abel" });
+      const failed = tx.when("settled").catch((error: unknown) => error);
+      const seen = history(one, ada.NoteId, (row) => row.title);
+      expect(tx.state).toBe("pending");
+      expect(titles(one)).toEqual(["n1:Abel"]);
+
+      const closing = Effect.runPromise(HighAlch.close(db));
+      expect(tx.state).toBe("failed");
+      expect(seen).toContain("Ada");
+      await expect(failed).resolves.toMatchObject({
+        message: "HighAlch client is closing or closed",
+      });
+      await closing;
+      vi.advanceTimersByTime(500);
+      expect(server.wire.counts.commands).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("f(two optimistic renames waiting on a debounce, a subscriber throws on the first rollback, close) → both roll back and close completes", async () => {
+    const server = await open();
+    await seed(server, ada, bob);
+    const clock = await manualClock();
+    const db = account(server, ada.account, cleanup, { clock });
+    const list = observe(db, notes.list({ account: ada.account }), cleanup);
+    const release = HighAlch.activate(db);
+    cleanup.push(async () => release());
+    await ready(list);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const paced = () =>
+        createPacedMutations({ ...notes.rename.paced, strategy: debounceStrategy({ wait: 500 }) });
+      const first = paced()({ NoteId: ada.NoteId, title: "Abel" });
+      const second = paced()({ NoteId: bob.NoteId, title: "Bert" });
+
+      first.when("settled").catch(() => {});
+      second.when("settled").catch(() => {});
+      expect(titles(list)).toEqual(["n1:Abel", "n2:Bert"]);
+
+      let threw = false;
+      const subscription = list.subscribeChanges(() => {
+        if (threw) return;
+
+        threw = true;
+        throw new Error("a subscriber that throws");
+      });
+      cleanup.push(async () => subscription.unsubscribe());
+
+      await Effect.runPromise(HighAlch.close(db));
+
+      expect(threw).toBe(true);
+      expect([first.state, second.state]).toEqual(["failed", "failed"]);
+      vi.advanceTimersByTime(500);
+      expect(server.wire.counts.commands).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("f(scoped client, user fails) → closes its feed and owned runtime once", async () => {
+    const server = await open();
+    await seed(server, ada);
+    const api = server.wire.client;
+    const disposed = vi.fn();
+    const layer = Layer.effect(
+      NotesApi.Client,
+      Effect.acquireRelease(Effect.succeed(api), () => Effect.sync(disposed)),
+    );
+    const run = (closeFirst: boolean) =>
+      Effect.gen(function* () {
+        const db = yield* HighAlch.Client;
+        const one = observe(db, notes.get({ NoteId: ada.NoteId }), cleanup);
+        yield* Effect.promise(() => ready(one));
+        expect(server.wire.counts.open).toBe(1);
+        if (closeFirst) yield* HighAlch.close(db);
+
+        return yield* Effect.fail("user failed");
+      }).pipe(
+        Effect.provide(HighAlch.layer({ api: NotesApi, layer, scope: ada.account })),
+        Effect.flip,
+      );
+
+    expect(await Effect.runPromise(run(false))).toBe("user failed");
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(server.wire.counts.open).toBe(0);
+    expect(await Effect.runPromise(run(true))).toBe("user failed");
+    expect(disposed).toHaveBeenCalledTimes(2);
+    expect(server.wire.counts.open).toBe(0);
+  });
+
+  it("f(reply received, confirmation peek ignores interruption) → times out and closes", async () => {
+    const server = await open();
+    await seed(server, ada);
+    const clock = await manualClock();
+    const api = server.wire.client;
+    const peeking = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const committed = vi.fn();
+    const db = account(server, ada.account, cleanup, {
+      clock,
+      settleTimeout: 100,
+      layer: Layer.succeed(NotesApi.Client, {
+        ...api,
+        NotebookChanges: {
+          ...api.NotebookChanges,
+          peek: (key, options) => {
+            if (!options?.atLeast) return api.NotebookChanges.peek(key, options);
+
+            return Effect.promise(() => {
+              peeking.resolve();
+              return gate.promise;
+            }).pipe(Effect.andThen(api.NotebookChanges.peek(key, options)), Effect.uninterruptible);
+          },
+        },
+      }),
+    });
+    const list = observe(db, notes.list({ account: ada.account }), cleanup);
+    await ready(list);
+    server.wire.mute(true);
+    const tx = notes.rename.with({ client: db })(
+      { NoteId: ada.NoteId, title: "Abel" },
+      { onCommitted: committed },
+    );
+    await peeking.promise;
+    const closing = Effect.runPromise(HighAlch.close(db));
+
+    try {
+      await Effect.runPromise(clock.adjust(100));
+      expect(tx.state).toBe("completed");
+      await closing;
+      expect(committed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ _tag: "Unconfirmed" }),
+      );
+      expect(server.wire.counts.open).toBe(0);
+    } finally {
+      gate.resolve();
+      await closing;
+    }
+  });
 
   it("f(reply just before the close deadline, feed silent) → gets the full confirmation timeout", async () => {
     const server = await open();
