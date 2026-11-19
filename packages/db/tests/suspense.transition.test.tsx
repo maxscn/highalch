@@ -386,6 +386,46 @@ describe("f(stock useLiveQuery result, match with Loading: Suspend)", () => {
     expect(counts(second)).toEqual({ renders: 2, suspensions: 1, promises: 1 });
   });
 
+  it("f(two clients suspend on one subset input, A held, B answered) → B's list while A waits; then A's", async () => {
+    // Two hosts, so one client's query can be held while the other's answers.
+    const held = await open();
+    const answered = await open();
+
+    await seed(held, ada);
+    await seed(answered, ada, bob);
+
+    const release = hold(held);
+    const first = account(held, "acc-1", cleanup);
+    const second = account(answered, "acc-1", cleanup);
+    const a = probe();
+    const b = probe();
+
+    const view = await render(
+      <>
+        <Provider client={first}>
+          <Suspense fallback={<p>waiting|</p>}>
+            <List seen={a} />
+          </Suspense>
+        </Provider>
+        <Provider client={second}>
+          <Suspense fallback={<p>waiting</p>}>
+            <List seen={b} />
+          </Suspense>
+        </Provider>
+      </>,
+    );
+
+    // The same subset id in both clients: B's read starts and ends on its own.
+    await settle(view.text, /^waiting\|list:Ada,Bob$/);
+
+    release();
+    await settle(view.text, /^list:Adalist:Ada,Bob$/);
+
+    expect([...a.thrown].some((promise) => b.thrown.has(promise))).toBe(false);
+    expect(counts(a)).toEqual({ renders: 3, suspensions: 2, promises: 1 });
+    expect(counts(b)).toEqual({ renders: 3, suspensions: 2, promises: 1 });
+  });
+
   it("f(first load refused) → the typed branch, not the boundary; no loop", async () => {
     const server = await open();
     const unhandled = rejections();

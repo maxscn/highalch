@@ -272,7 +272,8 @@ return HighAlch.match(res).on({
 It is still the stock `useLiveQuery`. A suspended render never commits, so its subscription
 never starts: `Suspend` observes the result's collection itself until the first load ends (ready,
 a typed rejection, a crash or a cleanup) and throws one promise, shared by every render waiting
-on the same sources, that resolves then and never rejects. The retried render builds a new live
+on the same source collections of the same client (another client's read of the same
+declaration waits on its own load), that resolves then and never rejects. The retried render builds a new live
 query over the loaded sources and is `Ready` (or the error) at once: a first mount renders twice
 suspended (React pre-renders a suspended tree once more) and once with the data. `Suspend` is a
 type error on any key but `Loading`.
