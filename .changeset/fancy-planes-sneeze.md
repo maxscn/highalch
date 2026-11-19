@@ -14,3 +14,7 @@ with Effect schedules filtered by typed errors. Replace custom timers with an Ef
 Run `HighAlch.close(db)` and `command.result(input)` as Effects. `HighAlch.layer(config)` provides
 a scoped client under `HighAlch.Client`, and `HighAlch.make(config)` still returns the client
 synchronously. The story kit's `retryTransport` is now a schedule.
+
+Closing a client rejects new commands immediately. Commands with a server reply settle as usual.
+If a reply is still outstanding after `settleTimeout` from the start of close, HighAlch interrupts
+the call and rolls back the transaction with a HighAlch error.

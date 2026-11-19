@@ -12,12 +12,6 @@ type Membership = {
   readonly member: (row: Row) => Option.Option<boolean>;
 };
 
-const keyOf = (entry: Delivered, membership: Membership) => {
-  if (Rows.isRemoved(entry.change)) return entry.change.key;
-
-  return membership.keyOf(entry.change.row);
-};
-
 /** Patch known rows, including confirmed optimistic inserts, and return the sync writes. */
 export const apply = (
   rows: Map<string, Row>,
@@ -64,44 +58,20 @@ export const settle = (
   apply(rows, changes, membership, () => false);
 };
 
-/** Keep the feed's version on contradictions, retiring changes acknowledged by the answer. */
-export const reconcile = (
-  rows: Map<string, Row>,
-  applied: Map<string, Delivered>,
-  cursor: number,
-) => {
-  let contradicted = false;
-
-  for (const [key, entry] of applied) {
-    if (entry.seq > cursor) continue;
-
-    const row = rows.get(key);
-
-    if (!row || (!Rows.isRemoved(entry.change) && Equal.equals(row, entry.change.row))) {
-      applied.delete(key);
-      continue;
-    }
-
-    contradicted = true;
-
-    if (Rows.isRemoved(entry.change)) rows.delete(key);
-    else rows.set(key, entry.change.row);
-  }
-
-  return contradicted;
-};
-
-/** Remember removals even outside the page, and upserts whose values the feed actually placed. */
-export const remember = (
-  changes: ReadonlyArray<Delivered>,
-  applied: Map<string, Delivered>,
+/** Replay all triggers in order, returning a new snapshot only when the result differs. */
+export const rebase = (
   rows: ReadonlyMap<string, Row>,
+  changes: ReadonlyArray<Delivered>,
   membership: Membership,
+  visible: (key: string) => boolean,
 ) => {
-  for (const entry of changes) {
-    const key = keyOf(entry, membership);
+  if (changes.length === 0) return;
 
-    if (Rows.isRemoved(entry.change) || rows.has(key)) applied.set(key, entry);
-    else applied.delete(key);
-  }
+  const patched = new Map(rows);
+
+  apply(patched, changes, membership, visible);
+
+  if (patched.size !== rows.size) return patched;
+
+  for (const [key, row] of patched) if (!Equal.equals(rows.get(key), row)) return patched;
 };

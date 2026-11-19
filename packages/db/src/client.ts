@@ -52,7 +52,7 @@ export type Settings = {
   readonly live?: boolean;
   /** Retries of loads, reloads and feeds; defaults to `transient`. */
   readonly retry?: Retry;
-  /** Milliseconds a command waits for the feed to deliver its change (default 10 000). */
+  /** Milliseconds to wait for feed confirmation or, at close, an outstanding reply (default 10 000). */
   readonly settleTimeout?: number;
   /** Milliseconds a subset waits before reloading after a feed change or a reload call (default 50). */
   readonly reloadDelay?: number;
@@ -162,6 +162,7 @@ export class Connection {
   private readonly clock: Clock.Clock = Effect.runSync(Clock.Clock);
   private readonly scopeOfRun = Scope.makeUnsafe();
   private readonly commands = Effect.runSync(Scope.provide(FiberSet.make(), this.scopeOfRun));
+  private readonly replyDeadline = Deferred.makeUnsafe<void>();
   private closing: Effect.Effect<void> | undefined;
   /** One subscription per feed (stream name), shared by every subset of every entity on it. */
   readonly feeds = new Map<string, Subscription>();
@@ -191,6 +192,17 @@ export class Connection {
 
   openScope = () => Scope.forkUnsafe(this.scopeOfRun);
 
+  /** Commands admitted before close can wait for a reply until the deadline. */
+  awaitReply = <A, E>(reply: Effect.Effect<A, E>) =>
+    Effect.raceFirst(
+      Effect.asSome(reply),
+      Effect.as(Deferred.await(this.replyDeadline), Option.none()),
+    );
+
+  get closedToCommands() {
+    return this.closing !== undefined;
+  }
+
   forkCommand = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.runSync(
       FiberSet.run(this.commands, effect, { startImmediately: false }).pipe(
@@ -200,6 +212,8 @@ export class Connection {
 
   /** TanStack mutation functions return promises. */
   runMutation = <A, E>(effect: Effect.Effect<A, E>, transaction: Pick<Transaction, "when">) => {
+    if (this.closedToCommands) return Promise.reject(closedClientError());
+
     const persisted = Deferred.makeUnsafe<A, E>();
     const published = Deferred.makeUnsafe<void>();
     const finish = () => {
@@ -238,7 +252,7 @@ export class Connection {
     return () => {
       known.delete(subset);
 
-      if (known.size === 0) this.subsets.delete(entity);
+      if (known.size === 0 && this.subsets.get(entity) === known) this.subsets.delete(entity);
     };
   };
 
@@ -255,7 +269,7 @@ export class Connection {
     Effect.suspend(() => {
       this.closing ??= Effect.runSync(
         Effect.cached(
-          FiberSet.awaitEmpty(this.commands).pipe(
+          this.drainCommands().pipe(
             Effect.andThen(Effect.promise(() => db.cleanup())),
             Effect.ensuring(Scope.close(this.scopeOfRun, Exit.void)),
             Effect.ensuring(this.runtime.dispose),
@@ -265,23 +279,41 @@ export class Connection {
 
       return this.closing;
     }).pipe(Effect.uninterruptible);
+
+  private drainCommands() {
+    const deadline = Effect.sleep(this.settleTimeout).pipe(
+      Effect.andThen(Deferred.succeed(this.replyDeadline, undefined)),
+      Effect.provideService(Clock.Clock, this.clock),
+      Effect.provideService(waitKind, "settle"),
+    );
+
+    return Effect.gen({ self: this }, function* () {
+      yield* Effect.forkScoped(deadline, { startImmediately: true, uninterruptible: false });
+      yield* FiberSet.awaitEmpty(this.commands);
+    }).pipe(Effect.scoped);
+  }
 }
+
+export const closedClientError = () => new Error("HighAlch client is closing or closed");
 
 /** The connection of a client made by `make`. */
 export const connectionOf = (db: DbClient) => db.requireDependency<Connection>(dependency);
 
 /** The runtime a config reaches its Api through. */
 const runtimeOf = <A extends Domain.Api.Any>(config: Config<A>): Runtime => {
-  const runtime = "runtime" in config ? config.runtime : ManagedRuntime.make(config.layer);
-
-  return {
-    client: Effect.map(
+  function runtimeClient(runtime: ManagedRuntime.ManagedRuntime<Identifier<A>, never>) {
+    return Effect.map(
       runtime.contextEffect,
       // SAFETY: an Api's Client key yields its endpoints by name.
       (context) => Context.get(context, config.api.Client) as Endpoints,
-    ),
-    dispose: "runtime" in config ? Effect.void : runtime.disposeEffect,
-  };
+    );
+  }
+
+  if ("runtime" in config) return { client: runtimeClient(config.runtime), dispose: Effect.void };
+
+  const runtime = ManagedRuntime.make(config.layer);
+
+  return { client: runtimeClient(runtime), dispose: runtime.disposeEffect };
 };
 
 /**

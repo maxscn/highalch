@@ -719,7 +719,8 @@ export const query =
             .pipe(Effect.flatMap((endpoint) => endpoint(input, page)));
 
           connection.fork(
-            read(source.queryName, ask).pipe(
+            Effect.yieldNow.pipe(
+              Effect.andThen(read(source.queryName, ask)),
               Effect.retry(connection.retry),
               Effect.tap((answer) =>
                 Effect.sync(() => {

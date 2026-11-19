@@ -10,7 +10,16 @@ import {
 import { Cause, Data, Deferred, Effect, Exit, Option, Predicate, type Schema } from "effect";
 import { handle, type Checked, type Handlers } from "./match";
 import { Defect, type TaggedFailure } from "./state";
-import { Client, connectionOf, current, cursorOf, read, waitKind, type Connection } from "./client";
+import {
+  Client,
+  closedClientError,
+  connectionOf,
+  current,
+  cursorOf,
+  read,
+  waitKind,
+  type Connection,
+} from "./client";
 import type * as Rows from "./rows";
 import type { Subset } from "./subset";
 import type { Input, Row as Entity } from "./values";
@@ -138,12 +147,19 @@ const persist = <A>(
       const waiter = feed?.active && feed.settle(commandId);
 
       return yield* Effect.gen(function* () {
-        const send = yield* connection.command(command.tag);
-        const written = yield* send(call.target, call.input, { commandId });
+        const answer = yield* connection.awaitReply(
+          connection
+            .command(command.tag)
+            .pipe(Effect.flatMap((send) => send(call.target, call.input, { commandId }))),
+        );
+
+        if (Option.isNone(answer)) return Option.none<Settled<A>>();
+
+        const written = answer.value;
         // SAFETY: the command's reply schema decoded the reply.
         const receipt = { ...written, reply: written.reply as A };
 
-        if (!waiter || !entity) return settled.Committed(receipt);
+        if (!waiter || !entity) return Option.some(settled.Committed(receipt));
 
         // A deferred change can only be confirmed by its delivery.
         if (!entity.rows.deferred) {
@@ -164,11 +180,12 @@ const persist = <A>(
           Effect.provideService(waitKind, "settle"),
         );
 
-        if (Option.getOrElse(confirmed, () => false)) return settled.Committed(receipt);
+        if (Option.getOrElse(confirmed, () => false))
+          return Option.some(settled.Committed(receipt));
 
         for (const subset of connection.ready(entity.entityName)) subset.schedule();
 
-        return settled.Unconfirmed(receipt);
+        return Option.some(settled.Unconfirmed(receipt));
       }).pipe(
         Effect.scoped,
         Effect.ensuring(
@@ -177,6 +194,13 @@ const persist = <A>(
           }),
         ),
       );
+    }),
+  ).pipe(
+    Effect.flatMap((answer) => {
+      if (Option.isNone(answer))
+        return Effect.die(new Error("HighAlch client closed before the server replied"));
+
+      return Effect.succeed(answer.value);
     }),
   );
 
@@ -209,7 +233,10 @@ const start = <A, E extends TaggedFailure>(
   options: Options<A, E> & { readonly id?: string },
 ) => {
   const connection = connectionOf(db);
-  const call = edit.resolve(input, connection.scope, Option.none());
+  const call = Option.liftPredicate(connection, (client) => !client.closedToCommands).pipe(
+    Option.map(({ scope }) => edit.resolve(input, scope, Option.none())),
+    Option.getOrUndefined,
+  );
   let value: Option.Option<Settled<A>> = Option.none();
 
   const persisted = Deferred.makeUnsafe<Settled<A>, TaggedFailure | Defect>();
@@ -218,7 +245,7 @@ const start = <A, E extends TaggedFailure>(
   const transaction = db.createTransaction({
     id: options.id,
     autoCommit: false,
-    metadata: { [createdKey]: call.key },
+    metadata: { [createdKey]: call?.key ?? "" },
     mutationFn: () => Effect.runPromise(Deferred.await(persisted)),
   });
 
@@ -228,7 +255,7 @@ const start = <A, E extends TaggedFailure>(
   });
 
   try {
-    transaction.mutate(() => edit.apply(subsets, call));
+    if (call) transaction.mutate(() => edit.apply(subsets, call));
   } catch (cause) {
     transaction.rollback();
 
@@ -257,9 +284,15 @@ const start = <A, E extends TaggedFailure>(
     },
   );
 
-  const hasEdits = transaction.mutations.length > 0;
+  const result = { transaction, outcome: Deferred.await(outcome) };
 
-  if (hasEdits) void transaction.commit().catch(none);
+  if (!call || connection.closedToCommands) {
+    transaction.rollback({ error: closedClientError() });
+
+    return result;
+  }
+
+  const hasEdits = transaction.mutations.length > 0;
 
   connection.forkCommand(
     Effect.gen(function* () {
@@ -276,7 +309,22 @@ const start = <A, E extends TaggedFailure>(
     }),
   );
 
-  return { transaction, outcome: Deferred.await(outcome) };
+  if (hasEdits) void transaction.commit().catch(none);
+
+  return result;
+};
+
+/** Rejects before running an optimistic action on a closing client. */
+const rejectClosed = (connection: Connection, transaction: Transaction | undefined) => {
+  if (!connection.closedToCommands) return false;
+
+  const error = closedClientError();
+
+  if (!transaction) throw error;
+
+  transaction.rollback({ error });
+
+  return true;
 };
 
 /**
@@ -366,6 +414,9 @@ export const make = <C extends Domain.Command.Any>(
       const db = clientOf();
       const connection = connectionOf(db);
       const active = getActiveTransaction();
+
+      if (rejectClosed(connection, active)) return;
+
       const call = edit.resolve(input, connection.scope, Option.none());
 
       // `mutationFn` replays the call with the same key (a create's key is chosen here).
@@ -377,6 +428,7 @@ export const make = <C extends Domain.Command.Any>(
       });
 
       if (edit.apply(subsets, call) > 0) return;
+      if (rejectClosed(connection, active)) return;
 
       // An empty transaction never runs its `mutationFn`: the command runs beside it.
       const id = active?.id ?? crypto.randomUUID();
@@ -442,6 +494,9 @@ const pace = <C extends Domain.Command.Any>(
   return {
     onMutate: (input) => {
       const connection = connectionOf(clientOf());
+
+      if (rejectClosed(connection, getActiveTransaction())) return;
+
       const call = edit.resolve(input, connection.scope, Option.none());
 
       targets.set(call.key, call.target);

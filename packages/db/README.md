@@ -429,8 +429,12 @@ const db = HighAlch.make({
 (`client.requireDependency(...)`); `Provider` renders TanStack's `DbProvider` with it. Give the
 client a `layer` (the connection builds and, on `HighAlch.close(db)`, disposes it) or a
 `runtime` that already holds the Api client. Run `yield* HighAlch.close(db)` in an Effect or
-`await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. It waits until the
-client's commands have settled, then cleans up its collections and closes its connection.
+`await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. Close rejects new
+commands immediately and keeps the subsets and feed open while commands already sent settle.
+A command that receives a reply settles as usual, including `Unconfirmed` if its feed
+confirmation times out. If a reply is still outstanding after `settleTimeout` from the
+start of close, HighAlch interrupts the call and rolls back its optimistic edit. Close
+then cleans up the collections and connection once.
 
 Use `HighAlch.layer(config)` to give an Effect application a client scoped to its layer.
 It provides the TanStack client as `HighAlch.Client` and closes it when the layer's scope closes.
@@ -476,37 +480,40 @@ subscription of that feed's stream for the client's scope: one subscription per 
 started with the first subset of any of its entities and released with the last. It hands each
 subset the entries of its own entity (an entry of an entity no subset reads passes by).
 
-Each subset loads with cursor-then-events: `stream.peek(scope)` for the cursor (the latest
-entry's `seq`, `0` before any), then the query, then the feed's entries for its entity after that
-cursor (buffered meanwhile), applied in one sync transaction before `markReady()`. Nothing is
-missed and nothing is applied twice: entries are deduplicated by `seq`. The subscription resumes
-from its last `seq` after a failure.
+The subscription deduplicates entries by sequence and resumes from its last sequence after a
+failure.
 
 The declaration determines who places rows after a feed change:
 
 - With `where`, `one` or `all`, the rule decides. An upsert inserts or updates a row when the rule
   holds and removes it when the rule stops holding. A removal deletes the row where present.
-  `all` always includes the row. These declarations send no queries in response to feed changes,
-  so the rule must agree with the server query.
-- Without a rule, the query decides. The subset patches an upsert or removal in place for a row
-  it already shows. It then re-asks after any change to the entity, including a removal outside
-  the subset that can shift a later page. The subset stays ready and replaces its rows in one
-  snapshot transaction when the answer arrives. A confirmed optimistic insert can stay visible
-  until the answer places it.
+  `all` always includes the row. A load reads the feed cursor before sending the query and
+  applies entries buffered after that cursor over the answer. These declarations only re-ask
+  on explicit reload, so the rule must agree with the server query.
+- Without a rule, the query decides. Every delivered entry patches the rows in place once
+  regardless of the last query's cursor and requests a re-ask, including changes outside a page.
 
-A subset whose query decides sends one query per burst of changes to its entity, using
-`reloadDelay`. Declare a rule or use `all` to avoid that query. `HighAlch.reload(db, Rows)` shares
-the same debounce. If newer entries arrive while an answer is in flight, a ready subset keeps
-showing the patched rows and re-asks. After two consecutive discards it accepts the next
-answer and applies the buffered entries. The first load always writes its answer with buffered
-entries applied.
+Query-decided subsets retain entries since the last clean answer and replay them over the next
+answer. A removal deletes its key. An upsert replaces a row in the answer or keeps an omitted row
+that the subset already shows, including a confirmed optimistic insert. The first load writes
+with replay. A ready subset discards up to two consecutive answers overtaken by the feed, then
+writes the next with replay so that other rows can refresh under continuous changes.
 
-When an answer includes an already removed key or contradicts an already applied upsert for a
-held key, the subset keeps the feed's value. It retries up to three times with increasing delays.
-Without a usable consistency receipt, an unknown row omitted by a lagging answer can appear
-on the next change or reload. Domain's `waitsFor` needs an `atLeast` receipt with the originating
-aggregate stream and version. HighAlch's feed delivers the row change and the feed's own
-cursor, so automatic re-asks cannot provide that receipt.
+An answer is clean when replay leaves it unchanged and no entries arrived in flight. When replay
+changes the answer, the subset can make up to three corrections with increasing delays. If the
+third correction still disagrees, the query answer wins and the subset clears the retained entries.
+A new feed entry resets the correction count. An explicit reload clears the count and starts with
+the query answer, with entries received in flight handled by the same replay and discard rules.
+
+`reloadDelay` coalesces feed changes and explicit reloads into one request. Each subset can have
+one query in flight and one waiting. A debounced feed change or explicit reload can preempt a
+retry backoff. A ready subset writes each accepted answer in one snapshot transaction and
+keeps its readiness. With `live: false`, subsets load once.
+
+A read model that lags the feed longer than the corrections wait can still return stale rows.
+A new row omitted by a lagging answer appears at the next change or reload. Domain's `waitsFor`
+needs an `atLeast` receipt with the originating aggregate stream and version. The feed delivers
+row changes with the feed's own cursor.
 
 Each loaded cursor page re-asks with its own `after` and `take`. A change that shifts a boundary
 can leave adjacent pages overlapping or with a gap until those pages are loaded again.

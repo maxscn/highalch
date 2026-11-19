@@ -394,10 +394,13 @@ const NotesByCursorLive = NotesByCursor.toLayer(
         const mine = notes.filter((note) => note.account === account);
         const start = Number(after ?? 0);
         const next = start + take;
+        let cursor: string | null = null;
+
+        if (next < mine.length) cursor = String(next);
 
         return {
           entries: mine.slice(start, next),
-          cursor: next < mine.length ? String(next) : null,
+          cursor,
         };
       });
   }),

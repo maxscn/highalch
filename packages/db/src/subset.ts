@@ -17,8 +17,17 @@ import type { Defect, TaggedFailure } from "./state";
 import { cursorOf, failureOf, read, waitKind, type Connection } from "./client";
 import { subscriptionOf, type Delivered, type Subscription } from "./feed";
 import type * as Rows from "./rows";
-import { apply, reconcile, remember, settle } from "./sync-rows";
+import { apply, rebase, settle } from "./sync-rows";
 import { keyOf, type Answer, type Input, type Row } from "./values";
+
+// Query-decided subsets patch every delivered entry and debounce a re-ask. Replay the changes
+// since the last clean answer, keeping shown rows the answer omits. Discard at most two answers
+// overtaken by the feed, then write a snapshot. Three progressively delayed corrections bound
+// how long the feed can override a lagging answer. Explicit reloads start with a clean slate.
+// A slower read model can still answer stale, and an omitted new row waits for another change
+// or reload. One query runs at a time, with one waiting request that can preempt retry backoff
+// after its debounce. Rule-based subsets keep cursor-based settlement and only re-ask on
+// explicit reload. With live disabled, a subset only loads once.
 
 type Params = Parameters<SyncConfig<Row, string>["sync"]>[0];
 
@@ -34,10 +43,11 @@ export type Spec = {
   readonly select: Option.Option<(answer: Answer) => ReadonlyArray<Row>>;
 };
 
+type Reason = "feed" | "reload" | "correction";
+
 type Request = {
-  after: number;
+  reason: Reason;
   readonly elapsed: Deferred.Deferred<void>;
-  correction: boolean;
   timer?: Fiber.Fiber<void>;
 };
 
@@ -69,15 +79,16 @@ export class Subset {
   private readonly scope: Scope.Closeable;
   private readonly reported: Array<TaggedFailure | Defect> = [];
   private synced = new Map<string, Row>();
-  private readonly applied = new Map<string, Delivered>();
+  private triggers: Array<Delivered> = [];
+  private deliveries = 0;
   private buffer: Array<Delivered> | undefined;
-  private cursor = 0;
   private discarded = 0;
   private corrections = 0;
   private pending: Request | undefined;
   private queued = Deferred.makeUnsafe<Request>();
   private feed: Subscription | undefined;
   private readonly release: () => void;
+  private stopping: Promise<void> | undefined;
 
   constructor(
     private readonly connection: Connection,
@@ -118,38 +129,37 @@ export class Subset {
   };
 
   private stop = () => {
-    this.feed?.release(this);
-    this.release();
+    if (this.stopping) return this.stopping;
 
-    return Effect.runPromise(Scope.close(this.scope, Exit.void));
+    this.stopping = Promise.resolve().then(() =>
+      Effect.runPromise(Scope.close(this.scope, Exit.void)),
+    );
+    this.release();
+    this.feed?.release(this);
+
+    return this.stopping;
   };
 
-  /** Patch ready rows immediately and retain changes received during a query for its answer. */
+  /** Patch ready rows immediately and record the entries for the next answer. */
   receive = (delivered: ReadonlyArray<Delivered>) => {
-    let changes = delivered;
+    if (this.stopping || delivered.length === 0) return;
 
-    if (this.byQuery) changes = delivered.filter(({ seq }) => seq > this.cursor);
-
-    this.buffer?.push(...changes);
-
-    if (!this.ready || changes.length === 0) return;
-
-    const writes = apply(this.synced, changes, this, (key) => this.collection.has(key));
-
-    if (this.byQuery) remember(changes, this.applied, this.synced, this);
-
-    if (writes.length > 0) {
-      this.params.begin();
-      for (const write of writes) this.params.write(write);
-      void this.params.commit();
-    }
-
-    const last = changes.at(-1);
-
-    if (this.byQuery && last) {
+    if (this.byQuery) {
+      this.triggers.push(...delivered);
+      this.deliveries += delivered.length;
       this.corrections = 0;
-      this.request(last.seq);
-    }
+      this.request("feed");
+    } else this.buffer?.push(...delivered);
+
+    if (!this.ready) return;
+
+    const writes = apply(this.synced, delivered, this, (key) => this.collection.has(key));
+
+    if (writes.length === 0) return;
+
+    this.params.begin();
+    for (const write of writes) this.params.write(write);
+    void this.params.commit();
   };
 
   interrupted = (error: TaggedFailure | Defect) => {
@@ -161,30 +171,34 @@ export class Subset {
   };
 
   stopped = (error: TaggedFailure | Defect) => {
+    if (this.stopping) return;
+
     void this.stop();
     this.params.fail(error);
   };
 
   schedule = () => {
+    if (!this.connection.live || this.stopping) return;
+
+    this.triggers = [];
     this.corrections = 0;
-    this.request(Infinity);
+    this.request("reload");
   };
 
-  private request(after: number, correction = false, delay = this.connection.reloadDelay) {
+  private request(reason: Reason, delay = this.connection.reloadDelay) {
     if (this.pending) {
-      if (this.pending.correction && !correction) {
+      if (this.pending.reason === "correction" && reason !== "correction") {
         const request = this.pending;
 
-        request.correction = false;
-        request.after = after;
+        request.reason = reason;
         if (request.timer) Effect.runFork(Fiber.interrupt(request.timer));
         this.arm(request, delay);
-      } else this.pending.after = Math.max(this.pending.after, after);
+      } else if (reason === "reload") this.pending.reason = reason;
 
       return;
     }
 
-    const request: Request = { after, correction, elapsed: Deferred.makeUnsafe() };
+    const request: Request = { reason, elapsed: Deferred.makeUnsafe() };
 
     this.pending = request;
     this.arm(request, delay);
@@ -203,12 +217,14 @@ export class Subset {
   }
 
   private clearRequest() {
-    const timer = this.pending?.timer;
+    const request = this.pending;
 
     this.pending = undefined;
     this.queued = Deferred.makeUnsafe();
 
-    if (timer) Effect.runFork(Fiber.interrupt(timer));
+    if (request?.timer) Effect.runFork(Fiber.interrupt(request.timer));
+
+    return request?.reason;
   }
 
   private next = Effect.suspend(() =>
@@ -221,10 +237,11 @@ export class Subset {
     return Effect.gen({ self: this }, function* () {
       yield* Effect.yieldNow;
 
+      let reason: Reason | undefined;
       while (true) {
-        yield* this.load(name);
+        yield* this.load(name, reason);
         yield* this.next;
-        this.clearRequest();
+        reason = this.clearRequest();
         yield* Effect.yieldNow;
       }
     }).pipe(
@@ -236,16 +253,17 @@ export class Subset {
     );
   }
 
-  private load(name: string) {
+  private load(name: string, reason: Reason | undefined) {
     return Effect.gen({ self: this }, function* () {
       let step = yield* Schedule.toStep(this.connection.retry);
 
       while (true) {
         const changes: Array<Delivered> = [];
 
-        this.buffer = changes;
+        if (!this.byQuery) this.buffer = changes;
+
         const result = yield* Effect.result(
-          read(name, this.fetch()).pipe(
+          read(name, this.fetch(reason)).pipe(
             Effect.tap((answer) => Effect.sync(() => this.accept(answer, changes))),
             Effect.ensuring(
               Effect.sync(() => {
@@ -257,6 +275,7 @@ export class Subset {
 
         if (result._tag === "Success") return;
 
+        reason = undefined;
         const error = result.failure;
         const now = yield* Clock.currentTimeMillis;
         const [, duration] = yield* Pull.catchDone(step(now, error), () => Effect.fail(error));
@@ -272,14 +291,14 @@ export class Subset {
         );
 
         if (requested) {
-          this.clearRequest();
+          reason = this.clearRequest();
           step = yield* Schedule.toStep(this.connection.retry);
         }
       }
     });
   }
 
-  private fetch() {
+  private fetch(reason: Reason | undefined) {
     return Effect.gen({ self: this }, function* () {
       const { entity, query, input, page } = this.spec;
       let cursor = 0;
@@ -291,24 +310,45 @@ export class Subset {
       }
 
       const ask = yield* this.connection.query(query.queryName);
+
+      // A request whose debounce expired during the cursor read can use this query.
+      if (this.byQuery) {
+        if (this.pending && Deferred.isDoneUnsafe(this.pending.elapsed)) {
+          const queued = this.clearRequest();
+
+          if (queued === "reload" || reason !== "reload") reason = queued;
+        }
+
+        if (reason === "reload") this.triggers = [];
+      }
+
+      const deliveries = this.deliveries;
       const result = yield* ask(input, page);
 
       if (this.feed) yield* this.feed.ready;
 
-      return { cursor, result };
+      return { cursor, result, deliveries };
     });
   }
 
   private accept(
-    { cursor, result }: { readonly cursor: number; readonly result: Answer | null },
+    {
+      cursor,
+      result,
+      deliveries,
+    }: {
+      readonly cursor: number;
+      readonly result: Answer | null;
+      readonly deliveries: number;
+    },
     changes: ReadonlyArray<Delivered>,
   ) {
-    const later = changes.filter(({ seq }) => seq > cursor);
-    const latest = later.at(-1);
+    if (this.stopping) return;
 
-    if (this.byQuery && this.ready && latest && this.discarded < 2) {
+    const overtaken = deliveries !== this.deliveries;
+
+    if (this.byQuery && this.ready && overtaken && this.discarded < 2) {
       this.discarded += 1;
-      this.request(latest.seq);
 
       return;
     }
@@ -318,29 +358,28 @@ export class Subset {
       rowsOf(this.spec.query, result, this.spec.select).map((row) => [this.keyOf(row), row]),
     );
 
-    if (this.byQuery && this.pending && this.pending.after <= cursor) this.clearRequest();
-
-    const contradicted = this.byQuery && reconcile(rows, this.applied, cursor);
-
-    settle(rows, later, this);
-
-    if (this.byQuery) {
-      this.cursor = cursor;
-      remember(later, this.applied, rows, this);
+    if (!this.byQuery) {
+      settle(
+        rows,
+        changes.filter(({ seq }) => seq > cursor),
+        this,
+      );
+      this.write(rows);
+      return;
     }
 
-    this.write(rows);
-
-    if (this.byQuery && latest) this.request(latest.seq);
-
-    if (contradicted && this.corrections < 3) {
+    const patched = rebase(rows, this.triggers, this, (key) => this.collection.has(key));
+    if (patched && this.corrections < 3 && !this.pending) {
       this.corrections += 1;
-      this.request(
-        Infinity,
-        true,
-        Math.max(1, this.connection.reloadDelay) * 2 ** this.corrections,
-      );
-    } else if (!contradicted) this.corrections = 0;
+      this.request("correction", Math.max(1, this.connection.reloadDelay) * 2 ** this.corrections);
+    } else if (this.corrections === 3 || (!patched && !overtaken)) {
+      this.triggers = [];
+      this.corrections = 0;
+      this.write(rows);
+      return;
+    }
+
+    this.write(patched ?? rows);
   }
 
   /** Replaces the synced rows with a fresh answer in one sync transaction. */
