@@ -109,6 +109,153 @@ export type LiveState<V extends LiveResult> =
 
 const none = () => {};
 
+/** The stock live query result each `Loading` state `fromLive` built was read from. */
+const loads = new WeakMap<object, LiveResult>();
+
+/** What `Suspend` uses of a stock live query collection (a TanStack DB `Collection`). */
+type Pinnable = {
+  readonly status: string;
+  readonly subscriberCount: number;
+  readonly subscribeChanges: (
+    callback: () => void,
+    options: { readonly includeInitialState: boolean },
+  ) => { readonly unsubscribe: () => void };
+  readonly on: (
+    event: "status:change" | "subscribers:change",
+    callback: (event: { readonly status?: string; readonly subscriberCount?: number }) => void,
+  ) => () => void;
+};
+
+const pinnable = (collection: unknown): collection is Pinnable =>
+  Predicate.hasProperty(collection, "subscribeChanges") &&
+  Predicate.hasProperty(collection, "subscriberCount") &&
+  Predicate.hasProperty(collection, "on") &&
+  Predicate.hasProperty(collection, "status");
+
+/** Whether a collection's first load still runs: not yet ready, failed, crashed or cleaned up. */
+const loading = (status: string) => status === "idle" || status === "loading";
+
+/**
+ * How long a settled read keeps its collection observed for a retry that has not subscribed yet
+ * (TanStack DB's own suspense `gcTime`). A reader that commits and subscribes ends it earlier.
+ */
+const linger = 5_000;
+
+/** A pending read: the promise its suspended renders throw, and the collection it observes. */
+type Wait = { readonly promise: Promise<void>; readonly collection: Pinnable };
+
+/**
+ * The pending reads, by the ids of the sources they read (or by the collection when it has no
+ * health tree). A render that suspends is discarded with its hooks, so a retry of a first mount
+ * builds a new live query collection: the sources, held by the client, are what it shares with
+ * the render it replaces. An entry leaves when its load ends.
+ */
+const waits = new Map<string | object, Wait>();
+
+const sourcesOf = (health: HealthNode): ReadonlyArray<string> =>
+  health.sources.flatMap((source) => [source.collectionId, ...sourcesOf(source)]);
+
+/** The key of a pending read: its sources' collection ids. */
+const keyOf = (health: HealthNode | undefined) =>
+  Option.map(Option.fromNullishOr(health), (node) =>
+    [...new Set(sourcesOf(node))].sort().join("\n"),
+  );
+
+/**
+ * Observes a loading live query collection until its first load ends (ready, a typed rejection,
+ * a crash or a cleanup), then resolves. A suspended render never commits its `useLiveQuery`
+ * subscription, so without this observer nothing would load its sources. The promise never
+ * rejects: the retried render reads how the load ended and `match` dispatches it. The observer
+ * stays until a committed reader subscribes, the collection is cleaned up, or `linger` passes,
+ * so a retry that reuses this collection (an input change) finds it loaded.
+ */
+const pin = (collection: Pinnable, done: () => void): Promise<void> =>
+  new Promise<void>((resolve) => {
+    let loaded = false;
+    let released = false;
+    let subscription: { readonly unsubscribe: () => void } | undefined;
+    const stops: Array<() => void> = [];
+
+    const release = () => {
+      if (released) return;
+
+      released = true;
+
+      for (const stop of stops.splice(0)) stop();
+
+      subscription?.unsubscribe();
+    };
+
+    const settle = () => {
+      if (loaded) return;
+
+      loaded = true;
+      done();
+      resolve();
+
+      if (collection.status === "cleaned-up" || collection.subscriberCount > 1) return release();
+
+      const timer = setTimeout(release, linger);
+
+      stops.push(() => clearTimeout(timer));
+    };
+
+    stops.push(
+      collection.on("status:change", ({ status = "" }) => {
+        if (status === "cleaned-up") release();
+
+        if (!loading(status)) settle();
+      }),
+      collection.on("subscribers:change", ({ subscriberCount = 0 }) => {
+        if (loaded && subscriberCount > 1) release();
+      }),
+    );
+
+    // Subscribing starts the load; it may end synchronously, before the subscription is returned.
+    subscription = collection.subscribeChanges(none, { includeInitialState: true });
+
+    if (released) subscription.unsubscribe();
+    else if (!loading(collection.status)) settle();
+  });
+
+/** The stable promise a render suspended on `result`'s first load throws. */
+const whenLoaded = (result: LiveResult): Promise<void> => {
+  const collection = result.collection;
+
+  if (!pinnable(collection))
+    throw new Error("HighAlch.Suspend needs a stock useLiveQuery result with its collection");
+
+  const key = Option.getOrElse(keyOf(result.health), (): string | object => collection);
+  const known = waits.get(key);
+
+  if (known && loading(known.collection.status)) return known.promise;
+
+  const promise = pin(collection, () => {
+    if (waits.get(key)?.collection === collection) waits.delete(key);
+  });
+
+  if (loading(collection.status)) waits.set(key, { promise, collection });
+
+  return promise;
+};
+
+/**
+ * The `Loading` handler that suspends: `match(res).on({ Loading: HighAlch.Suspend, ... })` throws
+ * a promise to the nearest `<Suspense>`. The promise is shared by every render waiting on the same
+ * sources and resolves (never rejects) when the first load ends for any reason; the retried render
+ * then matches `Ready`, a typed error or `Missing` as usual, and a defect still throws.
+ */
+export const Suspend = (state: Data.TaggedEnum.Value<Live<unknown, unknown>, "Loading">): never => {
+  const result = loads.get(state);
+
+  if (!result)
+    throw new Error(
+      "HighAlch.Suspend handles only the Loading state of match(res) over a stock useLiveQuery result",
+    );
+
+  throw whenLoaded(result);
+};
+
 /** A problem's original value when it is a typed failure; a defect or untyped value is thrown. */
 const typed = (cause: unknown): TaggedFailure => {
   if (cause instanceof Defect || !Predicate.hasProperty(cause, "_tag")) throw cause;
@@ -137,7 +284,13 @@ export const fromLive = (result: LiveResult) => {
     return { state: typed(failed.error.cause), controls };
   }
 
-  if (!result.isReady) return { state: states.Loading(), controls };
+  if (!result.isReady) {
+    const state = states.Loading();
+
+    loads.set(state, result);
+
+    return { state, controls };
+  }
 
   const retrying = found.find((node) => node.failureReason !== null)?.failureReason;
 

@@ -132,6 +132,45 @@ export function Recovered() {
     Loading: () => null,
   });
 
+  // `Suspend` is the Loading handler whatever the others return; the result drops its `never`.
+  const suspended = HighAlch.match(from).on({
+    Loading: HighAlch.Suspend,
+    Retrying: ({ data }) => data.length,
+    Ready: ({ data }) => data.map((note) => note.title),
+    QueryRefused: () => null,
+    RpcClientError: () => "transport" as const,
+  });
+
+  expectTypeOf(suspended).toEqualTypeOf<number | Array<string> | null | "transport">();
+
+  // It changes nothing else: still exhaustive, and with `orElse` too.
+  // @ts-expect-error a missing state is named: QueryRefused
+  HighAlch.match(from).on({
+    Loading: HighAlch.Suspend,
+    Retrying: () => null,
+    Ready: () => null,
+    RpcClientError: () => null,
+  });
+
+  HighAlch.match(one).on({ Loading: HighAlch.Suspend, Ready: () => null, orElse: () => null });
+
+  // @ts-expect-error `Suspend` handles only `Loading`
+  HighAlch.match(from).on({ Loading: () => null, Ready: HighAlch.Suspend, orElse: () => null });
+
+  HighAlch.match(from).on({
+    // @ts-expect-error nor a group naming another state
+    [HighAlch.anyOf("Loading", "Retrying")]: HighAlch.Suspend,
+    orElse: () => null,
+  });
+
+  HighAlch.match(from).on({
+    Loading: () => null,
+    Retrying: () => null,
+    Ready: () => null,
+    // @ts-expect-error nor `orElse`, which receives the typed errors
+    orElse: HighAlch.Suspend,
+  });
+
   return null;
 }
 
