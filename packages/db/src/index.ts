@@ -85,6 +85,8 @@ export type { Config, Retry, Settings } from "./client";
 
 export { anyOf, match } from "./match";
 
+export { Suspend } from "./live";
+
 export type { AnyOf, Matchable, Matcher, StateOf } from "./match";
 
 export { Defect } from "./state";
