@@ -49,6 +49,8 @@ parallel, and start no dev servers.
 - **Reads and writes.** Reads use TanStack DB's stock `useLiveQuery` over a declaration's subset
   and render with `match(res).on(...)`. Do not add hooks of ours. Commands take their input only
   and return TanStack DB transactions.
+- **Suspense.** `Loading: HighAlch.Suspend` suspends a stock `useLiveQuery` read to the nearest
+  `<Suspense>`; typed errors stay `match` branches. It is not a hook and needs no React import.
 - **Comments and errors** name the package as HighAlch (`HighAlch.Defect`, "No HighAlch client
   is active").
 
