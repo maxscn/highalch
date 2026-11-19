@@ -193,6 +193,12 @@ class OptionalNotes extends Domain.Query("OptionalNotes", {
   rejects: [QueryRefused],
 }) {}
 
+class MaybeNotes extends Domain.Query("MaybeNotes", {
+  input: { account: Schema.String },
+  success: Schema.NullOr(Schema.Array(Note)),
+  rejects: [QueryRefused],
+}) {}
+
 type ReadMethods<T> = Extract<keyof T, string>;
 
 type SourceErrors<Accessor> = Accessor extends (...args: never) => HighAlch.Source<infer Row>
@@ -357,6 +363,47 @@ export function ReadBuilder(otherRow: Book) {
     queries: {
       // @ts-expect-error the default entry is still checked when using all
       bad: HighAlch.read(NoteStats).all(),
+    },
+  });
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error the feed delivers notes, which have no `extra` for the rule to read
+      widened: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
+        .where((row) => row.extra.startsWith("x")),
+    },
+  });
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error a rule over another entity's row is not saved by selecting no rows
+      empty: HighAlch.read(NotesByTitle)
+        .rows(() => [])
+        .where((row: Book) => row.name.length > 0),
+    },
+  });
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error the same holds for a single row
+      widenedOne: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
+        .one((row) => row.extra === "x"),
+    },
+  });
+
+  // Rows with extra fields are fine while the query decides: no rule reads them.
+  HighAlch.collection(NoteRows, {
+    queries: {
+      widened: HighAlch.read(NotesByTitle).rows((answer) =>
+        answer.Items.map((row) => ({ ...row, extra: "x" })),
+      ),
+      widenedAll: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
+        .all(),
+      // An answer that may be `null` holds the same rows as one that may not.
+      maybe: MaybeNotes,
+      maybeAll: HighAlch.read(MaybeNotes).all(),
     },
   });
 }
