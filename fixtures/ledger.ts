@@ -251,7 +251,7 @@ export const entries = HighAlch.collection(EntryRows, {
     save: HighAlch.updates(SaveEntry, {
       key: (input) => input.value.EntryId ?? "",
       fields: (input) => input.value,
-      input: (row: Entry) => ({ value: { EntryId: row.EntryId, text: row.text } }),
+      input: (row: Partial<Entry>) => ({ value: { EntryId: row.EntryId, text: row.text ?? "" } }),
     }),
     drop: HighAlch.deletes(DropEntry, { key: (input) => input.value.EntryId }),
   },
