@@ -198,7 +198,7 @@ which is what makes "the command it asked for" observable: XState 6's pure `tran
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
 and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
 is registered under in `setup({ actors })`. Plain XState logic works the same once marked:
-`mark(createAsyncLogic({ run: ({ input }) => Effect.runPromise(command.result(input)) }), command)`. In production
+`mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`. In production
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 

@@ -262,7 +262,13 @@ const start = <A, E extends TaggedFailure>(
 
   const finish = (exit: Exit.Exit<Settled<A>, E>) => {
     Deferred.doneUnsafe(outcome, exit);
-    react(exit, options);
+
+    // A reaction that throws is the consumer's bug: log it, and leave the settlement as it is.
+    try {
+      react(exit, options);
+    } catch (cause) {
+      Effect.runFork(Effect.logError("HighAlch: a command's reaction threw", Cause.die(cause)));
+    }
   };
 
   // TanStack publishes its settlement through this promise, including conflicting rollbacks.
@@ -353,8 +359,13 @@ export type Command<
   }) => Command<C, Extra, T>;
   /** The call as an Effect with the command's typed error channel. */
   readonly effect: (input: InputOf<C>) => Effect.Effect<Settled<ReplyOf<C>>, ErrorOf<C>>;
-  /** The call's outcome as a value for `match`; it never rejects for a typed error. */
-  readonly result: (input: InputOf<C>) => Effect.Effect<Settled<ReplyOf<C>> | ErrorOf<C>>;
+  /**
+   * The call's outcome as a promise of a value for `match`, to await in code that is not an
+   * Effect (a React transition, a form's submit). It never rejects for a typed error; a defect
+   * rejects, as does a call on a closing or closed client. The optimistic edit is applied before
+   * it returns.
+   */
+  readonly result: (input: InputOf<C>) => Promise<Settled<ReplyOf<C>> | ErrorOf<C>>;
   /**
    * `onMutate` and `mutationFn` for TanStack DB's `createOptimisticAction`. The transaction's
    * `metadata` holds the addressed row's key, as for a direct call.
@@ -465,7 +476,20 @@ export const make = <C extends Domain.Command.Any>(
   const callable = Object.assign(call, {
     with: rebind,
     effect,
-    result: (input: InputOf<C>) => Effect.catch(effect(input), Effect.succeed),
+    // The executor runs now: the edit shows before `result` returns, and a throw rejects.
+    result: (input: InputOf<C>) => {
+      const settled = new Promise<Settled<A> | E>((resolve, reject) => {
+        const { outcome } = start<A, E>(clientOf(), command, edit, input, bound);
+
+        Effect.runPromise(Effect.catch(outcome, Effect.succeed)).then(resolve, reject);
+      });
+
+      // A caller that never awaits it must not get an unhandled rejection; one that does still
+      // receives the defect.
+      settled.catch(none);
+
+      return settled;
+    },
     options,
     paced: Option.getOrUndefined(
       Option.map(edit.paced, (inputOf) => pace(command, edit, inputOf, clientOf)),

@@ -114,9 +114,7 @@ describe("f(deferred settlement, command)", () => {
 
     await until(() => list.isReady(), "ready");
 
-    const outcome = await Effect.runPromise(
-      entries.drop.with({ client: db }).result({ value: { EntryId: "e2" } }),
-    );
+    const outcome = await entries.drop.with({ client: db }).result({ value: { EntryId: "e2" } });
 
     expect(outcome).toMatchObject({ _tag: "Committed" });
     expect(texts(list.values())).toEqual(["Ada"]);
@@ -134,9 +132,9 @@ describe("f(deferred settlement, command)", () => {
 
     await until(() => list.isReady(), "ready");
 
-    const outcome = await Effect.runPromise(
-      entries.save.with({ client: db }).result({ value: { EntryId: "e1", text: "Ada 2" } }),
-    );
+    const outcome = await entries.save
+      .with({ client: db })
+      .result({ value: { EntryId: "e1", text: "Ada 2" } });
 
     expect(outcome).toMatchObject({ _tag: "Unconfirmed" });
     await until(() => list.get("e1")?.text === "Ada", "reloaded");
@@ -152,9 +150,9 @@ describe("f(deferred settlement, command)", () => {
 
     await until(() => list.isReady(), "ready");
 
-    const outcome = await Effect.runPromise(
-      entries.save.with({ client: db }).result({ value: { EntryId: "e1", text: "" } }),
-    );
+    const outcome = await entries.save
+      .with({ client: db })
+      .result({ value: { EntryId: "e1", text: "" } });
 
     expect(outcome).toBeInstanceOf(EntryEmpty);
     expect(list.get("e1")?.text).toBe("Ada");
