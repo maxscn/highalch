@@ -1,7 +1,16 @@
 ---
 "@highalch/db": patch
+"@highalch/story": patch
 ---
 
-Let queries decide subset membership by default. Add `HighAlch.all` for whole lists and make `entries` compose with membership helpers.
+Let bare and `entries` queries decide subset membership and re-ask after a burst of feed changes.
+Use `all(Query)` for a whole list that follows the feed directly. Use `where(entries(Query, select), rule)`
+in place of `entries(Query, select, rule)`. Give each query one declaration per entity and use a
+bare query or `entries` for a cursor page. Conflicting declarations and `all` on a paged query
+now fail at declaration.
 
-Breaking: A rule-less query now re-asks after every change of its entity, debounced across a burst of changes. Declare whole lists with `HighAlch.all(Query)`. Replace `entries(Query, select, rule)` with `where(entries(Query, select), rule)`.
+Subset loads, feed reconnects and command settlement run on Effect. Replace retry callbacks
+with Effect schedules filtered by typed errors. Replace custom timers with an Effect `Clock`.
+Run `HighAlch.close(db)` and `command.result(input)` as Effects. `HighAlch.layer(config)` provides
+a scoped client under `HighAlch.Client`, and `HighAlch.make(config)` still returns the client
+synchronously. The story kit's `retryTransport` is now a schedule.

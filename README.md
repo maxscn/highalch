@@ -94,6 +94,10 @@ export function NoteList({ account }: { readonly account: string }) {
 await notes.rename({ NoteId: "n1", title: "Ada Lovelace" }).when("settled");
 ```
 
+Effect applications can use `HighAlch.layer(config)` to provide the client as
+`HighAlch.Client` and close it with the scope. For a client created with `HighAlch.make`,
+run `yield* HighAlch.close(db)` when its owner shuts down.
+
 ### A story with a screen
 
 ```tsx
