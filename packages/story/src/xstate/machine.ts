@@ -1,5 +1,6 @@
-import { createEffectActor, type EffectActor } from "@xstate/effect";
-import { Effect, Exit, Option, Predicate, Scope } from "effect";
+import { createEffectActor, EffectFailure, type EffectActor } from "@xstate/effect";
+import { Cause, Effect, Exit, Layer, Option, Predicate, Scope } from "effect";
+import { Atom, AtomRegistry, type AsyncResult } from "effect/reactivity";
 import {
   initialTransition,
   transition,
@@ -7,21 +8,24 @@ import {
   type AnyMachineSnapshot,
   type AnyStateMachine,
   type EventObject,
-  type ExecutableActionObject,
+  type ExecutableEffect,
   type MachineContext,
   type StateValue,
 } from "xstate";
 import type { TaggedFailure } from "@highalch/db";
 import type { Answer, Input } from "@highalch/db/internal";
 import { commandOf, Runner, type Invocable, type Marked } from "@highalch/db/xstate";
+import { registryOf, stageOf } from "../atoms";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Callable, type Step } from "../steps";
 import { json, type Run, type Source, type World } from "../world";
 
-/** A command a machine's transition spawned, with its actor id and input. */
+/** A command a machine's transition spawned, with its actor id, session and input. */
 type Spawned = {
   readonly command: Marked;
   readonly id: string;
+  /** The spawned actor's session, which its done and error events name. */
+  readonly session: string;
   readonly input: Answer | undefined;
 };
 
@@ -41,11 +45,15 @@ type Stepped = {
 };
 
 /**
- * A machine running against the story's client (`Machine.start`): its actor, the scope whose
- * client runs its commands, and the tick of the last event it was sent.
+ * A machine running against the story's client: its actor, the scope whose client runs its
+ * commands, and the tick of the last event it was sent. The story made the actor
+ * (`Machine.start`), or it is the one a mounted component reads through its atoms
+ * (`Machine.mounted`).
  */
 type Running = {
   readonly mode: "running";
+  /** Whether the actor is the story registry's (`Machine.mounted`), not one the story made. */
+  readonly mounted: boolean;
   readonly name: string;
   readonly machine: AnyStateMachine;
   readonly actor: EffectActor<AnyStateMachine>;
@@ -122,22 +130,26 @@ const nameOf = (machine: AnyStateMachine, command: Marked) =>
 type Spawn = {
   readonly logic: AnyActorLogic;
   readonly id: string;
+  readonly actor: { readonly sessionId: string };
   readonly input: Answer | undefined;
 };
 
-const isSpawn = (action: ExecutableActionObject): action is ExecutableActionObject & Spawn =>
+const isSpawn = (action: ExecutableEffect): action is ExecutableEffect & Spawn =>
   action.type === "@xstate.spawn" &&
   Predicate.hasProperty(action, "logic") &&
   Predicate.hasProperty(action, "id") &&
-  Predicate.isString(action.id);
+  Predicate.isString(action.id) &&
+  Predicate.hasProperty(action, "actor");
 
-const spawnedBy = (actions: ReadonlyArray<ExecutableActionObject>): ReadonlyArray<Spawned> =>
+const spawnedBy = (actions: ReadonlyArray<ExecutableEffect>): ReadonlyArray<Spawned> =>
   actions.flatMap((action) => {
     if (!isSpawn(action)) return [];
 
     return Option.match(commandOf(action.logic), {
       onNone: () => [],
-      onSome: (command) => [{ command, id: action.id, input: action.input }],
+      onSome: (command) => [
+        { command, id: action.id, session: action.actor.sessionId, input: action.input },
+      ],
     });
   });
 
@@ -172,7 +184,11 @@ const askedOf = (stage: Stage, machine: Entered, label: string): ReadonlyArray<A
     );
 };
 
-const where = (machine: Entered) => `${machine.name} (${machine.mode})`;
+const where = (machine: Entered) => {
+  if (machine.mode === "running" && machine.mounted) return `${machine.name} (mounted)`;
+
+  return `${machine.name} (${machine.mode})`;
+};
 
 const describe = (snapshot: AnyMachineSnapshot) =>
   `${json(snapshot.value)} ${json(snapshot.context)}`;
@@ -242,20 +258,26 @@ const isCallable = <I extends Input, A, E>(
 ): command is Invocable<I, A, E> & Callable<I> =>
   Predicate.hasProperty(command, "with") && Predicate.isFunction(command.with);
 
+/** Who a command is run for: the name it is recorded under, how it reads, and the client's scope. */
+type Owner = { readonly name: string; readonly label: string; readonly scope: string };
+
 /**
- * The story's runner of a running machine's commands: on the client of the machine's scope,
- * recorded as the machine's (`asked` reads them; `settled`/`rejected` assert the last one).
+ * The story's runner of a running machine's commands: on the client of the owner's scope,
+ * recorded as the owner's (`asked` reads them; `settled`/`rejected` assert the last one).
  */
-const runnerOf = (world: World, machine: () => Running) =>
+const runnerOf = (
+  world: World,
+  owner: <I extends Input, A, E>(command: Invocable<I, A, E>, input: I) => Owner,
+) =>
   Runner.of({
     run: <I extends Input, A, E>(command: Invocable<I, A, E>, input: I) =>
       Effect.promise(() => {
-        const running = machine();
+        const { name, label, scope } = owner(command, input);
 
         return world.start(
-          `${running.name}: ${nameOf(running.machine, command)}`,
-          running.scope,
-          byOf(running.name),
+          label,
+          scope,
+          byOf(name),
           input,
           (client, onCommitted) => {
             if (!isCallable(command))
@@ -287,6 +309,75 @@ const runnerOf = (world: World, machine: () => Running) =>
         }),
       ),
   });
+
+const ownerOf = (running: Running, command: Marked): Owner => ({
+  name: running.name,
+  label: `${running.name}: ${nameOf(running.machine, command)}`,
+  scope: running.scope,
+});
+
+/** The name commands run under when no mounted machine of the story is seen to invoke them. */
+const unnamed = "mounted";
+
+/** Whether an actor has a child that was given exactly this input (the command it invokes now). */
+const invokes = (running: Running, input: unknown) =>
+  Object.values(running.actor.getSnapshot().children ?? {}).some((child) => {
+    const snapshot: unknown = Predicate.hasProperty(child, "getSnapshot")
+      ? Reflect.apply(child.getSnapshot as () => unknown, child, [])
+      : undefined;
+
+    return Predicate.hasProperty(snapshot, "input") && snapshot.input === input;
+  });
+
+/**
+ * The mounted machine a command of the story's registry is run for: the one whose actor invokes
+ * a child with this very input; else the only mounted machine that registers the command.
+ * A command of an actor the story never introduced (`Machine.mounted`) is recorded as `mounted`.
+ */
+const mountedOwner = (stage: Stage, world: World, command: Marked, input: unknown): Owner => {
+  const candidates = [...machinesOf(stage).entered.values()].filter(
+    (each): each is Running => each.mode === "running" && each.mounted,
+  );
+
+  const registering = candidates.filter((each) => Option.isSome(sourceOf(each.machine, command)));
+
+  const found = Option.orElse(
+    Option.fromUndefinedOr(candidates.find((each) => invokes(each, input))),
+    () => Option.liftPredicate(registering[0], () => registering.length === 1),
+  );
+
+  return Option.match(Option.flatMap(found, Option.fromUndefinedOr), {
+    onNone: () => ({ name: unnamed, label: `${unnamed}: a command`, scope: world.scope }),
+    onSome: (running) => ownerOf(running, command),
+  });
+};
+
+/**
+ * In a story's registry, every atom runtime runs its machines' commands on the story's client,
+ * recorded: a layer of `Atom.runtime` that provides the `Runner`. In any other registry (an
+ * application's) it runs the command as `invoke` does without a runner. Added once, when this
+ * entry is loaded, so a component mounted before any machine step is covered too.
+ */
+Atom.runtime.addGlobalLayer(
+  Layer.effect(
+    Runner,
+    Effect.map(Effect.service(AtomRegistry.AtomRegistry), (registry) =>
+      Runner.of({
+        run: (command, input) =>
+          Option.match(stageOf(registry), {
+            onNone: () => command.effect(input),
+            onSome: (stage) => {
+              const world = stage.hosted("a mounted machine's command");
+
+              return runnerOf(world, (asked, given) =>
+                mountedOwner(stage, world, asked, given),
+              ).run(command, input);
+            },
+          }),
+      }),
+    ),
+  ),
+);
 
 /** A snapshot a stepped machine starts from: a state value and context, or the machine's input. */
 export type Snapshot = {
@@ -357,13 +448,17 @@ const start = (
 
     const actor = Effect.runSync(
       create.pipe(
-        Effect.provideService(Runner, runnerOf(world, current)),
+        Effect.provideService(
+          Runner,
+          runnerOf(world, (command) => ownerOf(current(), command)),
+        ),
         Effect.provideService(Scope.Scope, scope),
       ),
     );
 
     const running: Running = {
       mode: "running",
+      mounted: false,
       name,
       machine,
       actor,
@@ -376,6 +471,52 @@ const start = (
     world.releases.push(() => {
       actor.stop();
       Effect.runFork(Scope.close(scope, Exit.void));
+    });
+    await world.settle(false);
+  });
+};
+
+/** The atoms of an actor, as `createActorAtoms` gives them: the story reads `actor`. */
+export type Atoms<M extends AnyStateMachine = AnyStateMachine> = {
+  readonly actor: Atom.Atom<AsyncResult.AsyncResult<EffectActor<M>, unknown>>;
+};
+
+/**
+ * The machine enters the story **running, as a mounted component reads it**: the actor the
+ * story's registry holds for these atoms (`createActorAtoms` from `@xstate/effect/atom`), which
+ * is the one a component under `Screen.render` reads through the same atoms. Before or after the
+ * render: the story keeps the actor alive until it ends. Its commands run on the story's client
+ * (of the step's scope) and are recorded, as a started machine's are. Needs a hosted story.
+ */
+const mounted = <M extends AnyStateMachine>(atoms: Atoms<M>, options: Named = {}): Step => {
+  const label = `enter ${options.name ?? "a machine"} as mounted`;
+
+  return staged(label, async (stage) => {
+    const world = stage.hosted(label);
+
+    await world.connect();
+
+    const registry = registryOf(stage);
+    const release = registry.mount(atoms.actor);
+
+    stage.end(async () => release());
+
+    const actor = await Effect.runPromise(
+      AtomRegistry.getResult(registry, atoms.actor, { suspendOnWaiting: true }),
+    ).catch((error: unknown) => {
+      throw new Mismatch("the atoms' actor did not start: its runtime failed to build", [
+        String(error),
+      ]);
+    });
+
+    enter(stage, {
+      mode: "running",
+      mounted: true,
+      name: options.name ?? actor.logic.id,
+      machine: actor.logic,
+      actor,
+      scope: world.scope,
+      since: world.next(),
     });
     await world.settle(false);
   });
@@ -505,14 +646,17 @@ const answer = (
     Option.liftPredicate(outcome, (tag) => tag === "done"),
     {
       onSome: () => ({
-        type: `xstate.done.actor.${spawned.id}`,
+        type: "xstate.done.actor",
         output: value,
         actorId: spawned.id,
+        sessionId: spawned.session,
       }),
+      // As a running command fails: the typed error inside an `EffectFailure`.
       onNone: () => ({
-        type: `xstate.error.actor.${spawned.id}`,
-        error: value,
+        type: "xstate.error.actor",
+        error: new EffectFailure(Cause.fail(value)),
         actorId: spawned.id,
+        sessionId: spawned.session,
       }),
     },
   );
@@ -522,7 +666,7 @@ const answer = (
 
 /**
  * Stepped only: the command the machine asked for last settled with this output (its `Settled`
- * value); the machine takes `xstate.done.actor.*`.
+ * value); the machine takes `xstate.done.actor`.
  */
 const done = (command: Marked, output?: Answer, options: Addressed = {}): Step =>
   staged(`${prefix(options)}command done`, async (stage) => {
@@ -533,7 +677,7 @@ const done = (command: Marked, output?: Answer, options: Addressed = {}): Step =
 
 /**
  * Stepped only: the command the machine asked for last failed with this typed error; the machine
- * takes `xstate.error.actor.*`.
+ * takes `xstate.error.actor` with the error inside an `EffectFailure`, as a running command fails.
  */
 const failed = (command: Marked, error: TaggedFailure, options: Addressed = {}): Step =>
   staged(`${prefix(options)}command failed with ${error._tag}`, async (stage) => {
@@ -544,15 +688,17 @@ const failed = (command: Marked, error: TaggedFailure, options: Addressed = {}):
 
 /**
  * Machine steps, run by the one story runner beside data steps, in any order. A machine enters a
- * story one of two ways, chosen once: `given` (stepped purely, works hostless) or `start` (running
- * against the story's client, needs a host). `when`, `then`, `asked` and `askedNothing` mean the
+ * story one of three ways, chosen once: `given` (stepped purely, works hostless), `start`
+ * (running against the story's client, needs a host) or `mounted` (running, the actor a mounted
+ * component reads through its atoms). `when`, `then`, `asked` and `askedNothing` mean the
  * same in both; `done`/`failed` feed results to a stepped machine only. Each takes an optional
- * `{ machine }` naming the machine (default: the one introduced last); `given`/`start` take
+ * `{ machine }` naming the machine (default: the one introduced last); `given`/`start`/`mounted` take
  * `{ name }` (default: the machine's `id`).
  */
 export const Machine = {
   given,
   start,
+  mounted,
   when,
   // oxlint-disable-next-line unicorn/no-thenable -- `then` is the given/when/then vocabulary
   then,

@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@alchemy.run/domain": "catalog:",
+    "@effect/atom-react": "catalog:",
     "@highalch/db": "workspace:*",
     "@tanstack/db": "catalog:",
     "@tanstack/react-db": "catalog:",
@@ -67,17 +68,21 @@
   },
   "peerDependencies": {
     "@alchemy.run/domain": "2.0.0-beta.87",
+    "@effect/atom-react": "^4.1.4",
     "@highalch/db": "workspace:^",
     "@tanstack/db": "1.0.0-rc.1.5",
-    "@xstate/effect": "0.1.0-alpha.2",
+    "@xstate/effect": "1.0.0-beta.2",
     "effect": "^4.1.4",
     "happy-dom": "^20.11.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "takumi-js": "^2.14.0",
-    "xstate": "6.0.0-alpha.60"
+    "xstate": "6.0.0-beta.3"
   },
   "peerDependenciesMeta": {
+    "@effect/atom-react": {
+      "optional": true
+    },
     "@xstate/effect": {
       "optional": true
     },

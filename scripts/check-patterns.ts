@@ -42,7 +42,8 @@ const files = (directory: string): Array<string> =>
 
 const core = /^(?:effect|react|@alchemy\.run\/domain|@tanstack\/(?:db|react-db))(?:\/|$)/;
 const xstate = /^(?:xstate|@xstate\/effect)(?:\/|$)/;
-const screen = /^(?:takumi-js|happy-dom|react-dom|node:(?:fs|path|url|zlib))(?:\/|$)/;
+const screen =
+  /^(?:takumi-js|happy-dom|react-dom|@effect\/atom-react|node:(?:fs|path|url|zlib))(?:\/|$)/;
 const effects = ["useEffect", "useLayoutEffect", "useInsertionEffect"];
 
 export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.url))) => {
@@ -92,7 +93,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
       )
         report(
           node,
-          `${module}: the packages import only effect, alchemy Domain, TanStack DB and React (XState only in the xstate entries; takumi, happy-dom, react-dom and node files only in @highalch/story/screen)`,
+          `${module}: the packages import only effect, alchemy Domain, TanStack DB and React (XState only in the xstate entries; takumi, happy-dom, react-dom, @effect/atom-react and node files only in @highalch/story/screen)`,
         );
 
       if (

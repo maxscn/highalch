@@ -11,13 +11,13 @@
  * import { explore, Machine } from "@highalch/story/xstate";
  * ```
  */
-export { commandOf, invoke, mark, Runner } from "@highalch/db/xstate";
+export { commandOf, invoke, mark, rejection, Runner } from "@highalch/db/xstate";
 
 export type { Invocable, Marked } from "@highalch/db/xstate";
 
 export { Machine } from "./machine";
 
-export type { Addressed, Expected, FromShown, Named, Read, Snapshot } from "./machine";
+export type { Addressed, Atoms, Expected, FromShown, Named, Read, Snapshot } from "./machine";
 
 export { explore, pathsOf } from "./explore";
 

@@ -19,8 +19,8 @@ import * as HighAlch from "@highalch/db";
 ```
 
 Peer dependencies: `effect` 4.1.4, `@alchemy.run/domain` 2.0.0-beta.87, `@tanstack/db` and
-`@tanstack/react-db` 1.0.0-rc.1.5, `react` 19.2.7; optional `xstate` 6.0.0-alpha.60 and
-`@xstate/effect` 0.1.0-alpha.2 (only for `@highalch/db/xstate`).
+`@tanstack/react-db` 1.0.0-rc.1.5, `react` 19.2.7; optional `xstate` 6.0.0-beta.3 and
+`@xstate/effect` 1.0.0-beta.2 (only for `@highalch/db/xstate`).
 
 ## Server: one feed per scope, one entity per row type, one projection
 
@@ -474,7 +474,7 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
         input: ({ context }) => ({ NoteId: context.NoteId, title: context.draft }),
         onDone: () => ({ target: "Saved" }),
         onError: ({ event }) => ({
-          target: isTagged(event.error, "NoteMissing") ? "Stale" : "Failed",
+          target: isTagged(rejection(event.error), "NoteMissing") ? "Stale" : "Failed",
         }),
       },
     },
@@ -482,8 +482,10 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
 });
 ```
 
-It is `fromEffect` over `command.effect(input)`: the invoked actor's output is the `Settled` value
-and its error the typed rejection (the original instance). The logic is marked with its command,
+It is `createEffectLogic` over `command.effect(input)`: the invoked actor's output is the
+`Settled` value. Its error reaches `onError` as `@xstate/effect`'s `EffectFailure` around the
+Effect's cause; `rejection(event.error)` (from `@highalch/db/xstate`) answers the typed rejection
+inside, the original instance. The logic is marked with its command,
 which is what makes "the command it asked for" observable: XState 6's pure `transition` returns,
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
 and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
