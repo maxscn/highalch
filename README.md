@@ -12,8 +12,8 @@ a browser.
 | [`@highalch/story`](packages/story/README.md) | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
 
 Both packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
-2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom and takumi are
-optional peers, needed only by the entries that use them.
+2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
+`@effect/atom-react` are optional peers, needed only by the entries that use them.
 
 ## End to end
 
@@ -98,13 +98,13 @@ await notes.rename({ NoteId: "n1", title: "Ada Lovelace" }).when("settled");
 
 ```tsx
 import * as Story from "@highalch/story";
-import * as Screen from "@highalch/story/screen";
+import * as Viewport from "@highalch/story/screen";
 
 const story = Story.make(Story.memory({ api: NotesApi, layer: handlers, services: stores }), {
   scope: "acc-1",
 });
 
-const screen = Screen.make({
+const Screen = Viewport.make({
   css,
   width: 360,
   height: 200,
@@ -116,7 +116,7 @@ const screen = Screen.make({
 it("renames optimistically, then settles through the feed", () =>
   story.with({ name: "rename settles", invariants: Story.invariants })(
     Story.given(NoteAggregate.ref(id), new NoteCreated({ note: ada })),
-    screen.render(<NoteList account="acc-1" />), // a frame after this step and every later one
+    Screen.render(<NoteList account="acc-1" />), // a frame after this step and every later one
     Story.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
     Story.shows(notes.list({ account: "acc-1" }), [
       { title: "Ada Lovelace", $hasPendingWrites: true },
@@ -127,6 +127,55 @@ it("renames optimistically, then settles through the feed", () =>
 
 Complete, running versions of these snippets are in `fixtures/` (a Notebook and a Ledger Domain)
 and in the packages' `tests/`.
+
+## This is opinionated
+
+HighAlch works only if a frontend is built one way. A story can show, assert and screenshot a
+state only when that state lives where the story can reach it. The rules:
+
+1. **Server state lives in collections.** Read it with stock `useLiveQuery` and render it with
+   `match`. Write it with declared commands.
+2. **State you want a frame of lives in an XState machine.** That is anything that changes what a
+   reviewer would look at, or decides which command is sent: a draft, a step, an open dialog, the
+   last error. A machine sends commands through `invoke(command)` from `@highalch/db/xstate`.
+3. **`useState` is for what nobody reviews.** Focus, hover, scroll position, a headless library's
+   popover. A story cannot seed, read or enumerate it, so it has no frame. If you want a frame of
+   it, move it into the machine.
+4. **A component reads its machine through atoms.** The machines are Effect-backed, so XState's
+   `useMachine`, `useActor` and `useActorRef` cannot start them. Use `createActorAtoms` from
+   `@xstate/effect/atom` and the hooks of `@effect/atom-react`:
+
+   ```tsx
+   const runtime = Atom.runtime(Layer.empty);
+
+   const editing = Atom.family((NoteId: string) =>
+     createActorAtoms(runtime, editor, { input: { NoteId } }),
+   );
+
+   function NoteEditor({ NoteId }: { NoteId: string }) {
+     const atoms = editing(NoteId);
+     const result = useAtomValue(atoms.snapshot);
+     const send = useAtomSet(atoms.send);
+     // render from result; call send from handlers
+   }
+   ```
+
+   The actor starts when the first component reads one of its atoms and stops when the last one
+   unmounts. Make the runtime with `Atom.runtime`, so a story can run its commands. Do not write
+   a hook or a store of your own for this, and do not create an actor inside a component. A
+   story reaches the same actor with `Machine.mounted(editing("n1"))`.
+
+5. **Stories do not drive the DOM.** There are no click or type steps, and there will be none: a
+   story sends events to machines and commands to clients, then paints what is mounted. Nothing
+   checks that a button sends the event you meant, so keep handlers to one `send`.
+6. **Time and randomness enter a view as data.** A view that reads the wall clock or animates
+   paints frames that differ between runs.
+
+A story then drives all of it: data steps for collections, machine steps for machines
+(`Machine.mounted` for the one a mounted component reads), and a frame of the component after
+each step. See [Machines in a screen](packages/story/README.md#machines-in-a-screen). One thing
+is not covered yet: a frame of a state seeded without reaching it. A story has to send the events
+that lead there.
 
 ## Repository
 

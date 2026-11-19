@@ -75,10 +75,10 @@
     "@alchemy.run/domain": "2.0.0-beta.87",
     "@tanstack/db": "1.0.0-rc.1.5",
     "@tanstack/react-db": "1.0.0-rc.1.5",
-    "@xstate/effect": "0.1.0-alpha.2",
+    "@xstate/effect": "1.0.0-beta.2",
     "effect": "^4.1.4",
     "react": "^19.2.7",
-    "xstate": "6.0.0-alpha.60"
+    "xstate": "6.0.0-beta.3"
   },
   "peerDependenciesMeta": {
     "@xstate/effect": {

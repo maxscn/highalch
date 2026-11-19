@@ -12,7 +12,7 @@ mounted React component without a browser.
 | `@highalch/story/screen` | Screen steps: a mounted component's frames vs reviewed baselines; needs takumi/happy-dom |
 
 Peer dependencies: `@highalch/db` and its peers; optional `xstate` and `@xstate/effect` (for
-`/xstate`), `react-dom`, `happy-dom` and `takumi-js` 2.14.0 (for `/screen`).
+`/xstate`), `react-dom`, `happy-dom`, `takumi-js` 2.14.0 and `@effect/atom-react` (for `/screen`).
 
 A story tells a frontend's behaviour like Foldkit's: given a state, when something happens, then
 the next state and what was asked for. There is **one runner** and one vocabulary: data steps (a
@@ -104,18 +104,19 @@ machine introduced last), as data steps take `{ as?: scope }`:
 | ----------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `given(machine, snapshot \| (read) => snapshot, { name? })` | enters from `{ state?, context?, input? }`; works hostless     | —                                                                           |
 | `start(machine, { input?, name? })`                         | —                                                              | enters as an actor (`createEffectActor`) on the step's client; needs a host |
+| `mounted(atoms, { name? })`                                 | —                                                              | enters as the actor a mounted component reads through these atoms           |
 | `when(event \| (read) => event, { machine? })`              | XState's pure `transition`; nothing runs                       | sent to the actor; the commands it starts wait for a settling step          |
 | `then({ state, context? }, { machine? })`                   | `snapshot.matches(state)`, context compared partially          | the same, on the actor's snapshot                                           |
 | `asked(command, input?, { machine? })`                      | the last transition's spawn actions of `invoke(command)` logic | the commands the story's `Runner` ran for it since its last event           |
 | `askedNothing({ machine? })`                                | the last transition spawned none                               | it ran none since its last event                                            |
-| `done(command, output?, { machine? })`                      | feeds `xstate.done.actor.*` for the command it asked for last  | an error: its commands settle by themselves (`Story.settled`)               |
-| `failed(command, error, { machine? })`                      | feeds `xstate.error.actor.*` with the typed error              | an error: assert the real rejection with `Story.rejected`                   |
+| `done(command, output?, { machine? })`                      | feeds `xstate.done.actor` for the command it asked for last    | an error: its commands settle by themselves (`Story.settled`)               |
+| `failed(command, error, { machine? })`                      | feeds `xstate.error.actor` with the typed error                | an error: assert the real rejection with `Story.rejected`                   |
 
 `(read) => …` computes a snapshot or an event from what the story's sources show when the step runs
 (`read(source, { as? })` returns its rows, opening it first), so a stepped machine can be asked
 what it _would_ do with the rows a collection shows now. It needs a host.
 
-## Pure or running: one explicit choice
+## Pure, running or mounted: one explicit choice
 
 A machine enters a story once, and how it enters decides what every later step means for it;
 nothing switches modes silently.
@@ -130,6 +131,13 @@ nothing switches modes silently.
   themselves and `Story.settled`/`Story.rejected` assert them. It proves the machine and the data
   together: what is shown while a command is in flight, how it reacts to typed rejections, that
   rows roll back. Needs a host.
+
+- **`Machine.mounted` — running, as a component reads it.** The actor the story's atom registry
+  holds for the atoms `createActorAtoms` (from `@xstate/effect/atom`) made, which is the one a
+  component under `Screen.render` reads through the same atoms. From then on it is a running
+  machine: `when` sends to it, `then` and `asked` read it, and its commands run on the story's
+  client, recorded. The story keeps the actor alive until it ends, so the step may come before or
+  after the render. Needs a host. See [Machines in a screen](#machines-in-a-screen).
 
 ```ts
 story(
@@ -172,7 +180,7 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
         input: ({ context }) => ({ NoteId: context.NoteId, title: context.draft }),
         onDone: () => ({ target: "Saved" }),
         onError: ({ event }) => ({
-          target: isTagged(event.error, "NoteMissing") ? "Stale" : "Failed",
+          target: isTagged(rejection(event.error), "NoteMissing") ? "Stale" : "Failed",
         }),
       },
     },
@@ -180,8 +188,10 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
 });
 ```
 
-It is `fromEffect` over `command.effect(input)`: the invoked actor's output is the `Settled` value
-and its error the typed rejection (the original instance). The logic is marked with its command,
+It is `createEffectLogic` over `command.effect(input)`: the invoked actor's output is the
+`Settled` value. Its error reaches `onError` as `@xstate/effect`'s `EffectFailure` around the
+Effect's cause; `rejection(event.error)` (from `@highalch/db/xstate`) answers the typed rejection
+inside, the original instance. The logic is marked with its command,
 which is what makes "the command it asked for" observable: XState 6's pure `transition` returns,
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
 and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
@@ -240,9 +250,9 @@ a browser and compared with reviewed baselines. A story then yields a filmstrip:
 pending, settled or rolled back, retrying.
 
 ```tsx
-import * as Screen from "@highalch/story/screen";
+import * as Viewport from "@highalch/story/screen";
 
-const screen = Screen.make({
+const Screen = Viewport.make({
   css, // the compiled stylesheet(s) the markup is painted with
   width: 360,
   height: 200,
@@ -254,18 +264,25 @@ const screen = Screen.make({
 
 await story.with({ name: "rename is rejected" })(
   Story.given(n1, new NoteCreated({ note: ada })),
-  screen.render(<NoteList account="acc-1" />), // mounted; frame 2
+  Screen.render(<NoteList account="acc-1" />), // mounted; frame 2
   Story.when(notes.rename, { NoteId: "n1", title: "locked" }), // frame 3: pending
   Story.rejected(new NoteLocked({ title: "locked" })), // frame 4: rolled back
 );
 ```
 
-- `render(element, { every? })` mounts the element with `react-dom/client` under the package's
+- `Screen.render(element, { every? })` mounts the element with `react-dom/client` under the package's
   `Provider` with the story's client (of the step's scope), so stock `useLiveQuery` reads story
-  data; React is flushed with `act`. After this step and every later one, once the world is quiet
+  data, and under the story's atom registry, so atoms read there are the story's; React is
+  flushed with `act`. After this step and every later one, once the world is quiet
   (command replies still held, so a pending row stays pending) and React has flushed, the DOM is
-  serialised and painted. `every: false` captures only at `shot(label?)` steps. One screen per
+  serialised and painted. `every: false` captures only at `Screen.shot(label?)` steps. One screen per
   story; it is unmounted when the story ends, passed or failed.
+- `Screen.check(label, (container) => …)` asserts on the mounted DOM: it is given the container
+  the element is mounted in, once the world is quiet and React has flushed, so it sees what a
+  frame taken now would paint. Use it for what a picture does not say: that the title is an `h1`
+  (`container.querySelector("h1")`), that a button is disabled, what a control's value is. The
+  container is an ordinary DOM node, so a testing library's queries (`within(container)`) work on
+  it; do not use such a library's own `render`, which mounts outside the story's client.
 - A frame is named by the story's name and the step: `<story>/<step>-<label>.png`. A screen story
   needs `story.with({ name })`; without one, and in a hostless story, `render` fails naming
   itself. Screen steps compose with machine steps (a running editor's frames) like any other.
@@ -279,6 +296,58 @@ await story.with({ name: "rename is rejected" })(
 - The happy-dom window is installed as the global DOM when `render` runs and removed exactly when
   the story ends, so other tests keep their environment. Only this entry imports `takumi-js`,
   `happy-dom` and `react-dom` (optional peer dependencies), checked by `vp run check:patterns`.
+
+### Machines in a screen
+
+A component reads its machine through atoms with stock `@effect/atom-react` hooks, and a story
+drives that same actor with machine steps. There are no click or type steps: the story sends the
+event, and the frame shows what the component renders for the machine's state.
+
+```tsx
+// The application: one editor actor per note, as atoms.
+const runtime = Atom.runtime(Layer.empty);
+
+export const editing = Atom.family((NoteId: string) =>
+  createActorAtoms(runtime, editor, { input: { NoteId } }),
+);
+
+export function NoteEditor({ NoteId }: { NoteId: string }) {
+  const atoms = editing(NoteId);
+  const result = useAtomValue(atoms.snapshot);
+  const send = useAtomSet(atoms.send);
+  // render from result; call send from handlers
+}
+
+// The story: a frame of every state the editor passes through.
+await story.with({ name: "editor is rejected" })(
+  Story.given(n1, new NoteCreated({ note: ada })),
+  Machine.mounted(editing("n1")),
+  Screen.render(<NoteEditor NoteId="n1" />), // Idle
+  Machine.when({ type: "Edit", title: "locked" }), // Editing
+  Machine.when({ type: "Save" }), // Saving
+  Story.rejected(new NoteLocked({ title: "locked" })), // Failed
+  Machine.then({ state: "Failed", context: { problem: "NoteLocked" } }),
+);
+```
+
+- Each story run has its own atom registry (`Story.registry(stage)` in a step of your own), made
+  on first use and disposed when the story ends. `Screen.render` mounts the element under it, and
+  `Machine.mounted` reads the actor from it, so the component and the story see one actor and no
+  actor outlives its story.
+- Loading `@highalch/story/xstate` adds one layer to `Atom.runtime` (`addGlobalLayer`): in a
+  story's registry it provides the `Runner`, so the commands of every machine there run on the
+  story's client and are recorded, whether or not a machine step introduced the machine. In any
+  other registry it runs commands as `invoke` does without a runner. Runtimes made by another
+  factory (`Atom.context()`) are not covered.
+- A command is recorded as its machine's when the story introduced that machine with
+  `Machine.mounted`; two actors of one machine are told apart by the input of the command each
+  invokes. A command of a machine the story never introduced is recorded under `mounted`, and
+  `Story.settled` and `Story.rejected` still assert it.
+- Put `Machine.mounted` before `Screen.render` when the first frame matters: the step waits until
+  the actor has started, so the first frame shows its state and not the component's own loading
+  branch.
+- A stepped machine (`Machine.given`) has no actor, so it has no frame: a screen shows running
+  machines only.
 
 **What the painter does and does not do.** Takumi paints HTML and CSS (flexbox, borders, radii,
 colours, text) and runs no script. Form controls are not painted, so `input`, `textarea` and

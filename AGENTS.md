@@ -41,7 +41,8 @@ parallel, and start no dev servers.
   native external-store subscriptions (`useSyncExternalStore`) and callback refs.
 - **Boundaries** (`vp run check:patterns`):
   - Only `@highalch/db/xstate` and `@highalch/story/xstate` import `xstate` and `@xstate/effect`.
-  - Only `@highalch/story/screen` imports `takumi-js`, `happy-dom`, `react-dom` and `node:` files.
+  - Only `@highalch/story/screen` imports `takumi-js`, `happy-dom`, `react-dom`,
+    `@effect/atom-react` and `node:` files.
   - `@highalch/db` never imports `@highalch/story`.
 - **Internals.** `@highalch/story` reaches core internals only through `@highalch/db/internal`.
   That entry is unstable and outside semver. Never import another package's `src` by a relative

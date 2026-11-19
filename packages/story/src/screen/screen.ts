@@ -1,12 +1,14 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RegistryContext } from "@effect/atom-react";
 import { Option, Schema } from "effect";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { render as paint, type Font } from "takumi-js";
 import wasm from "takumi-js/wasm-url";
 import { Provider } from "@highalch/db/react";
+import { registryOf } from "../atoms";
 import { Mismatch, type Done, type Stage } from "../stage";
 import { staged, type Step } from "../steps";
 import { macrotask, type World } from "../world";
@@ -189,13 +191,15 @@ const index = async (output: string) => {
 };
 
 /**
- * Screens for stories: `make(options)` gives `render(element)`, a step that mounts a React
+ * A viewport for stories: `const Screen = Viewport.make(options)` gives a screen of that size,
+ * whose `Screen.render(element)` is a step that mounts a React
  * element under the package's `Provider` with the story's client (stock `useLiveQuery` reads the
  * story's data) in a happy-dom document, and captures a frame after it and after every later
  * step: once the world is quiet (command replies still held) and React has flushed, the DOM is
  * serialised (current control values) and painted by takumi's WASM renderer with `css`, then
- * compared pixel by pixel with its baseline. `shot(label?)` captures a frame on demand (with
- * `render(element, { every: false })`, only there).
+ * compared pixel by pixel with its baseline. `Screen.shot(label?)` captures a frame on demand (with
+ * `Screen.render(element, { every: false })`, only there). `Screen.check(label, run)` asserts on
+ * the mounted DOM.
  */
 export const make = (options: Options) => {
   const baselines = pathOf(options.baselines);
@@ -322,7 +326,15 @@ export const make = (options: Options) => {
       screens.mounted = Option.some(mounted);
       stage.end(finish(stage, mounted, label));
 
-      await flush(() => root.render(createElement(Provider, { client: client.db }, element)));
+      await flush(() =>
+        root.render(
+          createElement(
+            RegistryContext.Provider,
+            { value: registryOf(stage) },
+            createElement(Provider, { client: client.db }, element),
+          ),
+        ),
+      );
 
       stage.after(async (done) => {
         if (mounted.every) await capture(stage, mounted, done, label);
@@ -335,11 +347,31 @@ export const make = (options: Options) => {
     staged(`shot ${label}`, async (stage) => {
       const mounted = Option.getOrThrowWith(
         stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
-        () => new Mismatch("nothing is rendered yet: render(element) first"),
+        () => new Mismatch("nothing is rendered yet: Screen.render(element) first"),
       );
 
       if (!mounted.every) await capture(stage, mounted, { step: stage.step, label }, label);
     });
 
-  return { render, shot };
+  /**
+   * Checks the mounted DOM: `run` is given the container the element is mounted in, once the
+   * world is quiet and React has flushed, so it sees what a frame taken now would paint. Query it
+   * as any DOM (`container.querySelector("h1")`, or a testing library's `within(container)`);
+   * what `run` throws fails the step.
+   */
+  const check = (label: string, run: (container: HTMLElement) => void | Promise<void>): Step =>
+    staged(`check ${label}`, async (stage) => {
+      const mounted = Option.getOrThrowWith(
+        stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
+        () => new Mismatch("nothing is rendered yet: Screen.render(element) first"),
+      );
+
+      await quiet(stage.hosted(label));
+      await run(mounted.container);
+    });
+
+  return { render, shot, check };
 };
+
+/** A screen of a viewport: its `render`, `shot` and `check` steps (`const Screen = Viewport.make(…)`). */
+export type Screen = ReturnType<typeof make>;

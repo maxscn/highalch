@@ -1,7 +1,7 @@
 import { setupEffect } from "@xstate/effect";
 import { Match, Predicate } from "effect";
 import { types } from "xstate";
-import { invoke } from "@highalch/db/xstate";
+import { invoke, rejection } from "@highalch/db/xstate";
 import { notes } from "./notes";
 
 /** What the editor holds: the note it edits, the draft title, and the last problem's tag. */
@@ -53,7 +53,7 @@ export const editor = setupEffect({
         input: ({ context }) => ({ NoteId: context.NoteId, title: context.draft }),
         onDone: ({ context }) => ({ target: "Saved", context: { ...context, problem: undefined } }),
         onError: ({ context, event }) => {
-          const problem = Match.value(event.error).pipe(
+          const problem = Match.value(rejection(event.error)).pipe(
             Match.when(Predicate.isTagged("NoteMissing"), () => "NoteMissing"),
             Match.when(Predicate.isTagged("NoteLocked"), () => "NoteLocked"),
             Match.orElse(() => "Unknown"),

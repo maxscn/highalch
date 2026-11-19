@@ -52,6 +52,8 @@ export {
 
 export type { Stage } from "./stage";
 
+export { registryOf as registry } from "./atoms";
+
 export type { Acting, Callable, Expected, ReadState, ShownRow, Step, Steps } from "./steps";
 
 export {

@@ -1,5 +1,5 @@
-import { fromEffect } from "@xstate/effect";
-import { Context, Effect, Option } from "effect";
+import { causeFromError, createEffectLogic } from "@xstate/effect";
+import { Cause, Context, Effect, Option } from "effect";
 import type { AnyActorLogic } from "xstate";
 import type { TaggedFailure } from "../state";
 import type { Input } from "../values";
@@ -46,9 +46,10 @@ export const commandOf = (logic: AnyActorLogic | undefined): Option.Option<Marke
   });
 
 /**
- * The actor logic a machine invokes a `HighAlch` command with: `@xstate/effect`'s `fromEffect`
- * over `command.effect(input)`, so the invoked actor's output is the `Settled` value and its error
- * the command's typed rejection (`onError`'s `event.error` is the original instance). It is
+ * The actor logic a machine invokes a `HighAlch` command with: `@xstate/effect`'s
+ * `createEffectLogic` over `command.effect(input)`, so the invoked actor's output is the `Settled`
+ * value and its error the command's typed rejection (`onError`'s `event.error` holds it inside an
+ * `EffectFailure`; `rejection(event.error)` answers the original instance). It is
  * marked with its command, so a story sees, stepping the machine purely, which command a transition asked
  * for, with which input (`asked(command, input)`). Register it in `setup({ actors })` (or
  * `setupEffect`) and invoke it with the command's input:
@@ -64,13 +65,29 @@ export const commandOf = (logic: AnyActorLogic | undefined): Option.Option<Marke
  */
 export const invoke = <I extends Input, A, E extends TaggedFailure>(command: Invocable<I, A, E>) =>
   mark(
-    fromEffect<A, E, I, never>(({ input }) =>
-      Effect.flatMap(Effect.serviceOption(Runner), (runner) =>
-        Option.match(runner, {
-          onNone: () => command.effect(input),
-          onSome: (bound) => bound.run(command, input),
-        }),
-      ),
-    ),
+    createEffectLogic({
+      effect: ({ input }: { readonly input: I }): Effect.Effect<A, E> =>
+        Effect.flatMap(Effect.serviceOption(Runner), (runner) =>
+          Option.match(runner, {
+            onNone: () => command.effect(input),
+            onSome: (bound) => bound.run(command, input),
+          }),
+        ),
+    }),
     command,
   );
+
+/**
+ * The typed rejection an invoked command failed with, read from `onError`'s `event.error`:
+ * `@xstate/effect` hands a failed Effect over as an `EffectFailure` around its `Cause`, and this
+ * answers the original instance inside. A defect or an interruption (no typed failure) answers
+ * the error as it was given.
+ *
+ * ```ts
+ * onError: ({ event }) => ({
+ *   target: isTagged(rejection(event.error), "NoteMissing") ? "Stale" : "Failed",
+ * }),
+ * ```
+ */
+export const rejection = (error: unknown): unknown =>
+  Option.getOrElse(Cause.findErrorOption(causeFromError(error)), () => error);
