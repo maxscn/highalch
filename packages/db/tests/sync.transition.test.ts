@@ -234,17 +234,16 @@ describe("f(ready subsets, feed change)", () => {
     expect(countAsked(server)).toEqual(asked);
   });
 
-  it("f(where over entries, feed changes) → selected rows and rule membership without another query", async () => {
+  it("f(rows and where, feed changes) → selected rows and rule membership without another query", async () => {
     const server = await open();
 
     await seed(server, ada, bob);
 
     const wrapped = HighAlch.collection(NoteRows, {
       queries: {
-        list: HighAlch.where(
-          HighAlch.entries(WrappedNotes, (answer) => answer.Items),
-          (row, input) => row.account === input.account,
-        ),
+        list: HighAlch.read(WrappedNotes)
+          .rows((answer) => answer.Items)
+          .where((row, input) => row.account === input.account),
       },
     });
     const clock = reloads();
@@ -385,7 +384,7 @@ const causeLayer = (server: Host, cause: string) => {
 describe("f(query declaration, configuration)", () => {
   it("rejects a second declaration with different membership in one call or across calls", () => {
     class Rows extends NoteRows {}
-    const full = HighAlch.all(Notes);
+    const full = HighAlch.read(Notes).all();
 
     expect(() => HighAlch.collection(Rows, { queries: { bare: Notes, full } })).toThrow(
       "HighAlch.collection: conflicting declarations of query Notes for NoteRows",
@@ -395,13 +394,14 @@ describe("f(query declaration, configuration)", () => {
     expect(() => HighAlch.collection(Rows, { queries: { bare: Notes } })).toThrow(
       "HighAlch.collection: conflicting declarations of query Notes for NoteRows",
     );
-    const repeated = HighAlch.collection(Rows, { queries: { full: HighAlch.all(Notes) } });
+    const repeated = HighAlch.collection(Rows, { queries: { full: HighAlch.read(Notes).all() } });
 
     expect(repeated.full({ account: "acc-1" }).id).toBe(configured.full({ account: "acc-1" }).id);
   });
 
-  it("rejects all over a cursor page at runtime", () => {
-    expect(() => HighAlch.all(NotesByCursor as never)).toThrow(
+  it("rejects .all() over a cursor page at runtime", () => {
+    // @ts-expect-error bypass the type guard to exercise the runtime guard
+    expect(() => HighAlch.read(NotesByCursor).all()).toThrow(
       "HighAlch.all cannot declare paged query NotesByCursor",
     );
   });
@@ -1583,7 +1583,7 @@ describe("f(ready subsets, command)", () => {
     const read: Array<Partial<Note>> = [];
 
     const saved = HighAlch.collection(NoteRows, {
-      queries: { list: HighAlch.all(Notes) },
+      queries: { list: HighAlch.read(Notes).all() },
       commands: {
         rename: HighAlch.updates(RenameNote, {
           // A call also sets the note's book, as a form sends every field it shows.
@@ -1665,7 +1665,7 @@ describe("f(declared targets, input-only command)", () => {
 
     // Declared next to the entity's target: touching a note addresses the note `n2` instead.
     const elsewhere = HighAlch.collection(NoteRows, {
-      queries: { list: HighAlch.all(Notes) },
+      queries: { list: HighAlch.read(Notes).all() },
       commands: {
         touch: HighAlch.sends(TouchNote, { target: (_input, scope) => address(scope, "n2") }),
         rename: HighAlch.updates(RenameNote, {

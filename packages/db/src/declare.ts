@@ -9,7 +9,7 @@ import {
 import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
 import type { TaggedFailure } from "./state";
-import { connectionOf, failureOf, read } from "./client";
+import { connectionOf, failureOf, read as readAnswer } from "./client";
 import {
   make,
   type Command,
@@ -49,78 +49,87 @@ export type Args<Q extends Domain.Query.Any> =
 /** A subset collection's descriptor: usable directly as a source of `useLiveQuery`. */
 export type Source<Row extends object> = CollectionOptions<Row, string> & NonSingleResult;
 
-/** A query whose answer wraps its rows, with the reader of its rows. */
-export class Entries<Q extends Domain.Query.Any, Entry> {
-  constructor(
-    readonly query: Q,
-    readonly select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-  ) {}
-}
+type Select<Q extends Domain.Query.Any, Entry> = (
+  answer: NonNullable<Domain.Query.ResultOf<Q>>,
+) => ReadonlyArray<Entry>;
 
-/** Reads the rows from a wrapped answer, such as `{ Items, Count }`. */
-export const entries = <Q extends Domain.Query.Any, Entry>(
-  query: Q,
-  select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-) => new Entries(query, select);
+type Rule<Q extends Domain.Query.Any, Entry> = (row: Entry, input: QueryInput<Q>) => boolean;
 
-type Reader =
-  | Domain.Query.Any
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Entries<any, any>;
+const ReadOptions = Symbol("HighAlch.read");
 
-type ReaderQuery<S> = S extends Entries<infer Q, infer _Entry> ? Q : S;
-
-/** The rows a reader answers: its selected rows, else its query's entries. */
-type ReaderEntry<S> =
-  S extends Entries<infer _Q, infer Entry>
-    ? Entry
-    : S extends Domain.Query.Any
-      ? EntryOf<S>
-      : never;
-
-type Rule<S extends Reader> = (row: ReaderEntry<S>, input: QueryInput<ReaderQuery<S>>) => boolean;
-
-/** A query with a membership rule: `one`, `where` or `all`. */
-export class Membership<S extends Reader> {
-  constructor(
-    readonly source: S,
-    readonly rule: Rule<S>,
-    readonly single: boolean,
-  ) {}
-
-  /** The Domain query this declaration reads. */
-  get query(): ReaderQuery<S> {
-    let query: Reader = this.source;
-
-    if (query instanceof Entries) query = query.query;
-
-    // SAFETY: the reader is either the query or an Entries wrapping it.
-    return query as ReaderQuery<S>;
-  }
-}
-
-/** A single-row query with a membership rule. Read it with `.findOne()` for `Missing`. */
-export const one = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
-  new Membership(source, rule, true);
-
-/** A many-row query whose membership rule decides where feed rows belong. */
-export const where = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
-  new Membership(source, rule, false);
-
-/** A whole-list query that contains every row in the client's scope. */
-export const all = <S extends Reader>(
-  source: S & (true extends NonNullable<ReaderQuery<S>["definition"]["paged"]> ? never : unknown),
-) => {
-  const membership = where<S>(source, includesAll);
-  const query = membership.query;
-
-  if (query.definition.paged)
-    throw new Error(`HighAlch.all cannot declare paged query ${query.queryName}`);
-
-  return membership;
+/** The callbacks' parameter types are checked by the builder and erased here for storage. */
+type ReadOptions<Q extends Domain.Query.Any, Entry> = {
+  readonly query: Q;
+  readonly select?: (answer: never) => ReadonlyArray<Entry>;
+  readonly rule?: (row: never, input: never) => boolean;
+  readonly single?: boolean;
 };
 
+type ReadDeclaration<Q extends Domain.Query.Any, Entry> = {
+  readonly [ReadOptions]: ReadOptions<Q, Entry>;
+};
+
+/** Which optional facets have already been applied while the query decides membership. */
+type ReadFacets = { readonly rows?: true };
+
+type ReadBuilder<Q extends Domain.Query.Any, Entry, Used extends ReadFacets> = ReadDeclaration<
+  Q,
+  Entry
+> & {
+  /** Gives a many-row subset a membership rule that places feed rows. */
+  where(rule: Rule<Q, Entry>): ReadDeclaration<Q, Entry>;
+  /** Gives a single-row subset a membership rule. Use `.findOne()` to read `Missing`. */
+  one(rule: Rule<Q, Entry>): ReadDeclaration<Q, Entry>;
+} & (Used["rows"] extends true
+    ? unknown
+    : {
+        /** Selects the rows from a wrapped answer, such as `{ Items, Count }`. */
+        rows<Selected>(
+          select: Select<Q, Selected>,
+        ): ReadBuilder<Q, Selected, Used & { readonly rows: true }>;
+      }) &
+  (true extends NonNullable<Q["definition"]["paged"]>
+    ? unknown
+    : {
+        /** Includes every row in the client's scope. */
+        all(): ReadDeclaration<Q, Entry>;
+      });
+
 const includesAll = () => true;
+
+const buildRead = <Q extends Domain.Query.Any, Entry, const Used extends ReadFacets>(
+  options: ReadOptions<Q, Entry>,
+  used: Used,
+): ReadBuilder<Q, Entry, Used> => {
+  const { query } = options;
+  const withRule = (rule: Rule<Q, Entry>, single: boolean): ReadDeclaration<Q, Entry> => ({
+    [ReadOptions]: { ...options, rule, single },
+  });
+
+  const builder = {
+    [ReadOptions]: options,
+    where: (rule: Rule<Q, Entry>) => withRule(rule, false),
+    one: (rule: Rule<Q, Entry>) => withRule(rule, true),
+    all: () => {
+      if (query.definition.paged)
+        throw new Error(`HighAlch.all cannot declare paged query ${query.queryName}`);
+
+      return withRule(includesAll, false);
+    },
+    ...(!used.rows && {
+      rows: <Selected>(select: Select<Q, Selected>) =>
+        buildRead({ ...options, select }, { ...used, rows: true }),
+    }),
+  };
+
+  // SAFETY: `used` controls which methods are attached. The type hides `all` for paged queries;
+  // its runtime guard also catches calls from JavaScript or through casts.
+  return builder as ReadBuilder<Q, Entry, Used>;
+};
+
+/** Declares an entity read. Until a membership rule is supplied, the query decides membership. */
+export const read = <Q extends Domain.Query.Any>(query: Q): ReadBuilder<Q, EntryOf<Q>, {}> =>
+  buildRead({ query }, {});
 
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
@@ -325,11 +334,8 @@ export const sends = <C extends Domain.Command.Any, const O extends Addressing<C
   options?: O & Addressing<C>,
 ): Sends<C, Has<O, "key">, Has<O, "target">> => new Sends(command, addressing(options ?? {}));
 
-/** What `queries` may hold: a query and its optional row reader and membership rule. */
-export type QuerySpec =
-  | Reader
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Membership<any>;
+/** What `queries` may hold: a bare query or a declaration from `read`. */
+export type QuerySpec = Domain.Query.Any | ReadDeclaration<Domain.Query.Any, unknown>;
 
 /** A row being edited: its fields writable. */
 export type Draft<P> = { -readonly [K in keyof P]: P[K] };
@@ -350,11 +356,15 @@ export type CommandSpec<Row extends object> =
   // oxlint-disable-next-line typescript/no-explicit-any
   | Sends<any, boolean, boolean>;
 
-type SourceOf<S> = S extends { readonly source: infer Reader } ? Reader : S;
+type QueryOf<S> =
+  S extends ReadDeclaration<infer Q, unknown> ? Q : S extends Domain.Query.Any ? S : never;
 
-type QueryOf<S> = ReaderQuery<SourceOf<S>> extends infer Q extends Domain.Query.Any ? Q : never;
-
-type SpecEntryOf<S> = ReaderEntry<SourceOf<S>>;
+type SpecEntryOf<S> =
+  S extends ReadDeclaration<Domain.Query.Any, infer Entry>
+    ? Entry
+    : S extends Domain.Query.Any
+      ? EntryOf<S>
+      : never;
 
 type CommandOf<S> = S extends { readonly command: infer C extends Domain.Command.Any }
   ? C
@@ -419,14 +429,12 @@ export type Subsets<R extends Rows.Any, Q extends Domain.Query.Any> = (
   ...args: Args<Q>
 ) => Source<SubsetRow<R, Q>>;
 
-/** Each query's entries must be the entity's rows. */
-type InvalidQueries<R extends Rows.Any, Queries> = {
-  [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>] ? never : K;
-}[keyof Queries];
-
-type Checks<R extends Rows.Any, Queries> = [InvalidQueries<R, Queries>] extends [never]
-  ? unknown
-  : { readonly "query entries are not this entity's rows": InvalidQueries<R, Queries> };
+/** Each query's entries must be the entity's rows. Report a mismatch on that query. */
+type Checks<R extends Rows.Any, Queries> = {
+  readonly [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>]
+    ? unknown
+    : { readonly "query entries are not this entity's rows": Rows.RowOf<R> };
+};
 
 /** A declared entity: one subset accessor per query, one command per command. */
 export type Collection<R extends Rows.Any, Queries, Commands> = {
@@ -450,25 +458,27 @@ export const stable = (value: Input | Page): string =>
 /** The key of a row of an entity. */
 const keyOf = (entity: Rows.Any) => (row: Row) => keyIn(entity.rows.key, row);
 
-/** A query spec's query, membership rule and row reader. */
-const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
-  if (spec instanceof Membership)
-    return {
-      ...readerOf(spec.source as Reader),
-      // SAFETY: the rule reads this query's rows and input.
-      rule: Option.some(spec.rule as (row: Row, input: Input) => boolean),
-    };
+type DeclaredRead = ReadOptions<Domain.Query.Any, unknown>;
 
-  if (spec instanceof Entries)
-    return {
-      query: spec.query,
-      rule: Option.none(),
-      // SAFETY: `select` reads this query's answers, decoded by its schema.
-      select: Option.some(spec.select as (answer: Answer) => ReadonlyArray<Row>),
-    };
+/** Bare queries and `read(query)` have the same options. */
+const optionsOf = (spec: QuerySpec): DeclaredRead => {
+  if (ReadOptions in spec) return spec[ReadOptions];
 
-  return { query: spec, rule: Option.none(), select: Option.none() };
+  return { query: spec };
 };
+
+/** A subset runs the query, its optional membership rule and its optional row selector. */
+const readerOf = ({
+  query,
+  rule,
+  select,
+}: DeclaredRead): Pick<Spec, "query" | "rule" | "select"> => ({
+  query,
+  // SAFETY: the rule reads this query's rows and input.
+  rule: Option.fromUndefinedOr(rule as ((row: Row, input: Input) => boolean) | undefined),
+  // SAFETY: `select` reads this query's decoded answers and `collection` checked its rows.
+  select: Option.fromUndefinedOr(select as ((answer: Answer) => ReadonlyArray<Row>) | undefined),
+});
 
 /** A subset's descriptor: materialised per client, synced by a `Subset` run. */
 const subset = (spec: Spec, id: string) =>
@@ -625,23 +635,13 @@ const editOf = (entity: Rows.Any, spec: CommandSpec<Row>): Edit => {
   return { ...base, apply: () => 0 };
 };
 
-const declarations = new WeakMap<Rows.Any, Map<string, QuerySpec>>();
+const declarations = new WeakMap<Rows.Any, Map<string, DeclaredRead>>();
 
-const sameDeclaration = (first: QuerySpec, second: QuerySpec): boolean => {
-  if (first === second) return true;
-
-  if (first instanceof Membership && second instanceof Membership)
-    return (
-      first.single === second.single &&
-      first.rule === second.rule &&
-      sameDeclaration(first.source, second.source)
-    );
-
-  if (first instanceof Entries && second instanceof Entries)
-    return first.query === second.query && first.select === second.select;
-
-  return false;
-};
+const sameDeclaration = (first: DeclaredRead, second: DeclaredRead): boolean =>
+  first.query === second.query &&
+  first.select === second.select &&
+  first.rule === second.rule &&
+  first.single === second.single;
 
 /**
  * Declares an entity: a subset accessor per query and a command per command, at module level.
@@ -655,22 +655,24 @@ export const collection = <
 >(
   rows: R,
   declaration: {
-    readonly queries: Queries;
+    readonly queries: Queries & Checks<NoInfer<R>, NoInfer<Queries>>;
     readonly commands?: Commands & CommandChecks<R, Commands>;
-  } & Checks<R, Queries>,
+  },
 ): Collection<R, Queries, Commands> => {
   const known = new Map(declarations.get(rows));
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
-    const reader = readerOf(spec);
-    const { query } = reader;
+    const options = optionsOf(spec);
+    const { query } = options;
     const previous = known.get(query.queryName);
 
-    if (previous && !sameDeclaration(previous, spec))
+    if (previous && !sameDeclaration(previous, options))
       throw new Error(
         `HighAlch.collection: conflicting declarations of query ${query.queryName} for ${rows.entityName}`,
       );
 
-    known.set(query.queryName, spec);
+    known.set(query.queryName, options);
+
+    const reader = readerOf(options);
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
@@ -720,7 +722,7 @@ export const query =
 
           connection.fork(
             Effect.yieldNow.pipe(
-              Effect.andThen(read(source.queryName, ask)),
+              Effect.andThen(readAnswer(source.queryName, ask)),
               Effect.retry(connection.retry),
               Effect.tap((answer) =>
                 Effect.sync(() => {

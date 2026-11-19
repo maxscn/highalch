@@ -246,7 +246,11 @@ export class LedgerApi extends Domain.Api("LedgerApi", { model: Ledgers }) {}
 
 /** The declarations under test: wrapped list rows, nested command inputs, deferred settlement. */
 export const entries = HighAlch.collection(EntryRows, {
-  queries: { list: HighAlch.all(HighAlch.entries(Entries, (answer) => answer.Items)) },
+  queries: {
+    list: HighAlch.read(Entries)
+      .rows((answer) => answer.Items)
+      .all(),
+  },
   commands: {
     save: HighAlch.updates(SaveEntry, {
       key: (input) => input.value.EntryId ?? "",
