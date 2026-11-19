@@ -7,7 +7,7 @@ Let bare and `entries` queries decide subset membership and re-ask after a burst
 Use `all(Query)` for a whole list that follows the feed directly. Use `where(entries(Query, select), rule)`
 in place of `entries(Query, select, rule)`. Give each query one declaration per entity and use a
 bare query or `entries` for a cursor page. Conflicting declarations and `all` on a paged query
-now fail at declaration.
+now fail at declaration. The exported `Entries` class no longer takes or holds a rule.
 
 Subset loads, feed reconnects and command settlement run on Effect. Replace retry callbacks
 with Effect schedules filtered by typed errors. Replace custom timers with an Effect `Clock`.

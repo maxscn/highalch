@@ -505,6 +505,11 @@ third correction still disagrees, the query answer wins and the subset clears th
 A new feed entry resets the correction count. An explicit reload clears the count and starts with
 the query answer, with entries received in flight handled by the same replay and discard rules.
 
+While corrections run, a row the server has moved out of the subset stays visible, so a page can
+briefly hold more rows than its limit. With the default `reloadDelay` of 50 ms the corrections
+wait 100, 200 and 400 ms, about 750 ms in all plus the time each query takes, and further feed
+entries extend it.
+
 `reloadDelay` coalesces feed changes and explicit reloads into one request. Each subset can have
 one query in flight and one waiting. A debounced feed change or explicit reload can preempt a
 retry backoff. A ready subset writes each accepted answer in one snapshot transaction and
