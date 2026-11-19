@@ -27,6 +27,7 @@ export {
   one,
   where,
   entries,
+  all,
   query,
   command,
   inserts,
@@ -79,7 +80,7 @@ export type {
   TargetOf,
 } from "./command";
 
-export { make, close, activate, current, reload, transient } from "./client";
+export { make, layer, Client, close, activate, current, reload, transient } from "./client";
 
 export type { Config, Retry, Settings } from "./client";
 

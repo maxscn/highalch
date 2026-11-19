@@ -61,7 +61,7 @@ export const commandOf = (logic: AnyActorLogic | undefined): Option.Option<Marke
  * ```
  *
  * Run the machine with `createEffectActor`. Plain XState logic works too when marked:
- * `mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`.
+ * `mark(createAsyncLogic({ run: ({ input }) => Effect.runPromise(command.result(input)) }), command)`.
  */
 export const invoke = <I extends Input, A, E extends TaggedFailure>(command: Invocable<I, A, E>) =>
   mark(

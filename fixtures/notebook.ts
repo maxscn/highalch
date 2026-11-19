@@ -297,8 +297,7 @@ const BooksLive = Books.toLayer(
 
 export class Notes extends Domain.Query("Notes", {
   input: { account: Schema.String },
-  success: Note,
-  paged: true,
+  success: Schema.Array(Note),
   rejects: [QueryRefused],
 }) {}
 
@@ -311,6 +310,25 @@ export class NoteById extends Domain.Query("NoteById", {
 export class NotesByBook extends Domain.Query("NotesByBook", {
   input: { BookId: Schema.String },
   success: Schema.Array(Note),
+  rejects: [QueryRefused],
+}) {}
+
+export class NotesByCursor extends Domain.Query("NotesByCursor", {
+  input: { account: Schema.String },
+  success: Note,
+  paged: true,
+  rejects: [QueryRefused],
+}) {}
+
+export class NotesByTitle extends Domain.Query("NotesByTitle", {
+  input: { account: Schema.String, Offset: Schema.Number, Limit: Schema.Number },
+  success: Schema.Struct({ Items: Schema.Array(Note) }),
+  rejects: [QueryRefused],
+}) {}
+
+export class WrappedNotes extends Domain.Query("WrappedNotes", {
+  input: { account: Schema.String, Offset: Schema.Number, Limit: Schema.Number },
+  success: Schema.Struct({ Items: Schema.Array(Note) }),
   rejects: [QueryRefused],
 }) {}
 
@@ -344,20 +362,8 @@ const NotesLive = Notes.toLayer(
   Effect.gen(function* () {
     const store = yield* NoteStore;
 
-    return ({ account }, page) =>
-      answer(store, "Notes", (notes) => {
-        const mine = notes.filter((note) => note.account === account);
-
-        const start = Option.match(Option.fromUndefinedOr(page.after), {
-          onNone: () => 0,
-          onSome: Number,
-        });
-
-        const entries = mine.slice(start, start + page.take);
-        const next = start + page.take;
-
-        return { entries, cursor: next < mine.length ? String(next) : null };
-      });
+    return ({ account }) =>
+      answer(store, "Notes", (notes) => notes.filter((note) => note.account === account));
   }),
 );
 
@@ -379,6 +385,43 @@ const NotesByBookLive = NotesByBook.toLayer(
   }),
 );
 
+const NotesByCursorLive = NotesByCursor.toLayer(
+  Effect.gen(function* () {
+    const store = yield* NoteStore;
+
+    return ({ account }, { after, take }) =>
+      answer(store, "NotesByCursor", (notes) => {
+        const mine = notes.filter((note) => note.account === account);
+        const start = Number(after ?? 0);
+        const next = start + take;
+        let cursor: string | null = null;
+
+        if (next < mine.length) cursor = String(next);
+
+        return {
+          entries: mine.slice(start, next),
+          cursor,
+        };
+      });
+  }),
+);
+
+const titlePage = (name: string) =>
+  Effect.gen(function* () {
+    const store = yield* NoteStore;
+
+    return ({ account, Offset, Limit }: Domain.Query.InputOf<typeof NotesByTitle>) =>
+      answer(store, name, (notes) => ({
+        Items: notes
+          .filter((note) => note.account === account)
+          .sort((a, b) => a.title.localeCompare(b.title) || a.NoteId.localeCompare(b.NoteId))
+          .slice(Offset, Offset + Limit),
+      }));
+  });
+
+const NotesByTitleLive = NotesByTitle.toLayer(titlePage("NotesByTitle"));
+const WrappedNotesLive = WrappedNotes.toLayer(titlePage("WrappedNotes"));
+
 const NoteStatsLive = NoteStats.toLayer(
   Effect.gen(function* () {
     const store = yield* NoteStore;
@@ -390,7 +433,16 @@ const NoteStatsLive = NoteStats.toLayer(
   }),
 );
 
-const queries = [Notes, NoteById, NotesByBook, NoteStats, Books] as const;
+const queries = [
+  Notes,
+  NoteById,
+  NotesByBook,
+  NotesByTitle,
+  WrappedNotes,
+  NotesByCursor,
+  NoteStats,
+  Books,
+] as const;
 
 export class Notebook extends Domain.Model("Notebook", {
   aggregates: [NoteAggregate, BookAggregate],
@@ -586,6 +638,9 @@ export const notebook = () =>
     NotesLive,
     NoteByIdLive,
     NotesByBookLive,
+    NotesByTitleLive,
+    WrappedNotesLive,
+    NotesByCursorLive,
     NoteStatsLive,
     BooksLive,
     NotebookWriter.layer,
@@ -610,6 +665,9 @@ export const host = async (options: { readonly history?: ReadonlyArray<Seed> } =
     NotesLive,
     NoteByIdLive,
     NotesByBookLive,
+    NotesByTitleLive,
+    WrappedNotesLive,
+    NotesByCursorLive,
     NoteStatsLive,
     BooksLive,
   ).pipe(Layer.provide(Layer.succeed(NoteStore, store)));

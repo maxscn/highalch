@@ -6,10 +6,10 @@ import {
   type NonSingleResult,
   type SyncConfig,
 } from "@tanstack/db";
-import { Exit, Option, Predicate } from "effect";
+import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
 import type { TaggedFailure } from "./state";
-import { connectionOf, failureOf } from "./client";
+import { connectionOf, failureOf, read } from "./client";
 import {
   make,
   type Command,
@@ -49,49 +49,78 @@ export type Args<Q extends Domain.Query.Any> =
 /** A subset collection's descriptor: usable directly as a source of `useLiveQuery`. */
 export type Source<Row extends object> = CollectionOptions<Row, string> & NonSingleResult;
 
-/** A query with a membership rule: `one` (one row) or `where` (rows). */
-export class Membership<Q extends Domain.Query.Any> {
-  constructor(
-    readonly query: Q,
-    readonly rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-    readonly single: boolean,
-  ) {}
-}
-
-/**
- * A single-row query (`get`) with its membership rule: a feed row for which the rule holds is
- * inserted into the subset; read it with `.findOne()` for `Missing`.
- */
-export const one = <Q extends Domain.Query.Any>(
-  query: Q,
-  rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-) => new Membership(query, rule, true);
-
-/** A many-row query with its membership rule: feed rows for which it holds are inserted. */
-export const where = <Q extends Domain.Query.Any>(
-  query: Q,
-  rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-) => new Membership(query, rule, false);
-
-/** A query whose answer wraps its rows, with the reader of its rows and an optional rule. */
+/** A query whose answer wraps its rows, with the reader of its rows. */
 export class Entries<Q extends Domain.Query.Any, Entry> {
   constructor(
     readonly query: Q,
     readonly select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-    readonly rule: Option.Option<(row: Entry, input: QueryInput<Q>) => boolean>,
   ) {}
 }
 
-/**
- * A query whose answer holds its rows inside a wrapper that is not a `paged` page (for example
- * `{ Items, Count, LastEvaluatedKey }`): `select` reads the rows from one answer. With `rule`, feed
- * rows for which it holds are inserted, as for `where`; without one, an unknown row reloads it.
- */
+/** Reads the rows from a wrapped answer, such as `{ Items, Count }`. */
 export const entries = <Q extends Domain.Query.Any, Entry>(
   query: Q,
   select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-  rule?: (row: Entry, input: QueryInput<Q>) => boolean,
-) => new Entries(query, select, Option.fromUndefinedOr(rule));
+) => new Entries(query, select);
+
+type Reader =
+  | Domain.Query.Any
+  // oxlint-disable-next-line typescript/no-explicit-any
+  | Entries<any, any>;
+
+type ReaderQuery<S> = S extends Entries<infer Q, infer _Entry> ? Q : S;
+
+/** The rows a reader answers: its selected rows, else its query's entries. */
+type ReaderEntry<S> =
+  S extends Entries<infer _Q, infer Entry>
+    ? Entry
+    : S extends Domain.Query.Any
+      ? EntryOf<S>
+      : never;
+
+type Rule<S extends Reader> = (row: ReaderEntry<S>, input: QueryInput<ReaderQuery<S>>) => boolean;
+
+/** A query with a membership rule: `one`, `where` or `all`. */
+export class Membership<S extends Reader> {
+  constructor(
+    readonly source: S,
+    readonly rule: Rule<S>,
+    readonly single: boolean,
+  ) {}
+
+  /** The Domain query this declaration reads. */
+  get query(): ReaderQuery<S> {
+    let query: Reader = this.source;
+
+    if (query instanceof Entries) query = query.query;
+
+    // SAFETY: the reader is either the query or an Entries wrapping it.
+    return query as ReaderQuery<S>;
+  }
+}
+
+/** A single-row query with a membership rule. Read it with `.findOne()` for `Missing`. */
+export const one = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
+  new Membership(source, rule, true);
+
+/** A many-row query whose membership rule decides where feed rows belong. */
+export const where = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
+  new Membership(source, rule, false);
+
+/** A whole-list query that contains every row in the client's scope. */
+export const all = <S extends Reader>(
+  source: S & (true extends NonNullable<ReaderQuery<S>["definition"]["paged"]> ? never : unknown),
+) => {
+  const membership = where<S>(source, includesAll);
+  const query = membership.query;
+
+  if (query.definition.paged)
+    throw new Error(`HighAlch.all cannot declare paged query ${query.queryName}`);
+
+  return membership;
+};
+
+const includesAll = () => true;
 
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
@@ -296,13 +325,11 @@ export const sends = <C extends Domain.Command.Any, const O extends Addressing<C
   options?: O & Addressing<C>,
 ): Sends<C, Has<O, "key">, Has<O, "target">> => new Sends(command, addressing(options ?? {}));
 
-/** What `queries` may hold: a bare query, one with a membership rule, or one with `entries`. */
+/** What `queries` may hold: a query and its optional row reader and membership rule. */
 export type QuerySpec =
-  | Domain.Query.Any
+  | Reader
   // oxlint-disable-next-line typescript/no-explicit-any
-  | Membership<any>
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Entries<any, any>;
+  | Membership<any>;
 
 /** A row being edited: its fields writable. */
 export type Draft<P> = { -readonly [K in keyof P]: P[K] };
@@ -323,17 +350,11 @@ export type CommandSpec<Row extends object> =
   // oxlint-disable-next-line typescript/no-explicit-any
   | Sends<any, boolean, boolean>;
 
-type QueryOf<S> =
-  S extends Membership<infer Q>
-    ? Q
-    : S extends Entries<infer Q, infer _Entry>
-      ? Q
-      : S extends Domain.Query.Any
-        ? S
-        : never;
+type SourceOf<S> = S extends { readonly source: infer Reader } ? Reader : S;
 
-/** The rows a query spec answers: its `entries`, else its query's entries. */
-type SpecEntryOf<S> = S extends Entries<infer _Q, infer Entry> ? Entry : EntryOf<QueryOf<S>>;
+type QueryOf<S> = ReaderQuery<SourceOf<S>> extends infer Q extends Domain.Query.Any ? Q : never;
+
+type SpecEntryOf<S> = ReaderEntry<SourceOf<S>>;
 
 type CommandOf<S> = S extends { readonly command: infer C extends Domain.Command.Any }
   ? C
@@ -399,11 +420,13 @@ export type Subsets<R extends Rows.Any, Q extends Domain.Query.Any> = (
 ) => Source<SubsetRow<R, Q>>;
 
 /** Each query's entries must be the entity's rows. */
-type Checks<R extends Rows.Any, Queries> = {
-  readonly [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>]
-    ? unknown
-    : { readonly "query entries are not this entity's rows": K };
+type InvalidQueries<R extends Rows.Any, Queries> = {
+  [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>] ? never : K;
 }[keyof Queries];
+
+type Checks<R extends Rows.Any, Queries> = [InvalidQueries<R, Queries>] extends [never]
+  ? unknown
+  : { readonly "query entries are not this entity's rows": InvalidQueries<R, Queries> };
 
 /** A declared entity: one subset accessor per query, one command per command. */
 export type Collection<R extends Rows.Any, Queries, Commands> = {
@@ -431,17 +454,15 @@ const keyOf = (entity: Rows.Any) => (row: Row) => keyIn(entity.rows.key, row);
 const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
   if (spec instanceof Membership)
     return {
-      query: spec.query,
+      ...readerOf(spec.source as Reader),
       // SAFETY: the rule reads this query's rows and input.
       rule: Option.some(spec.rule as (row: Row, input: Input) => boolean),
-      select: Option.none(),
     };
 
   if (spec instanceof Entries)
     return {
       query: spec.query,
-      // SAFETY: as above.
-      rule: spec.rule as Option.Option<(row: Row, input: Input) => boolean>,
+      rule: Option.none(),
       // SAFETY: `select` reads this query's answers, decoded by its schema.
       select: Option.some(spec.select as (answer: Answer) => ReadonlyArray<Row>),
     };
@@ -604,6 +625,24 @@ const editOf = (entity: Rows.Any, spec: CommandSpec<Row>): Edit => {
   return { ...base, apply: () => 0 };
 };
 
+const declarations = new WeakMap<Rows.Any, Map<string, QuerySpec>>();
+
+const sameDeclaration = (first: QuerySpec, second: QuerySpec): boolean => {
+  if (first === second) return true;
+
+  if (first instanceof Membership && second instanceof Membership)
+    return (
+      first.single === second.single &&
+      first.rule === second.rule &&
+      sameDeclaration(first.source, second.source)
+    );
+
+  if (first instanceof Entries && second instanceof Entries)
+    return first.query === second.query && first.select === second.select;
+
+  return false;
+};
+
 /**
  * Declares an entity: a subset accessor per query and a command per command, at module level.
  * `customers.list(input)` is a collection descriptor for stock `useLiveQuery`; every subset of the
@@ -620,12 +659,22 @@ export const collection = <
     readonly commands?: Commands & CommandChecks<R, Commands>;
   } & Checks<R, Queries>,
 ): Collection<R, Queries, Commands> => {
+  const known = new Map(declarations.get(rows));
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
-    const { query, rule, select } = readerOf(spec);
+    const reader = readerOf(spec);
+    const { query } = reader;
+    const previous = known.get(query.queryName);
+
+    if (previous && !sameDeclaration(previous, spec))
+      throw new Error(
+        `HighAlch.collection: conflicting declarations of query ${query.queryName} for ${rows.entityName}`,
+      );
+
+    known.set(query.queryName, spec);
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
-        { entity: rows, query, input, page, rule, select },
+        { ...reader, entity: rows, input, page },
         `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
       );
 
@@ -635,6 +684,8 @@ export const collection = <
   const commands = Object.entries(declaration.commands ?? {}).map(([name, spec]) => {
     return [name, make(declaredOf(spec).command, editOf(rows, spec))] as const;
   });
+
+  declarations.set(rows, known);
 
   // SAFETY: one accessor per query and one command per command, under their declared names.
   return Object.fromEntries([...queries, ...commands]) as Collection<R, Queries, Commands>;
@@ -660,41 +711,40 @@ export const query =
     return collectionOptions(id, (db: DbClient) => {
       const connection = connectionOf(db);
 
-      const load = async (
-        params: Parameters<SyncConfig<ResultRow<Q>, string>["sync"]>[0],
-        attempt: number,
-      ): Promise<void> => {
-        const ask = await connection.query(source.queryName);
-        const exit = await connection.run(ask(input, page));
-
-        if (Exit.isSuccess(exit)) {
-          params.begin({ snapshot: true });
-
-          if (exit.value !== null) {
-            // SAFETY: the query's schema decoded its one result.
-            const value = exit.value as ResultRow<Q>;
-
-            params.write({ type: "insert", value });
-          }
-
-          void params.commit();
-
-          return params.markReady();
-        }
-
-        const error = failureOf(source.queryName, exit.cause);
-        const delay = connection.retry(error, attempt);
-
-        if (Option.isNone(delay)) return params.fail(error);
-
-        await connection.sleep(delay.value, "retry");
-
-        return load(params, attempt + 1);
-      };
-
       const sync: SyncConfig<ResultRow<Q>, string> = {
         sync: (params) => {
-          void load(params, 1);
+          const scope = connection.openScope();
+          const ask = connection
+            .query(source.queryName)
+            .pipe(Effect.flatMap((endpoint) => endpoint(input, page)));
+
+          connection.fork(
+            Effect.yieldNow.pipe(
+              Effect.andThen(read(source.queryName, ask)),
+              Effect.retry(connection.retry),
+              Effect.tap((answer) =>
+                Effect.sync(() => {
+                  params.begin({ snapshot: true });
+
+                  if (answer !== null) {
+                    // SAFETY: the query's schema decoded its one result.
+                    params.write({ type: "insert", value: answer as ResultRow<Q> });
+                  }
+
+                  void params.commit();
+                  params.markReady();
+                }),
+              ),
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+
+                return Effect.sync(() => params.fail(failureOf(source.queryName, cause)));
+              }),
+            ),
+            scope,
+          );
+
+          return () => Effect.runPromise(Scope.close(scope, Exit.void));
         },
       };
 

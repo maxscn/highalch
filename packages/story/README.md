@@ -36,6 +36,8 @@ the repository's `vp run check:patterns` enforces both.
 
 ## Making a story
 
+In this example, the whole-list declaration for `notes.list` is `HighAlch.all(Notes)`.
+
 ```ts
 // Hosted: the consumer's Domain in memory, real HighAlch clients (one per scope) behind a wire the
 // story controls, on a clock it controls. Data steps and machine steps.
@@ -196,7 +198,7 @@ which is what makes "the command it asked for" observable: XState 6's pure `tran
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
 and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
 is registered under in `setup({ actors })`. Plain XState logic works the same once marked:
-`mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`. In production
+`mark(createAsyncLogic({ run: ({ input }) => Effect.runPromise(command.result(input)) }), command)`. In production
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 
@@ -405,8 +407,8 @@ A presentational component takes plain props; its composition component renders
 
 ## Seams in the core
 
-The kit needs two small, behaviour-preserving seams in the core, published as the unstable
-`@highalch/db/internal` entry: `make({ timers })` (`Timers`:
-where retries, reload debounces and settle timeouts wait; the default is `setTimeout`), and a
-feed subscription's read-only `current` (caught up and not failed), which the kit reads to know a
-feed is live. The constructors of `match`'s live states and of `Settled` are shared with it.
+The kit provides its manual or real clock through Effect's `Clock` service. It uses
+`waitKind` from the unstable `@highalch/db/internal` entry to tell retries, reload debounces and
+settle timeouts apart. It also reads each feed subscription's `current` flag to check that the
+feed has caught up and is healthy. The core shares the constructors of `match`'s live states
+and of `Settled` with the kit.

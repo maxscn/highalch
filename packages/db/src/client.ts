@@ -1,13 +1,20 @@
 import type * as Domain from "@alchemy.run/domain";
-import { DbClient } from "@tanstack/db";
+import { DbClient, type Transaction } from "@tanstack/db";
 import {
   Cause,
   Effect,
+  Clock,
+  Context,
+  Deferred,
+  Exit,
+  Fiber,
+  FiberSet,
+  Layer,
   ManagedRuntime,
   Option,
   Predicate,
-  type Exit,
-  type Layer,
+  Schedule,
+  Scope,
   type Stream,
 } from "effect";
 import { Defect, type TaggedFailure } from "./state";
@@ -18,40 +25,19 @@ import type { Answer, Input } from "./values";
 /** The DbClient dependency under which the Domain connection is kept. */
 export const dependency = "@highalch/db";
 
-/**
- * Whether, and after how many milliseconds, to try a failed load or feed again: `attempt` is the
- * attempt that failed (1 for the first). `Option.none()` stops: a load before its first readiness
- * then fails with `error`, a feed (or a reload) after it stops its live updates.
- */
-export type Retry = (error: TaggedFailure | Defect, attempt: number) => Option.Option<number>;
+/** A schedule of retries for typed read failures, or defects reported by a read. */
+export type Retry = Schedule.Schedule<unknown, TaggedFailure | Defect>;
 
-/** Transport failures are retried three times, after 250, 500 and 1000 ms; nothing else is. */
-export const transient: Retry = (error, attempt) => {
-  if (attempt > 3 || !Predicate.isTagged(error, "RpcClientError")) return Option.none();
+export const transient: Retry = Schedule.exponential(250).pipe(
+  Schedule.upTo({ times: 3 }),
+  Schedule.while(({ input }: { input: TaggedFailure | Defect }) =>
+    Predicate.isTagged(input, "RpcClientError"),
+  ),
+);
 
-  return Option.some(250 * 2 ** (attempt - 1));
-};
-
-/** Why a client waits: a retry's delay, a subset's reload debounce, or a command's settle timeout. */
+/** Time is provided by Clock. The story kit uses this reference to inspect its waits. */
 export type Wait = "retry" | "reload" | "settle";
-
-/**
- * Where a client's waits are scheduled: `set` runs `run` after `ms` milliseconds and returns its
- * cancel. The default is the global `setTimeout`; a test (the story kit) passes a clock it
- * controls. Every timer a client starts goes through it, so production behaviour is unchanged.
- */
-export type Timers = {
-  readonly set: (run: () => void, ms: number, wait: Wait) => () => void;
-};
-
-/** The global `setTimeout`. */
-export const realTimers: Timers = {
-  set: (run, ms) => {
-    const timer = setTimeout(run, ms);
-
-    return () => clearTimeout(timer);
-  },
-};
+export const waitKind = Context.Reference<Wait>("HighAlch/Wait", { defaultValue: () => "retry" });
 
 type Identifier<A extends Domain.Api.Any> = A["Client"]["Identifier"];
 
@@ -66,14 +52,14 @@ export type Settings = {
   readonly live?: boolean;
   /** Retries of loads, reloads and feeds; defaults to `transient`. */
   readonly retry?: Retry;
-  /** Milliseconds a command waits for the feed to deliver its change (default 10 000). */
+  /** Milliseconds to wait for feed confirmation or, at close, an outstanding reply (default 10 000). */
   readonly settleTimeout?: number;
-  /** Milliseconds a subset waits before reloading for rows it cannot place (default 50). */
+  /** Milliseconds a subset waits before reloading after a feed change or a reload call (default 50). */
   readonly reloadDelay?: number;
   /** Milliseconds an unobserved subset collection is kept (TanStack DB's `gcTime`). */
   readonly gcTime?: number;
-  /** Where retries, reload debounces and settle timeouts wait (default: `setTimeout`). */
-  readonly timers?: Timers;
+  /** Time service for synchronous make. A scoped layer uses the ambient Clock by default. */
+  readonly clock?: Clock.Clock;
 };
 
 /**
@@ -138,11 +124,9 @@ type Endpoints = {
   readonly [name: string]: StreamEndpoints | QueryEndpoint | CommandEndpoint;
 };
 
-/** What the connection runs on: the Api client, a way to run its Effects, and disposal. */
 type Runtime = {
-  readonly client: () => Promise<Endpoints>;
-  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Promise<Exit.Exit<A, E>>;
-  readonly dispose: () => Promise<void>;
+  readonly client: Effect.Effect<Endpoints>;
+  readonly dispose: Effect.Effect<void>;
 };
 
 /** A failed Effect's typed error, or its whole cause as a `Defect`. */
@@ -156,6 +140,14 @@ export const failureOf = <E>(name: string, cause: Cause.Cause<E>): TaggedFailure
   return new Defect({ name, cause });
 };
 
+/** Preserve typed endpoint errors and translate defects at the reporting boundary. */
+export const read = <A>(name: string, effect: Effect.Effect<A, TaggedFailure | Defect>) =>
+  Effect.catchCause(effect, (cause) => {
+    if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+
+    return Effect.fail(failureOf(name, cause));
+  });
+
 /**
  * One account's connection to a Domain: the Api client, one subscription per feed and the subset
  * collections materialised from module-level declarations. It lives in its `DbClient`.
@@ -167,14 +159,15 @@ export class Connection {
   readonly settleTimeout: number;
   readonly reloadDelay: number;
   readonly gcTime: number | undefined;
-  readonly timers: Timers;
+  private readonly clock: Clock.Clock = Effect.runSync(Clock.Clock);
+  private readonly scopeOfRun = Scope.makeUnsafe();
+  private readonly commands = Effect.runSync(Scope.provide(FiberSet.make(), this.scopeOfRun));
+  private readonly replyDeadline = Deferred.makeUnsafe<void>();
+  private closing: Effect.Effect<void> | undefined;
   /** One subscription per feed (stream name), shared by every subset of every entity on it. */
   readonly feeds = new Map<string, Subscription>();
   /** The subsets of each entity whose sync runs, by entity name. */
   readonly subsets = new Map<string, Set<Subset>>();
-  private endpoints: Promise<Endpoints> | undefined;
-  /** Commands sent and not yet settled (committed, unconfirmed or rolled back). */
-  private readonly pending = new Set<Promise<unknown>>();
 
   constructor(
     settings: Settings,
@@ -186,50 +179,68 @@ export class Connection {
     this.settleTimeout = settings.settleTimeout ?? 10_000;
     this.reloadDelay = settings.reloadDelay ?? 50;
     this.gcTime = settings.gcTime;
-    this.timers = settings.timers ?? realTimers;
+    this.clock = settings.clock ?? this.clock;
   }
 
-  /** Runs `run` after `ms` through the client's timers; returns its cancel. */
-  after = (ms: number, wait: Wait, run: () => void) => this.timers.set(run, ms, wait);
-
-  /** Resolves after `ms` through the client's timers. */
-  sleep = (ms: number, wait: Wait) =>
-    new Promise<void>((resolve) => {
-      this.timers.set(resolve, ms, wait);
+  /** Starts an adapter worker from a synchronous TanStack callback. */
+  fork = <A, E>(effect: Effect.Effect<A, E>, scope: Scope.Scope = this.scopeOfRun) =>
+    Effect.runFork(effect.pipe(Effect.provideService(Clock.Clock, this.clock)), {
+      onFiberStart: (fiber) => {
+        Fiber.runIn(fiber, scope);
+      },
     });
 
-  private resolve() {
-    this.endpoints ??= this.runtime.client();
+  openScope = () => Scope.forkUnsafe(this.scopeOfRun);
 
-    return this.endpoints;
+  /** Commands admitted before close can wait for a reply until the deadline. */
+  awaitReply = <A, E>(reply: Effect.Effect<A, E>) =>
+    Effect.raceFirst(
+      Effect.asSome(reply),
+      Effect.as(Deferred.await(this.replyDeadline), Option.none()),
+    );
+
+  get closedToCommands() {
+    return this.closing !== undefined;
   }
 
-  /** The `peek` and `events` endpoints of a served stream. */
-  stream = async (name: string) => {
-    const client = await this.resolve();
+  forkCommand = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.runSync(
+      FiberSet.run(this.commands, effect, { startImmediately: false }).pipe(
+        Effect.provideService(Clock.Clock, this.clock),
+      ),
+    );
 
-    // SAFETY: the Api client serves each stream under its name with these reads.
-    return client[name] as StreamEndpoints;
+  /** TanStack mutation functions return promises. */
+  runMutation = <A, E>(effect: Effect.Effect<A, E>, transaction: Pick<Transaction, "when">) => {
+    if (this.closedToCommands) return Promise.reject(closedClientError());
+
+    const persisted = Deferred.makeUnsafe<A, E>();
+    const published = Deferred.makeUnsafe<void>();
+    const finish = () => {
+      Deferred.doneUnsafe(published, Effect.void);
+    };
+
+    void transaction.when("settled").then(finish, finish);
+    this.forkCommand(
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(effect);
+
+        Deferred.doneUnsafe(persisted, exit);
+        yield* Deferred.await(published);
+      }),
+    );
+
+    return Effect.runPromise(Deferred.await(persisted));
   };
 
-  /** The method of a served query. */
-  query = async (name: string) => {
-    const client = await this.resolve();
+  stream = (name: string) =>
+    Effect.map(this.runtime.client, (client) => client[name] as StreamEndpoints);
 
-    // SAFETY: the Api client serves each query as a method under its name.
-    return client[name] as QueryEndpoint;
-  };
+  query = (name: string) =>
+    Effect.map(this.runtime.client, (client) => client[name] as QueryEndpoint);
 
-  /** The method of a served command. */
-  command = async (name: string) => {
-    const client = await this.resolve();
-
-    // SAFETY: the Api client serves each command as a method under its tag.
-    return client[name] as CommandEndpoint;
-  };
-
-  /** Runs an Effect of the Api client to its exit. */
-  run = <A, E>(effect: Effect.Effect<A, E>): Promise<Exit.Exit<A, E>> => this.runtime.run(effect);
+  command = (name: string) =>
+    Effect.map(this.runtime.client, (client) => client[name] as CommandEndpoint);
 
   /** Registers a subset whose sync started; returns its release. */
   register = (entity: string, subset: Subset) => {
@@ -241,7 +252,7 @@ export class Connection {
     return () => {
       known.delete(subset);
 
-      if (known.size === 0) this.subsets.delete(entity);
+      if (known.size === 0 && this.subsets.get(entity) === known) this.subsets.delete(entity);
     };
   };
 
@@ -254,48 +265,55 @@ export class Connection {
     return [...known].filter((subset) => subset.ready);
   };
 
-  /** Keeps a command's settlement until it ends, so closing waits for it; answers it. */
-  track = <A>(settlement: Promise<A>): Promise<A> => {
-    this.pending.add(settlement);
+  close = (db: DbClient) =>
+    Effect.suspend(() => {
+      this.closing ??= Effect.runSync(
+        Effect.cached(
+          this.drainCommands().pipe(
+            Effect.andThen(Effect.promise(() => db.cleanup())),
+            Effect.ensuring(Scope.close(this.scopeOfRun, Exit.void)),
+            Effect.ensuring(this.runtime.dispose),
+          ),
+        ),
+      );
 
-    const done = () => void this.pending.delete(settlement);
+      return this.closing;
+    }).pipe(Effect.uninterruptible);
 
-    settlement.then(done, done);
+  private drainCommands() {
+    const deadline = Effect.sleep(this.settleTimeout).pipe(
+      Effect.andThen(Deferred.succeed(this.replyDeadline, undefined)),
+      Effect.provideService(Clock.Clock, this.clock),
+      Effect.provideService(waitKind, "settle"),
+    );
 
-    return settlement;
-  };
-
-  /** Resolves once every command sent so far (and any sent meanwhile) has settled. */
-  settled = async () => {
-    while (this.pending.size > 0) await Promise.allSettled(this.pending);
-  };
-
-  /** Disposes the runtime this connection built (a runtime it was given stays open). */
-  dispose = () => this.runtime.dispose();
+    return Effect.gen({ self: this }, function* () {
+      yield* Effect.forkScoped(deadline, { startImmediately: true, uninterruptible: false });
+      yield* FiberSet.awaitEmpty(this.commands);
+    }).pipe(Effect.scoped);
+  }
 }
+
+export const closedClientError = () => new Error("HighAlch client is closing or closed");
 
 /** The connection of a client made by `make`. */
 export const connectionOf = (db: DbClient) => db.requireDependency<Connection>(dependency);
 
 /** The runtime a config reaches its Api through. */
 const runtimeOf = <A extends Domain.Api.Any>(config: Config<A>): Runtime => {
-  const owned = !("runtime" in config);
-  const runtime = "runtime" in config ? config.runtime : ManagedRuntime.make(config.layer);
+  function runtimeClient(runtime: ManagedRuntime.ManagedRuntime<Identifier<A>, never>) {
+    return Effect.map(
+      runtime.contextEffect,
+      // SAFETY: an Api's Client key yields its endpoints by name.
+      (context) => Context.get(context, config.api.Client) as Endpoints,
+    );
+  }
 
-  return {
-    client: () =>
-      runtime.runPromise(
-        Effect.map(
-          config.api.Client,
-          // SAFETY: an Api's `Client` key yields its client, its endpoints by name.
-          (client) => client as Endpoints,
-        ),
-      ),
-    run: (effect) => runtime.runPromiseExit(effect),
-    dispose: async () => {
-      if (owned) await runtime.dispose();
-    },
-  };
+  if ("runtime" in config) return { client: runtimeClient(config.runtime), dispose: Effect.void };
+
+  const runtime = ManagedRuntime.make(config.layer);
+
+  return { client: runtimeClient(runtime), dispose: runtime.disposeEffect };
 };
 
 /**
@@ -311,13 +329,20 @@ export const make = <A extends Domain.Api.Any>(config: Config<A>) =>
  * or rolled back while their rows are still shown), then cleans up every collection and closes
  * the connection it built.
  */
-export const close = async (db: DbClient) => {
-  const connection = connectionOf(db);
+export const close = (db: DbClient) => Effect.suspend(() => connectionOf(db).close(db));
 
-  await connection.settled();
-  await db.cleanup();
-  await connection.dispose();
-};
+/** The TanStack client supplied by layer. */
+export class Client extends Context.Service<Client, DbClient>()("HighAlch/Client") {}
+
+/** Makes a client for the lifetime of the layer. */
+export const layer = <A extends Domain.Api.Any>(config: Config<A>) =>
+  Layer.effect(
+    Client,
+    Effect.acquireRelease(
+      Effect.map(Clock.Clock, (clock) => make({ ...config, clock: config.clock ?? clock })),
+      close,
+    ),
+  );
 
 /**
  * Reloads every loaded subset of an entity in a client, for a change its feed does not carry: a

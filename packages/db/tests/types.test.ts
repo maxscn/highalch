@@ -12,6 +12,9 @@ import {
   NotebookChanges,
   NoteRows,
   Note,
+  NotesByBook,
+  NotesByTitle,
+  NotesByCursor,
   NoteStats,
   type NotesApi,
   PinNote,
@@ -172,6 +175,64 @@ export function Recovered() {
   });
 
   return null;
+}
+
+/** The selector determines the row type independently of membership. */
+export function Membership() {
+  const selected = HighAlch.entries(NotesByTitle, (answer) => answer.Items);
+  const subsets = HighAlch.collection(NoteRows, {
+    queries: {
+      page: selected,
+      list: HighAlch.all(NotesByBook),
+      wrapped: HighAlch.all(selected),
+      where: HighAlch.where(selected, (row, input) => {
+        expectTypeOf(row).toEqualTypeOf<Note>();
+        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+
+        return row.account === input.account;
+      }),
+      one: HighAlch.one(selected, (row, input) => {
+        expectTypeOf(row).toEqualTypeOf<Note>();
+        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+
+        return row.account === input.account;
+      }),
+    },
+  });
+
+  expectTypeOf(subsets.list).toEqualTypeOf<HighAlch.Subsets<typeof NoteRows, typeof NotesByBook>>();
+  expectTypeOf(subsets.wrapped).toEqualTypeOf<
+    HighAlch.Subsets<typeof NoteRows, typeof NotesByTitle>
+  >();
+  expectTypeOf(subsets.where).toEqualTypeOf<typeof subsets.page>();
+  expectTypeOf(subsets.one).toEqualTypeOf<typeof subsets.page>();
+
+  HighAlch.entries(
+    NotesByTitle,
+    (answer) => answer.Items,
+    // @ts-expect-error entries takes only a query and a selector
+    () => true,
+  );
+
+  // @ts-expect-error a page cannot be the whole list
+  HighAlch.all(NotesByCursor);
+
+  const paged = HighAlch.entries(NotesByCursor, (answer) => answer.entries);
+  // @ts-expect-error wrapping a page does not make it the whole list
+  HighAlch.all(paged);
+
+  const wrong = HighAlch.entries(NotesByTitle, (answer) => answer.Items.map((row) => row.title));
+
+  // @ts-expect-error the selected rows are strings, even after composing a membership rule
+  HighAlch.collection(NoteRows, {
+    queries: { bad: HighAlch.where(wrong, (row) => row.length > 0) },
+  });
+
+  // @ts-expect-error the valid sibling does not make the invalid selector valid
+  HighAlch.collection(NoteRows, { queries: { good: Notes, bad: wrong } });
+
+  // @ts-expect-error the bare query's result is still checked when using all
+  HighAlch.collection(NoteRows, { queries: { bad: HighAlch.all(NoteStats) } });
 }
 
 /** Commands: input-only calls typed from the Domain definitions, `onRejected` checked. */
@@ -351,5 +412,5 @@ export const Declarations = () => {
 };
 
 it("type-level transitions compile", () => {
-  expect([Recovered, Commands, Declarations]).toHaveLength(3);
+  expect([Recovered, Membership, Commands, Declarations]).toHaveLength(4);
 });

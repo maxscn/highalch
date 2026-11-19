@@ -6,13 +6,13 @@ TanStack DB `useLiveQuery`; writes are native TanStack DB transactions; states a
 `match`. The package knows nothing about the application: the Api, its transport and the scope
 (an account, say) are supplied by the app.
 
-| Entry point             | What                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| `@highalch/db`          | The whole client-side API, React-free. Import it as `HighAlch`.                          |
-| `@highalch/db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect      |
-| `@highalch/db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                           |
-| `@highalch/db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`    |
-| `@highalch/db/internal` | Unstable seams for `@highalch/story` (timers, connection, state constructors); no semver |
+| Entry point             | What                                                                                    |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `@highalch/db`          | The whole client-side API, React-free. Import it as `HighAlch`.                         |
+| `@highalch/db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect     |
+| `@highalch/db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                          |
+| `@highalch/db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`   |
+| `@highalch/db/internal` | Unstable seams for `@highalch/story` (clock, connection, state constructors); no semver |
 
 ```ts
 import * as HighAlch from "@highalch/db";
@@ -130,7 +130,8 @@ Domain definitions, not from an Api object.
 ```ts
 export const customers = HighAlch.collection(CustomerRows, {
   queries: {
-    list: Customers, // a Domain.Query
+    list: HighAlch.all(Customers),
+    page: CustomersByName,
     get: HighAlch.one(Customer, (row, input) => row.CustomerId === input.CustomerId),
     byProject: HighAlch.where(
       CustomersByProject,
@@ -162,13 +163,27 @@ export const refresh = HighAlch.command(RefreshSomething, {
 });
 ```
 
-**How a query's answer becomes rows** is read from the query itself: a `paged` query's
-`entries`, an array's elements, or one row (none for `null`). A query whose answer wraps its rows
-otherwise (`{ Items, Count, LastEvaluatedKey }`) declares where they are:
-`HighAlch.entries(Customers, (answer) => answer.Items, rule?)`, with an optional membership rule
-as for `where`. Each query's entries must be the entity's rows (a type error names the query
-otherwise). A paged query's accessor takes the page
-as a second argument: `customers.list(input, { after, take })`.
+**Who decides which rows belong?** Use `all(Query)` for the whole list in the client's scope.
+Use `where(Query, rule)` for a list whose membership can be tested against a feed row and the
+query input, or `one(Query, rule)` for a single row read with `.findOne()`. Use a bare query when
+the answer decides membership. For example, if `CustomersByName` sorts by name and then key,
+`customers.page({ Offset: 0, Limit: 101 })` reads 100 rows and one lookahead row.
+
+The query's answer supplies the rows as a `paged` query's `entries`, an array's elements, or one
+row (none for `null`). Use `entries(Query, select)` when the answer wraps its rows, such as
+`{ Items, Count }`. Compose it with a membership helper when the client can decide:
+
+```ts
+const projectRows = HighAlch.entries(WrappedCustomersByProject, (answer) => answer.Items);
+const byProject = HighAlch.where(projectRows, (row, input) => row.ProjectId === input.ProjectId);
+```
+
+Use `projectRows` by itself when the query decides. `one` and `all` can also take an `entries`
+declaration. Each query must return the entity's rows after selection. A `paged` query's accessor
+takes its page as the second argument, for example `customers.search(input, { after, take })`.
+`all` rejects paged queries at compile time and at declaration. Declare a Domain query with one
+membership rule and row selector per `Rows` entity. Repeating the same declaration is allowed.
+A conflicting declaration throws a HighAlch error naming the query and entity.
 
 **Which row a command addresses, and which aggregate.** A call passes only the command's input;
 the package resolves the rest from the declarations, in this order:
@@ -353,8 +368,10 @@ customers.addComment({ CustomerId: id, Comment });
   `Unconfirmed` (the server accepted it) and the entity's subsets reload; it never hangs.
 - `command.with({ client?, onCommitted?, onRejected? })` binds a client and default reactions.
 - `command.effect(input)`: an `Effect<Settled, E>` with the typed error channel (state machines,
-  tests). `command.result(input)`: a promise of `Committed | Unconfirmed | E` for `match`; it
-  never rejects for a typed error.
+  tests). `command.result(input)` is an Effect that returns `Committed | Unconfirmed | E` for
+  `match`. It puts typed rejections in the value channel. Both forms can use a bound client,
+  the `HighAlch.Client` service, or the mounted provider. A sent transaction settles even if its
+  Effect caller stops waiting.
 - `command.options`: `{ onMutate, mutationFn }` for `createOptimisticAction`. A call that edits
   no loaded row runs the command beside the (empty) transaction, which TanStack completes at once.
   `onMutate` resolves the call (a create's key is chosen there) and `mutationFn` sends that same
@@ -411,9 +428,30 @@ const db = HighAlch.make({
 `make` returns a TanStack `DbClient` holding the Domain connection as a dependency
 (`client.requireDependency(...)`); `Provider` renders TanStack's `DbProvider` with it. Give the
 client a `layer` (the connection builds and, on `HighAlch.close(db)`, disposes it) or a
-`runtime` that already holds the Api client. `HighAlch.close(db)` first waits until every
-command the client sent has settled (committed, `Unconfirmed` or rolled back, while its rows are
-still shown), then cleans up its collections and the connection.
+`runtime` that already holds the Api client. Run `yield* HighAlch.close(db)` in an Effect or
+`await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. Close rejects new
+commands immediately and keeps the subsets and feed open while commands already sent settle.
+A command that receives a reply settles as usual, including `Unconfirmed` if its feed
+confirmation times out. If a reply is still outstanding after `settleTimeout` from the
+start of close, HighAlch interrupts the call and rolls back its optimistic edit. Close
+then cleans up the collections and connection once.
+
+Use `HighAlch.layer(config)` to give an Effect application a client scoped to its layer.
+It provides the TanStack client as `HighAlch.Client` and closes it when the layer's scope closes.
+Pass the layer to `Atom.runtime` or compose it with your application's layers.
+
+```ts
+const customersLayer = HighAlch.layer({
+  api: AppApi,
+  layer: AppApi.layerClientWebSocket(url).pipe(Layer.provide(clients)),
+  scope: accountKey,
+});
+
+const refresh = Effect.gen(function* () {
+  const db = yield* HighAlch.Client;
+  HighAlch.reload(db, CustomerRows);
+}).pipe(Effect.provide(customersLayer));
+```
 
 `HighAlch.reload(db, Rows)` reloads every loaded subset of an entity in one client (one snapshot
 transaction each, no flicker; calls within `reloadDelay` reload once). Use it for a change the
@@ -423,9 +461,15 @@ with `live: false` (subsets load once, no feed), `dehydrate()` it, and `hydrate(
 browser's client: collection ids are derived from the declaration, the query and its input, so
 they match.
 
-`retry(error, attempt)` returns the delay before the next attempt, or `Option.none()` to stop.
-Before a subset's first readiness a stop fails it (its error state); after it, failures are
-reported as `failureReason` (`Retrying`) and a stop keeps the rows (`Ready.feed`).
+`retry` is an Effect `Schedule`. The default, `HighAlch.transient`, retries transport failures
+after 250, 500 and 1,000 ms. Use `Schedule.while` to select which typed failures to retry.
+Before a subset first becomes ready, exhausting the schedule fails the load. After readiness,
+a retry reports `failureReason` (`Retrying`), and a stopped retry keeps the rows (`Ready.feed`).
+A new reload request during retry backoff can re-ask after its debounce.
+
+Retries, reload debounces and command settlement use Effect's `Clock`. The scoped layer
+uses the ambient clock. Pass `clock` in the config to provide a clock directly to `make` or
+override the layer's clock.
 
 ## The subset model and its trade-offs
 
@@ -436,27 +480,51 @@ subscription of that feed's stream for the client's scope: one subscription per 
 started with the first subset of any of its entities and released with the last. It hands each
 subset the entries of its own entity (an entry of an entity no subset reads passes by).
 
-Each subset loads with cursor-then-events: `stream.peek(scope)` for the cursor (the latest
-entry's `seq`, `0` before any), then the query, then the feed's entries for its entity after that
-cursor (buffered meanwhile), applied in one sync transaction before `markReady()`. Nothing is
-missed and nothing is applied twice: entries are deduplicated by `seq`. The subscription resumes
-from its last `seq` after a failure.
+The subscription deduplicates entries by sequence and resumes from its last sequence after a
+failure.
 
-The package fans feed events and optimistic edits out to every materialised subset:
+The declaration determines who places rows after a feed change:
 
-- `Removed` deletes the row where present.
-- `Upserted` replaces it where present. With a membership rule that no longer holds, it leaves
-  that subset.
-- A row a subset does not have is inserted when the query has a rule (`one`/`where`) that
-  holds; without a rule the subset schedules a debounced reload (`reloadDelay`), since only the
-  query knows where the row belongs. A row this client already shows optimistically (its own
-  insert) is kept until that reload, so it does not flicker away.
+- With `where`, `one` or `all`, the rule decides. An upsert inserts or updates a row when the rule
+  holds and removes it when the rule stops holding. A removal deletes the row where present.
+  `all` always includes the row. A load reads the feed cursor before sending the query and
+  applies entries buffered after that cursor over the answer. These declarations only re-ask
+  on explicit reload, so the rule must agree with the server query.
+- Without a rule, the query decides. Every delivered entry patches the rows in place once
+  regardless of the last query's cursor and requests a re-ask, including changes outside a page.
 
-Trade-offs: a bare query (no rule) reloads on every unknown row of its entity; a page does not
-backfill after a removal until it reloads; rule-based subsets trust the rule to match the
-server's query. Creates use client-chosen keys (`inserts` chooses one and the entity's `target`
-addresses it): a create whose server row has another key (a per-command `target` that ignores the
-key) appears through the rule or the reload, not in place.
+Query-decided subsets retain entries since the last clean answer and replay them over the next
+answer. A removal deletes its key. An upsert replaces a row in the answer or keeps an omitted row
+that the subset already shows, including a confirmed optimistic insert. The first load writes
+with replay. A ready subset discards up to two consecutive answers overtaken by the feed, then
+writes the next with replay so that other rows can refresh under continuous changes.
+
+An answer is clean when replay leaves it unchanged and no entries arrived in flight. When replay
+changes the answer, the subset can make up to three corrections with increasing delays. If the
+third correction still disagrees, the query answer wins and the subset clears the retained entries.
+A new feed entry resets the correction count. An explicit reload clears the count and starts with
+the query answer, with entries received in flight handled by the same replay and discard rules.
+
+While corrections run, a row the server has moved out of the subset stays visible, so a page can
+briefly hold more rows than its limit. With the default `reloadDelay` of 50 ms the corrections
+wait 100, 200 and 400 ms, about 750 ms in all plus the time each query takes, and further feed
+entries extend it.
+
+`reloadDelay` coalesces feed changes and explicit reloads into one request. Each subset can have
+one query in flight and one waiting. A debounced feed change or explicit reload can preempt a
+retry backoff. A ready subset writes each accepted answer in one snapshot transaction and
+keeps its readiness. With `live: false`, subsets load once.
+
+A read model that lags the feed longer than the corrections wait can still return stale rows.
+A new row omitted by a lagging answer appears at the next change or reload. Domain's `waitsFor`
+needs an `atLeast` receipt with the originating aggregate stream and version. The feed delivers
+row changes with the feed's own cursor.
+
+Each loaded cursor page re-asks with its own `after` and `take`. A change that shifts a boundary
+can leave adjacent pages overlapping or with a gap until those pages are loaded again.
+
+Creates use client-chosen keys. If the server uses another key, the row appears
+through the rule or the reload.
 
 ## XState: `@highalch/db/xstate`
 
@@ -490,15 +558,15 @@ which is what makes "the command it asked for" observable: XState 6's pure `tran
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
 and resolved `input`; the story reads the mark from `logic`, and names the command by the key it
 is registered under in `setup({ actors })`. Plain XState logic works the same once marked:
-`mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`. In production
+`mark(createAsyncLogic({ run: ({ input }) => Effect.runPromise(command.result(input)) }), command)`. In production
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 
 ## Seams for test kits: `@highalch/db/internal`
 
 `@highalch/story` needs a few behaviour-preserving seams of the core, published as
-`@highalch/db/internal` and **not covered by semver**: `Timers`/`Wait` (where retries, reload
-debounces and settle timeouts wait; `make({ timers })`, default `setTimeout`), `connectionOf` and
+`@highalch/db/internal` and **not covered by semver**. The story clock reads `waitKind` to
+distinguish retries, reload debounces and settle timeouts. The test kit also uses `connectionOf` and
 `Connection` (a client's feeds, each with a read-only `current`: caught up and not failed, and its
 materialised subsets), the constructors of `match`'s live states (`Live`, `fromLive`) and of
 `Settled`, and `keyOf`. Applications import `@highalch/db`.
