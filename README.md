@@ -162,11 +162,31 @@ Releases use [Changesets](https://github.com/changesets/changesets). `@highalch/
    line for the changelog. Commit the file it adds under `.changeset/`.
 2. Merging to `main` opens or updates a "Version Packages" pull request with the new versions and
    changelogs.
-3. Merging that pull request publishes both packages from `.github/workflows/publish.yml`
-   through npm trusted publishing (no token).
+3. Merging that pull request packs the new versions and stops: the `publish` job waits in the
+   `npm` environment until its reviewer approves it in the Actions tab. Approval publishes both
+   packages through npm trusted publishing and tags the release.
 
 For a prerelease line, run `vp exec changeset pre enter next` before step 1 and
 `vp exec changeset pre exit` to leave it.
+
+### Supply-chain rules
+
+No npm token exists: only `.github/workflows/publish.yml`, in the `npm` environment, can
+publish. To keep that worth something:
+
+- The job that holds the publish credential installs nothing and checks out nothing. It receives
+  tarballs from a job that has read access only. Do not give `id-token: write` to a job that
+  installs dependencies.
+- Actions are pinned to commit SHAs (the repository refuses unpinned ones), and no dependency
+  cache is restored in this workflow.
+- Never add a `pull_request_target` workflow, and never run pull request code in a job with
+  write access or secrets.
+- `pnpm-workspace.yaml` refuses versions younger than three days (`minimumReleaseAge`),
+  install scripts of dependencies that are not allowed explicitly (`strictDepBuilds`), and
+  transitive dependencies from git or tarball URLs (`blockExoticSubdeps`). If an install is
+  refused, wait or pin an older version; do not relax the policy for one package without reading
+  what changed in it.
+- Do not publish from a laptop or keep an npm token on one.
 
 ## License
 
