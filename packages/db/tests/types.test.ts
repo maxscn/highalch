@@ -176,32 +176,52 @@ export function Recovered() {
   return null;
 }
 
-/** Windowed queries infer the input and rows from the query and its optional selector. */
-export function Windows() {
-  const window = HighAlch.collection(NoteRows, {
+/** The selector determines the row type independently of membership. */
+export function Membership() {
+  const selected = HighAlch.entries(NotesByTitle, (answer) => answer.Items);
+  const subsets = HighAlch.collection(NoteRows, {
     queries: {
-      byBook: HighAlch.windowed(NotesByBook),
-      page: HighAlch.windowed(NotesByTitle, (answer) => answer.Items),
+      page: selected,
+      list: HighAlch.all(NotesByBook),
+      wrapped: HighAlch.all(selected),
+      where: HighAlch.where(selected, (row, input) => {
+        expectTypeOf(row).toEqualTypeOf<Note>();
+        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+
+        return row.account === input.account;
+      }),
+      one: HighAlch.one(selected, (row, input) => {
+        expectTypeOf(row).toEqualTypeOf<Note>();
+        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+
+        return row.account === input.account;
+      }),
     },
   });
 
-  expectTypeOf(window.byBook).toEqualTypeOf<
-    HighAlch.Subsets<typeof NoteRows, typeof NotesByBook>
+  expectTypeOf(subsets.list).toEqualTypeOf<HighAlch.Subsets<typeof NoteRows, typeof NotesByBook>>();
+  expectTypeOf(subsets.wrapped).toEqualTypeOf<
+    HighAlch.Subsets<typeof NoteRows, typeof NotesByTitle>
   >();
-  expectTypeOf(window.page).toEqualTypeOf<HighAlch.Subsets<typeof NoteRows, typeof NotesByTitle>>();
+  expectTypeOf(subsets.where).toEqualTypeOf<typeof subsets.page>();
+  expectTypeOf(subsets.one).toEqualTypeOf<typeof subsets.page>();
 
-  // @ts-expect-error a window cannot wrap a query with a membership rule
-  HighAlch.windowed(HighAlch.where(NotesByBook, (row, input) => row.BookId === input.BookId));
-
-  // @ts-expect-error a membership rule cannot wrap a window
-  HighAlch.where(HighAlch.windowed(NotesByBook), () => true);
-
-  HighAlch.windowed(
+  HighAlch.entries(
     NotesByTitle,
     (answer) => answer.Items,
-    // @ts-expect-error a wrapped window takes a selector only
+    // @ts-expect-error entries takes only a query and a selector
     () => true,
   );
+
+  const wrong = HighAlch.entries(NotesByTitle, (answer) => answer.Items.map((row) => row.title));
+
+  // @ts-expect-error the selected rows are strings, even after composing a membership rule
+  HighAlch.collection(NoteRows, {
+    queries: { bad: HighAlch.where(wrong, (row) => row.length > 0) },
+  });
+
+  // @ts-expect-error the bare query's result is still checked when using all
+  HighAlch.collection(NoteRows, { queries: { bad: HighAlch.all(NoteStats) } });
 }
 
 /** Commands: input-only calls typed from the Domain definitions, `onRejected` checked. */
@@ -381,5 +401,5 @@ export const Declarations = () => {
 };
 
 it("type-level transitions compile", () => {
-  expect([Recovered, Windows, Commands, Declarations]).toHaveLength(4);
+  expect([Recovered, Membership, Commands, Declarations]).toHaveLength(4);
 });

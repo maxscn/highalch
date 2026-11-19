@@ -49,74 +49,66 @@ export type Args<Q extends Domain.Query.Any> =
 /** A subset collection's descriptor: usable directly as a source of `useLiveQuery`. */
 export type Source<Row extends object> = CollectionOptions<Row, string> & NonSingleResult;
 
-/** A query with a membership rule: `one` (one row) or `where` (rows). */
-export class Membership<Q extends Domain.Query.Any> {
-  constructor(
-    readonly query: Q,
-    readonly rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-    readonly single: boolean,
-  ) {}
-}
-
-/**
- * A single-row query (`get`) with its membership rule: a feed row for which the rule holds is
- * inserted into the subset; read it with `.findOne()` for `Missing`.
- */
-export const one = <Q extends Domain.Query.Any>(
-  query: Q,
-  rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-) => new Membership(query, rule, true);
-
-/** A many-row query with its membership rule: feed rows for which it holds are inserted. */
-export const where = <Q extends Domain.Query.Any>(
-  query: Q,
-  rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-) => new Membership(query, rule, false);
-
-/** A query whose answer wraps its rows, with the reader of its rows and an optional rule. */
+/** A query whose answer wraps its rows, with the reader of its rows. */
 export class Entries<Q extends Domain.Query.Any, Entry> {
   constructor(
     readonly query: Q,
     readonly select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-    readonly rule: Option.Option<(row: Entry, input: QueryInput<Q>) => boolean>,
   ) {}
 }
 
-/**
- * A query whose answer holds its rows inside a wrapper that is not a `paged` page (for example
- * `{ Items, Count, LastEvaluatedKey }`): `select` reads the rows from one answer. With `rule`, feed
- * rows for which it holds are inserted, as for `where`; without one, an unknown row reloads it.
- */
+/** Reads the rows from a wrapped answer, such as `{ Items, Count }`. */
 export const entries = <Q extends Domain.Query.Any, Entry>(
   query: Q,
   select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-  rule?: (row: Entry, input: QueryInput<Q>) => boolean,
-) => new Entries(query, select, Option.fromUndefinedOr(rule));
+) => new Entries(query, select);
 
-/** A query that decides membership for an ordered window of rows. */
-export class Windowed<Q extends Domain.Query.Any, Entry = EntryOf<Q>> {
-  declare readonly rule?: never;
+type Reader =
+  | Domain.Query.Any
+  // oxlint-disable-next-line typescript/no-explicit-any
+  | Entries<any, any>;
 
+type ReaderQuery<S> = S extends Entries<infer Q, infer _Entry> ? Q : S;
+
+/** The rows a reader answers: its selected rows, else its query's entries. */
+type ReaderEntry<S> =
+  S extends Entries<infer _Q, infer Entry>
+    ? Entry
+    : S extends Domain.Query.Any
+      ? EntryOf<S>
+      : never;
+
+type Rule<S extends Reader> = (row: ReaderEntry<S>, input: QueryInput<ReaderQuery<S>>) => boolean;
+
+/** A query with a membership rule: `one`, `where` or `all`. */
+export class Membership<S extends Reader> {
   constructor(
-    readonly query: Q,
-    readonly select: Option.Option<
-      (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>
-    >,
+    readonly source: S,
+    readonly rule: Rule<S>,
+    readonly single: boolean,
   ) {}
+
+  /** The Domain query this declaration reads. */
+  get query(): ReaderQuery<S> {
+    let query: Reader = this.source;
+
+    if (query instanceof Entries) query = query.query;
+
+    // SAFETY: the reader is either the query or an Entries wrapping it.
+    return query as ReaderQuery<S>;
+  }
 }
 
-/** Reloads a window after an upsert or a held row's removal. Pass `select` for a wrapped answer. */
-export function windowed<Q extends Domain.Query.Any>(query: Q): Windowed<Q>;
-export function windowed<Q extends Domain.Query.Any, Entry>(
-  query: Q,
-  select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-): Windowed<Q, Entry>;
-export function windowed<Q extends Domain.Query.Any, Entry>(
-  query: Q,
-  select?: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-): Windowed<Q, Entry> {
-  return new Windowed(query, Option.fromUndefinedOr(select));
-}
+/** A single-row query with a membership rule. Read it with `.findOne()` for `Missing`. */
+export const one = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
+  new Membership(source, rule, true);
+
+/** A many-row query whose membership rule decides where feed rows belong. */
+export const where = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
+  new Membership(source, rule, false);
+
+/** A whole-list query that contains every row in the client's scope. */
+export const all = <S extends Reader>(source: S) => where(source, () => true);
 
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
@@ -321,15 +313,11 @@ export const sends = <C extends Domain.Command.Any, const O extends Addressing<C
   options?: O & Addressing<C>,
 ): Sends<C, Has<O, "key">, Has<O, "target">> => new Sends(command, addressing(options ?? {}));
 
-/** What `queries` may hold: a bare query or a declaration that describes how to sync its rows. */
+/** What `queries` may hold: a query and its optional row reader and membership rule. */
 export type QuerySpec =
-  | Domain.Query.Any
+  | Reader
   // oxlint-disable-next-line typescript/no-explicit-any
-  | Membership<any>
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Entries<any, any>
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Windowed<any, any>;
+  | Membership<any>;
 
 /** A row being edited: its fields writable. */
 export type Draft<P> = { -readonly [K in keyof P]: P[K] };
@@ -350,21 +338,11 @@ export type CommandSpec<Row extends object> =
   // oxlint-disable-next-line typescript/no-explicit-any
   | Sends<any, boolean, boolean>;
 
-type QueryOf<S> =
-  S extends Membership<infer Q>
-    ? Q
-    : S extends Entries<infer Q, infer _Entry>
-      ? Q
-      : S extends Windowed<infer Q, infer _Entry>
-        ? Q
-        : S extends Domain.Query.Any
-          ? S
-          : never;
+type SourceOf<S> = S extends { readonly source: infer Reader } ? Reader : S;
 
-/** The rows a query spec answers: its selected rows, else its query's entries. */
-type SpecEntryOf<S> = S extends Entries<infer _Q, infer Entry> | Windowed<infer _Q, infer Entry>
-  ? Entry
-  : EntryOf<QueryOf<S>>;
+type QueryOf<S> = ReaderQuery<SourceOf<S>> extends infer Q extends Domain.Query.Any ? Q : never;
+
+type SpecEntryOf<S> = ReaderEntry<SourceOf<S>>;
 
 type CommandOf<S> = S extends { readonly command: infer C extends Domain.Command.Any }
   ? C
@@ -458,37 +436,24 @@ export const stable = (value: Input | Page): string =>
 /** The key of a row of an entity. */
 const keyOf = (entity: Rows.Any) => (row: Row) => keyIn(entity.rows.key, row);
 
-/** A query spec's query, membership rule, row reader and window policy. */
-const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select" | "windowed"> => {
+/** A query spec's query, membership rule and row reader. */
+const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
   if (spec instanceof Membership)
     return {
-      query: spec.query,
+      ...readerOf(spec.source as Reader),
       // SAFETY: the rule reads this query's rows and input.
       rule: Option.some(spec.rule as (row: Row, input: Input) => boolean),
-      select: Option.none(),
-      windowed: false,
     };
 
   if (spec instanceof Entries)
     return {
       query: spec.query,
-      // SAFETY: as above.
-      rule: spec.rule as Option.Option<(row: Row, input: Input) => boolean>,
+      rule: Option.none(),
       // SAFETY: `select` reads this query's answers, decoded by its schema.
       select: Option.some(spec.select as (answer: Answer) => ReadonlyArray<Row>),
-      windowed: false,
     };
 
-  if (spec instanceof Windowed)
-    return {
-      query: spec.query,
-      rule: Option.none(),
-      // SAFETY: as above.
-      select: spec.select as Option.Option<(answer: Answer) => ReadonlyArray<Row>>,
-      windowed: true,
-    };
-
-  return { query: spec, rule: Option.none(), select: Option.none(), windowed: false };
+  return { query: spec, rule: Option.none(), select: Option.none() };
 };
 
 /** A subset's descriptor: materialised per client, synced by a `Subset` run. */
@@ -665,15 +630,11 @@ export const collection = <
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
     const reader = readerOf(spec);
     const { query } = reader;
-    // After the page's JSON, which ends every other id, so no entity or query name can collide.
-    let suffix = "";
-
-    if (reader.windowed) suffix = ":windowed";
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
         { ...reader, entity: rows, input, page },
-        `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}${suffix}`,
+        `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
       );
 
     return [name, accessor] as const;

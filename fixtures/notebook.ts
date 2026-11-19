@@ -297,8 +297,7 @@ const BooksLive = Books.toLayer(
 
 export class Notes extends Domain.Query("Notes", {
   input: { account: Schema.String },
-  success: Note,
-  paged: true,
+  success: Schema.Array(Note),
   rejects: [QueryRefused],
 }) {}
 
@@ -350,20 +349,8 @@ const NotesLive = Notes.toLayer(
   Effect.gen(function* () {
     const store = yield* NoteStore;
 
-    return ({ account }, page) =>
-      answer(store, "Notes", (notes) => {
-        const mine = notes.filter((note) => note.account === account);
-
-        const start = Option.match(Option.fromUndefinedOr(page.after), {
-          onNone: () => 0,
-          onSome: Number,
-        });
-
-        const entries = mine.slice(start, start + page.take);
-        const next = start + page.take;
-
-        return { entries, cursor: next < mine.length ? String(next) : null };
-      });
+    return ({ account }) =>
+      answer(store, "Notes", (notes) => notes.filter((note) => note.account === account));
   }),
 );
 

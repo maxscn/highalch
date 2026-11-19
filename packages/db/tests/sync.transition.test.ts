@@ -19,6 +19,7 @@ import {
   NoteRows,
   NotesApi,
   Notes,
+  NotesByTitle,
   RenameNote,
   TouchNote,
   transport,
@@ -116,7 +117,6 @@ describe("f(subsets, load)", () => {
 
     release();
     await ready(list);
-    await until(() => titles(list).length === 2, "reload for n3");
 
     expect(titles(list)).toEqual(["n1:Ada 2", "n3:Cyd"]);
     expect(list.size).toBe(2);
@@ -149,28 +149,24 @@ describe("f(ready subsets, feed change)", () => {
     expect(titles(book)).toEqual([]);
   });
 
-  it("f(unknown row, membership rule) → inserted where the rule holds; without a rule → one debounced reload", async () => {
+  it("f(rule-based subsets, feed changes) → all follows the whole list; one and where follow their rules", async () => {
     const server = await open();
 
     await seed(server, ada, bob);
 
-    const db = account(server, "acc-1", cleanup);
+    const clock = reloads();
+    const db = account(server, "acc-1", cleanup, { timers: clock.timers });
     const { list, book } = subsets(db);
     const later = observe<Note>(db, notes.get({ NoteId: "n3" }), cleanup);
 
     await ready(list, book, later);
 
-    const asked = { ...countAsked(server) };
+    const asked = countAsked(server);
 
     await server.send((client) =>
       client.CreateNote(address("acc-1", "n3"), { account: "acc-1", BookId: "b1", title: "Cyd" }),
     );
     await until(() => book.has("n3") && later.has("n3") && list.has("n3"), "n3 everywhere");
-    await tick(50);
-
-    expect(countAsked(server).NotesByBook).toBe(asked.NotesByBook);
-    expect(countAsked(server).NoteById).toBe(asked.NoteById);
-    expect(countAsked(server).Notes).toBe(asked.Notes + 1);
 
     // A rule that stops holding takes the row out of that subset only.
     await server.send((client) =>
@@ -179,6 +175,47 @@ describe("f(ready subsets, feed change)", () => {
     await until(() => !book.has("n1"), "moved out of b1");
 
     expect(list.get("n1")?.BookId).toBe("b2");
+
+    await server.send((client) => client.DeleteNote(address("acc-1", "n2"), { NoteId: "n2" }));
+    await until(() => !list.has("n2"), "removed from the whole list");
+    clock.advance();
+    await tick();
+
+    expect(titles(list)).toEqual(["n1:Ada", "n3:Cyd"]);
+    expect(countAsked(server)).toEqual(asked);
+  });
+
+  it("f(where over entries, feed changes) → selected rows and rule membership without another query", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob);
+
+    const wrapped = HighAlch.collection(NoteRows, {
+      queries: {
+        list: HighAlch.where(
+          HighAlch.entries(NotesByTitle, (answer) => answer.Items),
+          (row, input) => row.account === input.account,
+        ),
+      },
+    });
+    const clock = reloads();
+    const db = account(server, "acc-1", cleanup, { timers: clock.timers });
+    const list = observe<Note>(
+      db,
+      wrapped.list({ account: "acc-1", Offset: 0, Limit: 100 }),
+      cleanup,
+    );
+
+    await ready(list);
+    expect(titles(list)).toEqual(["n1:Ada", "n2:Bob"]);
+
+    await seed(server, cyd);
+    await until(() => list.has(cyd.NoteId), "rule placed the new row");
+    clock.advance();
+    await tick();
+
+    expect(titles(list)).toEqual(["n1:Ada", "n2:Bob", "n3:Cyd"]);
+    expect(countAsked(server).NotesByTitle).toBe(1);
   });
 
   it("f(two accounts, module-level declarations) → each client follows only its own scope", async () => {
@@ -255,30 +292,57 @@ const reloads = () => {
   };
 };
 
-describe("f(offset/limit window, feed change)", () => {
+/** Only a matching feed cause can confirm the command: the receipt cursor is unavailable. */
+const causeLayer = (server: Host, cause: string) => {
+  const api = server.wire.client;
+
+  return Layer.succeed(NotesApi.Client, {
+    ...api,
+    NotebookChanges: {
+      ...api.NotebookChanges,
+      peek: (key, options) => {
+        if (options?.atLeast) return Effect.fail(transport());
+
+        return api.NotebookChanges.peek(key, options);
+      },
+      events: (key, options) =>
+        api.NotebookChanges.events(key, options).pipe(
+          Stream.map((frame) => {
+            if (Domain.Read.isCaughtUp(frame) || frame.envelope.commandId !== cause) return frame;
+
+            return {
+              ...frame,
+              event: { ...frame.event, cause },
+              envelope: { ...frame.envelope, commandId: "feed-writer" },
+            };
+          }),
+        ),
+    },
+  });
+};
+
+describe("f(offset/limit page, feed change)", () => {
   const input = { account: "acc-1", Offset: 0, Limit: 2 };
 
-  const window = (db: DbClient) => observe<Note>(db, notes.page(input), cleanup);
+  const observePage = (db: DbClient) => observe<Note>(db, notes.page(input), cleanup);
 
-  it("f(window and ordinary subset, held row removed) → both delete it immediately; only the window backfills", async () => {
+  it("f(page, held row removed) → gone immediately; the lookahead row backfills", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
     const db = account(server, input.account, cleanup, { timers: clock.timers });
-    const page = window(db);
-    const ordinary = observe<Note>(db, notes.pageWithoutWindow(input), cleanup);
+    const page = observePage(db);
 
-    await ready(page, ordinary);
+    await ready(page);
     expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
-    expect(titles(ordinary)).toEqual(titles(page));
     const asked = countAsked(server).NotesByTitle;
 
     await server.send((client) =>
       client.DeleteNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId }),
     );
-    await until(() => !page.has(ada.NoteId) && !ordinary.has(ada.NoteId), "row removed");
+    await until(() => !page.has(ada.NoteId), "row removed");
     await server.indexed((stored) => !stored.has(ada.NoteId));
 
     expect(titles(page)).toEqual(["n2:Bob"]);
@@ -287,7 +351,7 @@ describe("f(offset/limit window, feed change)", () => {
     const release = server.hold();
 
     clock.advance();
-    await until(() => countAsked(server).NotesByTitle > asked, "window reload asked");
+    await until(() => countAsked(server).NotesByTitle > asked, "page reload asked");
 
     expect(page.isReady()).toBe(true);
     expect(titles(page)).toEqual(["n2:Bob"]);
@@ -296,47 +360,41 @@ describe("f(offset/limit window, feed change)", () => {
     await until(() => page.has(cyd.NoteId), "lookahead backfilled");
 
     expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
-    expect(titles(ordinary)).toEqual(["n2:Bob"]);
     expect(countAsked(server).NotesByTitle).toBe(asked + 1);
   });
 
-  it("f(window and ordinary subset, held row renamed) → both update in place; the window replaces the row after reordering", async () => {
+  it("f(page, held row renamed) → updated in place; the answer moves the row out of the page", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
     const db = account(server, input.account, cleanup, { timers: clock.timers });
-    const page = window(db);
-    const ordinary = observe<Note>(db, notes.pageWithoutWindow(input), cleanup);
+    const page = observePage(db);
 
-    await ready(page, ordinary);
+    await ready(page);
     const asked = countAsked(server).NotesByTitle;
 
     await server.send((client) =>
       client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title: "Zed" }),
     );
-    await until(
-      () => page.get(ada.NoteId)?.title === "Zed" && ordinary.get(ada.NoteId)?.title === "Zed",
-      "renamed in place",
-    );
+    await until(() => page.get(ada.NoteId)?.title === "Zed", "renamed in place");
     await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Zed");
 
     clock.advance();
-    await until(() => page.has(cyd.NoteId), "window reordered");
+    await until(() => page.has(cyd.NoteId), "page reordered");
 
     expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
-    expect(titles(ordinary)).toEqual(["n1:Zed", "n2:Bob"]);
     expect(countAsked(server).NotesByTitle).toBe(asked + 1);
   });
 
-  it("f(window, unknown row enters before the end) → the query places it after one reload", async () => {
+  it("f(page, unknown row enters before the end) → the query places it after one reload", async () => {
     const server = await open();
 
     await seed(server, bob, cyd);
 
     const db = account(server, input.account, cleanup);
-    const page = window(db);
+    const page = observePage(db);
 
     await ready(page);
     await seed(server, ada);
@@ -346,14 +404,14 @@ describe("f(offset/limit window, feed change)", () => {
     expect(countAsked(server).NotesByTitle).toBe(2);
   });
 
-  it("f(window, three entries and an explicit reload inside the delay) → one query", async () => {
+  it("f(page, three entries and an explicit reload inside the delay) → one query", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
     const db = account(server, input.account, cleanup, { timers: clock.timers });
-    const page = window(db);
+    const page = observePage(db);
 
     await ready(page);
 
@@ -369,12 +427,12 @@ describe("f(offset/limit window, feed change)", () => {
     expect(countAsked(server).NotesByTitle).toBe(1);
 
     clock.advance();
-    await until(() => page.has(cyd.NoteId), "window reordered");
+    await until(() => page.has(cyd.NoteId), "page reordered");
 
     expect(countAsked(server).NotesByTitle).toBe(2);
   });
 
-  it("f(window loading, a held row is renamed) → the buffered change triggers a fresh answer", async () => {
+  it("f(page loading, a held row is renamed) → the buffered change triggers a fresh answer", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
@@ -385,7 +443,7 @@ describe("f(offset/limit window, feed change)", () => {
 
     await ready(witness);
     const release = server.hold();
-    const page = window(db);
+    const page = observePage(db);
 
     await until(() => countAsked(server).NotesByTitle === 1, "first answer held");
 
@@ -400,48 +458,27 @@ describe("f(offset/limit window, feed change)", () => {
     expect(titles(page)).toEqual(["n1:Zed", "n2:Bob"]);
 
     clock.advance();
-    await until(() => page.has(cyd.NoteId), "window reordered");
+    await until(() => page.has(cyd.NoteId), "page reordered");
 
     expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
     expect(countAsked(server).NotesByTitle).toBe(2);
   });
 
   it.each([false, true])(
-    "f(window, optimistic insert confirmed by cause) → visible until the corrective reload (query already in flight: %s)",
+    "f(page, optimistic insert confirmed by cause) → visible until the corrective reload (query already in flight: %s)",
     async (inFlight) => {
       const server = await open();
 
       await seed(server, ada, bob);
 
       const clock = reloads();
-      const api = server.wire.client;
-      const cause = "window-insert";
-      let confirmed = false;
+      const cause = "page-insert";
+      const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
       const db = account(server, input.account, cleanup, {
         timers: clock.timers,
-        layer: Layer.succeed(NotesApi.Client, {
-          ...api,
-          NotebookChanges: {
-            ...api.NotebookChanges,
-            events: (key, options) =>
-              api.NotebookChanges.events(key, options).pipe(
-                Stream.map((frame) => {
-                  if (Domain.Read.isCaughtUp(frame) || frame.envelope.commandId !== cause)
-                    return frame;
-
-                  confirmed = true;
-
-                  return {
-                    ...frame,
-                    event: { ...frame.event, cause },
-                    envelope: { ...frame.envelope, commandId: "feed-writer" },
-                  };
-                }),
-              ),
-          },
-        }),
+        layer: causeLayer(server, cause),
       });
-      const page = window(db);
+      const page = observePage(db);
 
       await ready(page);
 
@@ -455,7 +492,7 @@ describe("f(offset/limit window, feed change)", () => {
 
       const inserted = notes.create.with({ client: db })(
         { account: input.account, BookId: "b1", title: "Zed" },
-        { id: cause },
+        { id: cause, onCommitted: committed.resolve },
       );
       const key = HighAlch.created(inserted);
       const seen: Array<string | undefined> = [];
@@ -465,7 +502,7 @@ describe("f(offset/limit window, feed change)", () => {
 
       expect(page.get(key)?.title).toBe("Zed");
       await inserted.when("settled");
-      await until(() => confirmed, "feed delivered cause");
+      expect(await committed.promise).toMatchObject({ _tag: "Committed" });
       await server.indexed((stored) => stored.has(key));
       expect(page.get(key)?.title).toBe("Zed");
 
@@ -493,14 +530,14 @@ describe("f(offset/limit window, feed change)", () => {
     },
   );
 
-  it("f(window reloading, a held row the older answer drops is renamed again) → it stays until the next answer", async () => {
+  it("f(page reloading, a held row the older answer drops is renamed again) → it stays until the next answer", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
     const db = account(server, input.account, cleanup, { timers: clock.timers });
-    const page = window(db);
+    const page = observePage(db);
 
     await ready(page);
 
@@ -519,7 +556,7 @@ describe("f(offset/limit window, feed change)", () => {
 
     await rename("Zed");
 
-    // The older answer, asked while the note is Zed, places it outside the window.
+    // The older answer, asked while the note is Zed, places it outside the page.
     const release = server.hold();
 
     clock.advance();
@@ -538,14 +575,14 @@ describe("f(offset/limit window, feed change)", () => {
     expect(seen).not.toContain(undefined);
   });
 
-  it("f(window reloading, one change's delay passes, then another change) → one more query, not two", async () => {
+  it("f(page reloading, one change's delay passes, then another change) → one more query, not two", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
     const db = account(server, input.account, cleanup, { timers: clock.timers });
-    const page = window(db);
+    const page = observePage(db);
 
     await ready(page);
 
@@ -580,10 +617,64 @@ describe("f(offset/limit window, feed change)", () => {
     expect(titles(page)).toEqual(["n1:Ada 4", "n2:Bob"]);
   });
 
-  it("f(window, unknown row removed) → no reload; a server-rendering window also stays as loaded", async () => {
+  it("f(page reloading, change covered by the reload cursor) → the answer needs no follow-up", async () => {
     const server = await open();
 
     await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const api = server.wire.client;
+    const gate = Promise.withResolvers<void>();
+    let holdCursor = false;
+    let readingCursor = false;
+    const db = account(server, input.account, cleanup, {
+      timers: clock.timers,
+      layer: Layer.succeed(NotesApi.Client, {
+        ...api,
+        NotebookChanges: {
+          ...api.NotebookChanges,
+          peek: (key, options) =>
+            Effect.gen(function* () {
+              if (holdCursor) {
+                readingCursor = true;
+                yield* Effect.promise(() => gate.promise);
+              }
+
+              return yield* api.NotebookChanges.peek(key, options);
+            }),
+        },
+      }),
+    });
+    const page = observePage(db);
+
+    await ready(page);
+    holdCursor = true;
+    HighAlch.reload(db, NoteRows);
+    clock.advance();
+    await until(() => readingCursor, "reload waiting to read cursor");
+
+    await server.send((client) =>
+      client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title: "Zed" }),
+    );
+    await until(() => page.get(ada.NoteId)?.title === "Zed", "rename before cursor read");
+    await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Zed");
+    clock.advance();
+
+    gate.resolve();
+    await until(() => page.has(cyd.NoteId), "answer includes the rename");
+    clock.advance();
+    await tick();
+
+    expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
+    expect(countAsked(server).NotesByTitle).toBe(2);
+  });
+
+  it("f(later page, row on earlier page removed) → one re-ask shifts the live page", async () => {
+    const server = await open();
+
+    const dan = { ...ada, NoteId: "n4", title: "Dan" };
+
+    await seed(server, ada, bob, cyd, dan);
 
     const clock = reloads();
     const db = account(server, input.account, cleanup, { timers: clock.timers });
@@ -591,31 +682,91 @@ describe("f(offset/limit window, feed change)", () => {
       live: false,
       timers: clock.timers,
     });
-    const page = window(db);
-    const snapshot = window(rendering);
-    const witness = observe<Note>(db, notes.get({ NoteId: cyd.NoteId }), cleanup);
+    const source = notes.page({ ...input, Offset: 1 });
+    const page = observe<Note>(db, source, cleanup);
+    const snapshot = observe<Note>(rendering, source, cleanup);
+    const witness = observe<Note>(db, notes.get({ NoteId: ada.NoteId }), cleanup);
 
     await ready(page, snapshot, witness);
-
-    await server.send((client) =>
-      client.DeleteNote(address(input.account, cyd.NoteId), { NoteId: cyd.NoteId }),
-    );
-    await until(() => !witness.has(cyd.NoteId), "unknown removal delivered");
-    clock.advance();
-    await tick();
-
-    expect(countAsked(server).NotesByTitle).toBe(2);
-    expect(server.wire.counts.open).toBe(1);
+    expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
 
     await server.send((client) =>
       client.DeleteNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId }),
     );
-    await until(() => !page.has(ada.NoteId), "held removal delivered");
-    clock.advance();
-    await until(() => countAsked(server).NotesByTitle === 3, "live window reloaded");
+    await until(() => !witness.has(ada.NoteId), "earlier removal delivered");
+    await server.indexed((stored) => !stored.has(ada.NoteId));
+    expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
+    expect(countAsked(server).NotesByTitle).toBe(2);
 
-    expect(titles(snapshot)).toEqual(["n1:Ada", "n2:Bob"]);
+    clock.advance();
+    await until(() => page.has(dan.NoteId), "page shifted");
+
+    expect(titles(page)).toEqual(["n3:Cyd", "n4:Dan"]);
+    expect(titles(snapshot)).toEqual(["n2:Bob", "n3:Cyd"]);
+    expect(countAsked(server).NotesByTitle).toBe(3);
+    expect(server.wire.counts.open).toBe(1);
   });
+
+  it.each([
+    { action: "rename", optimistic: "Abel", rows: ["n1:Abel", "n2:Bob"] },
+    { action: "remove", optimistic: undefined, rows: ["n2:Bob", "n3:Cyd"] },
+  ])(
+    "f(page, optimistic $action confirmed by cause) → no flicker through one re-ask",
+    async ({ action, optimistic, rows }) => {
+      const server = await open();
+
+      await seed(server, ada, bob, cyd);
+
+      const clock = reloads();
+      const cause = `page-${action}`;
+      const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
+      const db = account(server, input.account, cleanup, {
+        timers: clock.timers,
+        layer: causeLayer(server, cause),
+      });
+      const page = observePage(db);
+
+      await ready(page);
+
+      const seen: Array<string | undefined> = [];
+      const subscription = page.subscribeChanges(() => seen.push(page.get(ada.NoteId)?.title), {
+        includeInitialState: false,
+      });
+
+      cleanup.push(async () => subscription.unsubscribe());
+      const options = {
+        id: cause,
+        onCommitted: committed.resolve,
+      };
+      const command = Option.match(Option.fromUndefinedOr(optimistic), {
+        onSome: (title) =>
+          notes.rename.with({ client: db })({ NoteId: ada.NoteId, title }, options),
+        onNone: () => notes.remove.with({ client: db })({ NoteId: ada.NoteId }, options),
+      });
+
+      expect(page.get(ada.NoteId)?.title).toBe(optimistic);
+      await command.when("settled");
+      expect(await committed.promise).toMatchObject({ _tag: "Committed" });
+      expect(page.get(ada.NoteId)?.title).toBe(optimistic);
+      await server.indexed((stored) => stored.get(ada.NoteId)?.title === optimistic);
+
+      const release = server.hold();
+
+      clock.advance();
+      await until(() => countAsked(server).NotesByTitle === 2, "corrective query held");
+      expect(page.isReady()).toBe(true);
+      expect(page.get(ada.NoteId)?.title).toBe(optimistic);
+      release();
+      await tick();
+      clock.advance();
+      await tick();
+
+      expect(titles(page)).toEqual(rows);
+      expect(seen.length).toBeGreaterThan(0);
+      expect([...new Set(seen)]).toEqual([optimistic]);
+      expect(countAsked(server).NotesByTitle).toBe(2);
+    },
+  );
 });
 
 describe("f(ready subsets, command)", () => {
@@ -633,7 +784,7 @@ describe("f(ready subsets, command)", () => {
     const created = create({ account: "acc-1", BookId: "b2", title: "Cyd" });
     const n3 = HighAlch.created(created);
 
-    // Optimistic at once under a fresh client-generated key: in the list (no rule), not in
+    // Optimistic at once under a fresh client-generated key: in the whole list, not in
     // book b1 (its rule refuses b2).
     expect(n3).toMatch(/^[0-9a-f-]{36}$/);
     expect(list.get(n3)?.title).toBe("Cyd");
@@ -888,7 +1039,7 @@ describe("f(ready subsets, command)", () => {
     const read: Array<Partial<Note>> = [];
 
     const saved = HighAlch.collection(NoteRows, {
-      queries: { list: Notes },
+      queries: { list: HighAlch.all(Notes) },
       commands: {
         rename: HighAlch.updates(RenameNote, {
           // A call also sets the note's book, as a form sends every field it shows.
@@ -970,7 +1121,7 @@ describe("f(declared targets, input-only command)", () => {
 
     // Declared next to the entity's target: touching a note addresses the note `n2` instead.
     const elsewhere = HighAlch.collection(NoteRows, {
-      queries: { list: Notes },
+      queries: { list: HighAlch.all(Notes) },
       commands: {
         touch: HighAlch.sends(TouchNote, { target: (_input, scope) => address(scope, "n2") }),
         rename: HighAlch.updates(RenameNote, {

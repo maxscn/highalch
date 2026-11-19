@@ -130,8 +130,8 @@ Domain definitions, not from an Api object.
 ```ts
 export const customers = HighAlch.collection(CustomerRows, {
   queries: {
-    list: Customers, // a Domain.Query
-    page: HighAlch.windowed(CustomersByName),
+    list: HighAlch.all(Customers),
+    page: CustomersByName,
     get: HighAlch.one(Customer, (row, input) => row.CustomerId === input.CustomerId),
     byProject: HighAlch.where(
       CustomersByProject,
@@ -163,19 +163,24 @@ export const refresh = HighAlch.command(RefreshSomething, {
 });
 ```
 
-**How a query's answer becomes rows** is read from the query itself: a `paged` query's
-`entries`, an array's elements, or one row (none for `null`). A query whose answer wraps its rows
-otherwise (`{ Items, Count, LastEvaluatedKey }`) declares where they are:
-`HighAlch.entries(Customers, (answer) => answer.Items, rule?)`, with an optional membership rule
-as for `where`. Each query's entries must be the entity's rows (a type error names the query
-otherwise). A paged query's accessor takes the page
-as a second argument: `customers.list(input, { after, take })`.
+**Who decides which rows belong?** Use `all(Query)` for the whole list in the client's scope.
+Use `where(Query, rule)` for a list whose membership can be tested against a feed row and the
+query input, or `one(Query, rule)` for a single row read with `.findOne()`. Use a bare query when
+the answer decides membership. For example, if `CustomersByName` sorts by name and then key,
+`customers.page({ Offset: 0, Limit: 101 })` reads 100 rows and one lookahead row.
 
-Use `HighAlch.windowed(Query)` when the query alone decides which rows belong, as with an
-offset/limit query that sorts by name and then by key. For example,
-`customers.page({ Offset: 0, Limit: 101 })` reads 100 rows and one lookahead row from
-`CustomersByName`. If the answer wraps its rows, use
-`HighAlch.windowed(CustomersByName, (answer) => answer.Items)`. A window takes no membership rule.
+The query's answer supplies the rows as a `paged` query's `entries`, an array's elements, or one
+row (none for `null`). Use `entries(Query, select)` when the answer wraps its rows, such as
+`{ Items, Count }`. Compose it with a membership helper when the client can decide:
+
+```ts
+const projectRows = HighAlch.entries(WrappedCustomersByProject, (answer) => answer.Items);
+const byProject = HighAlch.where(projectRows, (row, input) => row.ProjectId === input.ProjectId);
+```
+
+Use `projectRows` by itself when the query decides. `one` and `all` can also take an `entries`
+declaration. Each query must return the entity's rows after selection. A `paged` query's accessor
+takes its page as the second argument, for example `customers.search(input, { after, take })`.
 
 **Which row a command addresses, and which aggregate.** A call passes only the command's input;
 the package resolves the rest from the declarations, in this order:
@@ -449,26 +454,22 @@ cursor (buffered meanwhile), applied in one sync transaction before `markReady()
 missed and nothing is applied twice: entries are deduplicated by `seq`. The subscription resumes
 from its last `seq` after a failure.
 
-The package fans feed events and optimistic edits out to every materialised subset:
+The declaration determines who places rows after a feed change:
 
-- `Removed` deletes the row where present.
-- `Upserted` replaces it where present. With a membership rule that no longer holds, it leaves
-  that subset.
-- A row a subset does not have is inserted when the query has a rule (`one`/`where`) that
-  holds; without a rule the subset schedules a debounced reload (`reloadDelay`), since only the
-  query knows where the row belongs. A row this client already shows optimistically (its own
-  insert) is kept until that reload, so it does not flicker away.
+- With `where`, `one` or `all`, the rule decides. An upsert inserts or updates a row when the rule
+  holds and removes it when the rule stops holding. A removal deletes the row where present.
+  `all` always includes the row. These declarations send no queries in response to feed changes,
+  so the rule must agree with the server query.
+- Without a rule, the query decides. The subset patches an upsert or removal in place for a row
+  it already shows. It then re-asks after any change to the entity, including a removal outside
+  the subset that can shift a later page. The subset stays ready and replaces its rows in one
+  snapshot transaction when the answer arrives. A confirmed optimistic insert can stay visible
+  until the answer places it.
 
-A window also reloads after each held row's removal or upsert. It applies the feed change
-immediately and stays ready while the query runs. The answer replaces the rows in one snapshot
-transaction. This costs one query per burst of changes to the entity for each loaded window.
-Removing a row outside a window does not reload it, so a removal from an earlier page can leave
-later pages stale.
-
-Without `windowed`, a page does not backfill after a removal until another change or an explicit
-reload refreshes it. Rule-based subsets trust the rule to match the server's query. Creates use
-client-chosen keys (`inserts` chooses one and the entity's `target` addresses it). If the server
-uses another key, the new row appears through the rule or the reload.
+A subset whose query decides sends one query per burst of changes to its entity, using
+`reloadDelay`. Declare a rule or use `all` to avoid that query. `HighAlch.reload(db, Rows)` shares
+the same debounce. Creates use client-chosen keys. If the server uses another key, the row appears
+through the rule or the reload.
 
 ## XState: `@highalch/db/xstate`
 
