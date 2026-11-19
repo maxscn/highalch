@@ -264,7 +264,13 @@ const start = <A, E extends TaggedFailure>(
 
   const finish = (exit: Exit.Exit<Settled<A>, E>) => {
     Deferred.doneUnsafe(outcome, exit);
-    react(exit, options);
+
+    // A reaction that throws is the consumer's bug: log it, and leave the settlement as it is.
+    try {
+      react(exit, options);
+    } catch (cause) {
+      Effect.runFork(Effect.logError("HighAlch: a command's reaction threw", Cause.die(cause)));
+    }
   };
 
   // TanStack publishes its settlement through this promise, including conflicting rollbacks.
@@ -473,12 +479,19 @@ export const make = <C extends Domain.Command.Any>(
     with: rebind,
     effect,
     // The executor runs now: the edit shows before `result` returns, and a throw rejects.
-    result: (input: InputOf<C>) =>
-      new Promise<Settled<A> | E>((resolve, reject) => {
+    result: (input: InputOf<C>) => {
+      const settled = new Promise<Settled<A> | E>((resolve, reject) => {
         const { outcome } = start<A, E>(clientOf(), command, edit, input, bound);
 
         Effect.runPromise(Effect.catch(outcome, Effect.succeed)).then(resolve, reject);
-      }),
+      });
+
+      // A caller that never awaits it must not get an unhandled rejection; one that does still
+      // receives the defect.
+      settled.catch(none);
+
+      return settled;
+    },
     options,
     paced: Option.getOrUndefined(
       Option.map(edit.paced, (inputOf) => pace(command, edit, inputOf, clientOf)),

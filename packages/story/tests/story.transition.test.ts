@@ -469,9 +469,10 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
     let outcome: Promise<Outcome> | undefined;
 
     return {
-      call: (title: string, bound = true) =>
+      call: (title: string, bound = true, applied = true) =>
         Story.check(`result of rename to ${title}`, async (world) => {
           const { db } = await world.connect();
+          const shown = db.collection(one);
           let command = notes.rename;
           let release = () => {};
 
@@ -481,6 +482,9 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
           try {
             outcome = command.result({ NoteId: "n1", title });
+
+            // In the same frame as the call: the edit is applied before `result` returns.
+            if (applied) expect(shown.get("n1")?.title).toBe(title);
           } finally {
             release();
           }
@@ -526,7 +530,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
     );
   });
 
-  it("f(locked rename) → the promise resolves with the typed rejection, the original instance; the row rolls back", async () => {
+  it("f(locked rename) → the promise resolves with the typed rejection; the row rolls back", async () => {
     const rename = held();
 
     await story.with({ invariants: Story.invariants })(
@@ -567,9 +571,61 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
         await Effect.runPromise(HighAlch.close(db));
       }),
-      rename.call("Ada 2"),
+      rename.call("Ada 2", true, false),
       rename.rejects("rejected", "HighAlch client is closing or closed"),
     );
+  });
+
+  it("f(result never awaited, with no client registered) → no unhandled rejection", async () => {
+    const unhandled: Array<unknown> = [];
+    const note = (reason: unknown) => unhandled.push(reason);
+
+    process.on("unhandledRejection", note);
+
+    try {
+      void notes.rename.result({ NoteId: "n1", title: "Ada 2" });
+      await new Promise((done) => setTimeout(done, 20));
+    } finally {
+      process.off("unhandledRejection", note);
+    }
+
+    expect(unhandled).toEqual([]);
+  });
+
+  it("f(rename whose onCommitted throws) → the promise still resolves Committed; no unhandled rejection", async () => {
+    const unhandled: Array<unknown> = [];
+    const note = (reason: unknown) => unhandled.push(reason);
+    let outcome: Promise<Outcome> | undefined;
+
+    process.on("unhandledRejection", note);
+
+    try {
+      await story(
+        exist(ada),
+        Story.open(one),
+        Story.check("result of a rename with a throwing reaction", async (world) => {
+          const { db } = await world.connect();
+
+          outcome = notes.rename
+            .with({
+              client: db,
+              onCommitted: () => {
+                throw new Error("a reaction that throws");
+              },
+            })
+            .result({ NoteId: "n1", title: "Ada 2" });
+        }),
+        Story.settle(),
+        Story.check("resolved Committed", async () => {
+          expect((await Option.getOrThrow(Option.fromUndefinedOr(outcome)))._tag).toBe("Committed");
+        }),
+      );
+      await new Promise((done) => setTimeout(done, 20));
+    } finally {
+      process.off("unhandledRejection", note);
+    }
+
+    expect(unhandled).toEqual([]);
   });
 
   it("f(rename with no client registered) → the promise rejects; nothing is thrown at the call", async () => {
