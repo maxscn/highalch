@@ -93,6 +93,31 @@ export const entries = <Q extends Domain.Query.Any, Entry>(
   rule?: (row: Entry, input: QueryInput<Q>) => boolean,
 ) => new Entries(query, select, Option.fromUndefinedOr(rule));
 
+/** A query that decides membership for an ordered window of rows. */
+export class Windowed<Q extends Domain.Query.Any, Entry = EntryOf<Q>> {
+  declare readonly rule?: never;
+
+  constructor(
+    readonly query: Q,
+    readonly select: Option.Option<
+      (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>
+    >,
+  ) {}
+}
+
+/** Reloads a window after an upsert or a held row's removal. Pass `select` for a wrapped answer. */
+export function windowed<Q extends Domain.Query.Any>(query: Q): Windowed<Q>;
+export function windowed<Q extends Domain.Query.Any, Entry>(
+  query: Q,
+  select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
+): Windowed<Q, Entry>;
+export function windowed<Q extends Domain.Query.Any, Entry>(
+  query: Q,
+  select?: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
+): Windowed<Q, Entry> {
+  return new Windowed(query, Option.fromUndefinedOr(select));
+}
+
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
 
@@ -296,13 +321,15 @@ export const sends = <C extends Domain.Command.Any, const O extends Addressing<C
   options?: O & Addressing<C>,
 ): Sends<C, Has<O, "key">, Has<O, "target">> => new Sends(command, addressing(options ?? {}));
 
-/** What `queries` may hold: a bare query, one with a membership rule, or one with `entries`. */
+/** What `queries` may hold: a bare query or a declaration that describes how to sync its rows. */
 export type QuerySpec =
   | Domain.Query.Any
   // oxlint-disable-next-line typescript/no-explicit-any
   | Membership<any>
   // oxlint-disable-next-line typescript/no-explicit-any
-  | Entries<any, any>;
+  | Entries<any, any>
+  // oxlint-disable-next-line typescript/no-explicit-any
+  | Windowed<any, any>;
 
 /** A row being edited: its fields writable. */
 export type Draft<P> = { -readonly [K in keyof P]: P[K] };
@@ -323,17 +350,16 @@ export type CommandSpec<Row extends object> =
   // oxlint-disable-next-line typescript/no-explicit-any
   | Sends<any, boolean, boolean>;
 
-type QueryOf<S> =
-  S extends Membership<infer Q>
-    ? Q
-    : S extends Entries<infer Q, infer _Entry>
-      ? Q
-      : S extends Domain.Query.Any
-        ? S
-        : never;
+type QueryOf<S> = S extends { readonly query: infer Q extends Domain.Query.Any }
+  ? Q
+  : S extends Domain.Query.Any
+    ? S
+    : never;
 
-/** The rows a query spec answers: its `entries`, else its query's entries. */
-type SpecEntryOf<S> = S extends Entries<infer _Q, infer Entry> ? Entry : EntryOf<QueryOf<S>>;
+/** The rows a query spec answers: its selected rows, else its query's entries. */
+type SpecEntryOf<S> = S extends Entries<infer _Q, infer Entry> | Windowed<infer _Q, infer Entry>
+  ? Entry
+  : EntryOf<QueryOf<S>>;
 
 type CommandOf<S> = S extends { readonly command: infer C extends Domain.Command.Any }
   ? C
@@ -427,14 +453,15 @@ export const stable = (value: Input | Page): string =>
 /** The key of a row of an entity. */
 const keyOf = (entity: Rows.Any) => (row: Row) => keyIn(entity.rows.key, row);
 
-/** A query spec's query, membership rule and row reader. */
-const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
+/** A query spec's query, membership rule, row reader and window policy. */
+const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select" | "windowed"> => {
   if (spec instanceof Membership)
     return {
       query: spec.query,
       // SAFETY: the rule reads this query's rows and input.
       rule: Option.some(spec.rule as (row: Row, input: Input) => boolean),
       select: Option.none(),
+      windowed: false,
     };
 
   if (spec instanceof Entries)
@@ -444,9 +471,19 @@ const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
       rule: spec.rule as Option.Option<(row: Row, input: Input) => boolean>,
       // SAFETY: `select` reads this query's answers, decoded by its schema.
       select: Option.some(spec.select as (answer: Answer) => ReadonlyArray<Row>),
+      windowed: false,
     };
 
-  return { query: spec, rule: Option.none(), select: Option.none() };
+  if (spec instanceof Windowed)
+    return {
+      query: spec.query,
+      rule: Option.none(),
+      // SAFETY: as above.
+      select: spec.select as Option.Option<(answer: Answer) => ReadonlyArray<Row>>,
+      windowed: true,
+    };
+
+  return { query: spec, rule: Option.none(), select: Option.none(), windowed: false };
 };
 
 /** A subset's descriptor: materialised per client, synced by a `Subset` run. */
@@ -621,12 +658,16 @@ export const collection = <
   } & Checks<R, Queries>,
 ): Collection<R, Queries, Commands> => {
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
-    const { query, rule, select } = readerOf(spec);
+    const reader = readerOf(spec);
+    const { query } = reader;
+    let prefix = "";
+
+    if (reader.windowed) prefix = "windowed:";
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
-        { entity: rows, query, input, page, rule, select },
-        `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
+        { ...reader, entity: rows, input, page },
+        `${prefix}${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
       );
 
     return [name, accessor] as const;

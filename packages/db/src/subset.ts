@@ -19,6 +19,16 @@ export type Spec = {
   readonly rule: Option.Option<(row: Row, input: Input) => boolean>;
   /** Reads the rows of one answer, when the declaration says where they are (`entries`). */
   readonly select: Option.Option<(answer: Answer) => ReadonlyArray<Row>>;
+  /** Whether the query alone decides which rows are in the window. */
+  readonly windowed: boolean;
+};
+
+type Buffered = {
+  readonly entries: Array<Delivered>;
+  /** Optimistic inserts confirmed while this query was in flight. */
+  readonly inserted: Set<number>;
+  /** The reload's debounce elapsed while the query was still in flight. */
+  reload: boolean;
 };
 
 /**
@@ -61,7 +71,7 @@ export class Subset {
   /** The rows this subset synced, by key. */
   private synced = new Map<string, Row>();
   /** Changes the feed delivered while a load or reload runs; applied on top of its answer. */
-  private buffer: Array<Delivered> | undefined;
+  private buffer: Buffered | undefined;
   /** The cancel of a scheduled reload, while one is scheduled. */
   private reloading: (() => void) | undefined;
   private feed: Subscription | undefined;
@@ -114,9 +124,11 @@ export class Subset {
 
   /** Changes from the feed: applied now when ready, buffered while a load or reload runs. */
   receive = (delivered: ReadonlyArray<Delivered>) => {
-    this.buffer?.push(...delivered);
+    if (this.closed) return;
 
-    if (!this.ready || this.closed) return;
+    this.buffer?.entries.push(...delivered);
+
+    if (!this.ready) return;
 
     const reload = this.apply(delivered);
 
@@ -140,6 +152,7 @@ export class Subset {
     if (this.closed) return;
 
     this.closed = true;
+    this.buffer = undefined;
     this.reloading?.();
     this.params.fail(error);
   }
@@ -150,13 +163,20 @@ export class Subset {
 
     this.reloading = this.connection.after(this.connection.reloadDelay, "reload", () => {
       this.reloading = undefined;
+
+      if (this.spec.windowed && this.buffer) {
+        this.buffer.reload = true;
+
+        return;
+      }
+
       void this.load(1);
     });
   };
 
   /**
-   * Applies feed changes to the synced rows in one sync transaction. Returns whether a row arrived
-   * that this subset cannot place without a rule, so it should reload.
+   * Applies feed changes to the synced rows in one sync transaction. Returns whether the query
+   * needs to confirm membership.
    */
   private apply(delivered: ReadonlyArray<Delivered>) {
     const { begin, write, commit } = this.params;
@@ -169,11 +189,12 @@ export class Subset {
       open = true;
     };
 
-    for (const { change } of delivered)
+    for (const { seq, change } of delivered)
       if (Rows.isRemoved(change)) {
         if (this.synced.delete(change.key)) {
           start();
           write({ type: "delete", key: change.key });
+          reload ||= this.spec.windowed;
         }
       } else {
         const key = this.keyOf(change.row);
@@ -185,6 +206,7 @@ export class Subset {
           if (Option.getOrElse(belongs, () => true)) {
             this.synced.set(key, change.row);
             write({ type: "update", value: change.row });
+            reload ||= this.spec.windowed;
           } else {
             this.synced.delete(key);
             write({ type: "delete", key });
@@ -195,6 +217,8 @@ export class Subset {
           this.synced.set(key, change.row);
           write({ type: "insert", value: change.row });
           reload ||= Option.isNone(belongs);
+
+          if (this.spec.windowed) this.buffer?.inserted.add(seq);
         } else reload ||= Option.isNone(belongs);
       }
 
@@ -204,22 +228,27 @@ export class Subset {
   }
 
   /** Applies buffered changes after `cursor` to a fresh answer, without writing. */
-  private settle(rows: Map<string, Row>, buffered: ReadonlyArray<Delivered>, cursor: number) {
+  private settle(rows: Map<string, Row>, buffered: Buffered, cursor: number) {
     let reload = false;
 
-    for (const { seq, change } of buffered) {
+    for (const { seq, change } of buffered.entries) {
       if (seq <= cursor) continue;
 
       if (Rows.isRemoved(change)) {
-        rows.delete(change.key);
+        const removed = rows.delete(change.key);
+        reload ||= this.spec.windowed && removed;
         continue;
       }
 
       const key = this.keyOf(change.row);
       const belongs = this.member(change.row);
 
+      reload ||= this.spec.windowed;
+
       if (rows.has(key) && !Option.getOrElse(belongs, () => true)) rows.delete(key);
       else if (rows.has(key) || Option.getOrElse(belongs, () => false)) rows.set(key, change.row);
+      // The in-flight answer can predate confirmation. Keep the insert until the next answer.
+      else if (buffered.inserted.has(seq)) rows.set(key, change.row);
       else reload ||= Option.isNone(belongs);
     }
 
@@ -235,7 +264,7 @@ export class Subset {
   private load = async (attempt: number): Promise<void> => {
     if (this.closed) return;
 
-    const buffered: Array<Delivered> = [];
+    const buffered: Buffered = { entries: [], inserted: new Set(), reload: false };
     const { entity, query } = this.spec;
     const name = `${entity.entityName}/${query.queryName}`;
 
@@ -254,7 +283,8 @@ export class Subset {
         this.buffer = undefined;
         this.write(rows);
 
-        if (reload) this.schedule();
+        if (buffered.reload) void this.load(1);
+        else if (reload) this.schedule();
 
         return Option.none();
       },
@@ -263,7 +293,8 @@ export class Subset {
 
     if (Option.isNone(failure) || this.closed) return;
 
-    this.buffer = undefined;
+    // For a window, a retry also covers any reloads requested while this attempt was in flight.
+    if (!this.spec.windowed) this.buffer = undefined;
 
     const error = failure.value;
     const delay = delayOf(this.connection, error, attempt);

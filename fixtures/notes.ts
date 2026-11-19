@@ -11,6 +11,7 @@ import {
   NoteRows,
   Notes,
   NotesByBook,
+  NotesByTitle,
   NoteStats,
   PinNote,
   RenameBook,
@@ -27,6 +28,8 @@ export const notes = HighAlch.collection(NoteRows, {
     list: Notes,
     get: HighAlch.one(NoteById, (row, input) => row.NoteId === input.NoteId),
     byBook: HighAlch.where(NotesByBook, (row, input) => row.BookId === input.BookId),
+    page: HighAlch.windowed(NotesByTitle, (answer) => answer.Items),
+    pageWithoutWindow: HighAlch.entries(NotesByTitle, (answer) => answer.Items),
   },
   commands: {
     // The key is a fresh client-generated id.

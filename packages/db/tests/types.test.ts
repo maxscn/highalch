@@ -12,6 +12,8 @@ import {
   NotebookChanges,
   NoteRows,
   Note,
+  NotesByBook,
+  NotesByTitle,
   NoteStats,
   type NotesApi,
   PinNote,
@@ -172,6 +174,34 @@ export function Recovered() {
   });
 
   return null;
+}
+
+/** Windowed queries infer the input and rows from the query and its optional selector. */
+export function Windows() {
+  const window = HighAlch.collection(NoteRows, {
+    queries: {
+      byBook: HighAlch.windowed(NotesByBook),
+      page: HighAlch.windowed(NotesByTitle, (answer) => answer.Items),
+    },
+  });
+
+  expectTypeOf(window.byBook).toEqualTypeOf<
+    HighAlch.Subsets<typeof NoteRows, typeof NotesByBook>
+  >();
+  expectTypeOf(window.page).toEqualTypeOf<HighAlch.Subsets<typeof NoteRows, typeof NotesByTitle>>();
+
+  // @ts-expect-error a window cannot wrap a query with a membership rule
+  HighAlch.windowed(HighAlch.where(NotesByBook, (row, input) => row.BookId === input.BookId));
+
+  // @ts-expect-error a membership rule cannot wrap a window
+  HighAlch.where(HighAlch.windowed(NotesByBook), () => true);
+
+  HighAlch.windowed(
+    NotesByTitle,
+    (answer) => answer.Items,
+    // @ts-expect-error a wrapped window takes a selector only
+    () => true,
+  );
 }
 
 /** Commands: input-only calls typed from the Domain definitions, `onRejected` checked. */
@@ -351,5 +381,5 @@ export const Declarations = () => {
 };
 
 it("type-level transitions compile", () => {
-  expect([Recovered, Commands, Declarations]).toHaveLength(3);
+  expect([Recovered, Windows, Commands, Declarations]).toHaveLength(4);
 });

@@ -131,6 +131,7 @@ Domain definitions, not from an Api object.
 export const customers = HighAlch.collection(CustomerRows, {
   queries: {
     list: Customers, // a Domain.Query
+    page: HighAlch.windowed(CustomersByName),
     get: HighAlch.one(Customer, (row, input) => row.CustomerId === input.CustomerId),
     byProject: HighAlch.where(
       CustomersByProject,
@@ -169,6 +170,12 @@ otherwise (`{ Items, Count, LastEvaluatedKey }`) declares where they are:
 as for `where`. Each query's entries must be the entity's rows (a type error names the query
 otherwise). A paged query's accessor takes the page
 as a second argument: `customers.list(input, { after, take })`.
+
+Use `HighAlch.windowed(Query)` when the query alone decides which rows belong, as with an
+offset/limit query that sorts by name and then by key. For example,
+`customers.page({ Offset: 0, Limit: 101 })` reads 100 rows and one lookahead row from
+`CustomersByName`. If the answer wraps its rows, use
+`HighAlch.windowed(CustomersByName, (answer) => answer.Items)`. A window takes no membership rule.
 
 **Which row a command addresses, and which aggregate.** A call passes only the command's input;
 the package resolves the rest from the declarations, in this order:
@@ -452,11 +459,16 @@ The package fans feed events and optimistic edits out to every materialised subs
   query knows where the row belongs. A row this client already shows optimistically (its own
   insert) is kept until that reload, so it does not flicker away.
 
-Trade-offs: a bare query (no rule) reloads on every unknown row of its entity; a page does not
-backfill after a removal until it reloads; rule-based subsets trust the rule to match the
-server's query. Creates use client-chosen keys (`inserts` chooses one and the entity's `target`
-addresses it): a create whose server row has another key (a per-command `target` that ignores the
-key) appears through the rule or the reload, not in place.
+A window also reloads after each held row's removal or upsert. It applies the feed change
+immediately and stays ready while the query runs. The answer replaces the rows in one snapshot
+transaction. This costs one query per burst of changes to the entity for each loaded window.
+Removing a row outside a window does not reload it, so a removal from an earlier page can leave
+later pages stale.
+
+Without `windowed`, a page does not backfill after a removal until another change or an explicit
+reload refreshes it. Rule-based subsets trust the rule to match the server's query. Creates use
+client-chosen keys (`inserts` chooses one and the entity's `target` addresses it). If the server
+uses another key, the new row appears through the rule or the reload.
 
 ## XState: `@highalch/db/xstate`
 

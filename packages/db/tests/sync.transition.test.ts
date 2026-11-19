@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import * as Domain from "@alchemy.run/domain";
 import {
   createOptimisticAction,
   createPacedMutations,
   debounceStrategy,
   DbClient,
 } from "@tanstack/db";
-import { Effect, Layer, Option, Predicate } from "effect";
+import { Effect, Layer, Option, Predicate, Stream } from "effect";
 import * as HighAlch from "@highalch/db";
 import { account, observe, seed, tick, titles, until, type Host } from "../../../fixtures/harness";
 import {
@@ -43,6 +44,8 @@ const open = async (): Promise<Host> => {
 const ada = { NoteId: "n1", account: "acc-1", BookId: "b1", title: "Ada" };
 
 const bob = { NoteId: "n2", account: "acc-1", BookId: "b2", title: "Bob" };
+
+const cyd = { NoteId: "n3", account: "acc-1", BookId: "b1", title: "Cyd" };
 
 const eve = { NoteId: "e1", account: "acc-2", BookId: "b1", title: "Eve" };
 
@@ -219,9 +222,314 @@ const countAsked = (server: Host) => {
     Notes: count("Notes"),
     NoteById: count("NoteById"),
     NotesByBook: count("NotesByBook"),
+    NotesByTitle: count("NotesByTitle"),
     NoteStats: count("NoteStats"),
   };
 };
+
+/** Controls the reload delay while letting command settlement and feed I/O run normally. */
+const reloads = () => {
+  const pending = new Set<() => void>();
+  const timers: NonNullable<HighAlch.Settings["timers"]> = {
+    set: (run, ms, wait) => {
+      if (wait !== "reload") {
+        const timer = setTimeout(run, ms);
+
+        return () => clearTimeout(timer);
+      }
+
+      pending.add(run);
+
+      return () => pending.delete(run);
+    },
+  };
+
+  return {
+    timers,
+    advance: () => {
+      const elapsed = [...pending];
+
+      pending.clear();
+      for (const run of elapsed) run();
+    },
+  };
+};
+
+describe("f(offset/limit window, feed change)", () => {
+  const input = { account: "acc-1", Offset: 0, Limit: 2 };
+
+  const window = (db: DbClient) => observe<Note>(db, notes.page(input), cleanup);
+
+  it("f(window and ordinary subset, held row removed) → both delete it immediately; only the window backfills", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const page = window(db);
+    const ordinary = observe<Note>(db, notes.pageWithoutWindow(input), cleanup);
+
+    await ready(page, ordinary);
+    expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
+    expect(titles(ordinary)).toEqual(titles(page));
+    const asked = countAsked(server).NotesByTitle;
+
+    await server.send((client) =>
+      client.DeleteNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId }),
+    );
+    await until(() => !page.has(ada.NoteId) && !ordinary.has(ada.NoteId), "row removed");
+    await server.indexed((stored) => !stored.has(ada.NoteId));
+
+    expect(titles(page)).toEqual(["n2:Bob"]);
+    expect(countAsked(server).NotesByTitle).toBe(asked);
+
+    const release = server.hold();
+
+    clock.advance();
+    await until(() => countAsked(server).NotesByTitle > asked, "window reload asked");
+
+    expect(page.isReady()).toBe(true);
+    expect(titles(page)).toEqual(["n2:Bob"]);
+
+    release();
+    await until(() => page.has(cyd.NoteId), "lookahead backfilled");
+
+    expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
+    expect(titles(ordinary)).toEqual(["n2:Bob"]);
+    expect(countAsked(server).NotesByTitle).toBe(asked + 1);
+  });
+
+  it("f(window and ordinary subset, held row renamed) → both update in place; the window replaces the row after reordering", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const page = window(db);
+    const ordinary = observe<Note>(db, notes.pageWithoutWindow(input), cleanup);
+
+    await ready(page, ordinary);
+    const asked = countAsked(server).NotesByTitle;
+
+    await server.send((client) =>
+      client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title: "Zed" }),
+    );
+    await until(
+      () => page.get(ada.NoteId)?.title === "Zed" && ordinary.get(ada.NoteId)?.title === "Zed",
+      "renamed in place",
+    );
+    await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Zed");
+
+    clock.advance();
+    await until(() => page.has(cyd.NoteId), "window reordered");
+
+    expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
+    expect(titles(ordinary)).toEqual(["n1:Zed", "n2:Bob"]);
+    expect(countAsked(server).NotesByTitle).toBe(asked + 1);
+  });
+
+  it("f(window, unknown row enters before the end) → the query places it after one reload", async () => {
+    const server = await open();
+
+    await seed(server, bob, cyd);
+
+    const db = account(server, input.account, cleanup);
+    const page = window(db);
+
+    await ready(page);
+    await seed(server, ada);
+    await until(() => page.has(ada.NoteId), "unknown row placed");
+
+    expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
+    expect(countAsked(server).NotesByTitle).toBe(2);
+  });
+
+  it("f(window, three entries and an explicit reload inside the delay) → one query", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const page = window(db);
+
+    await ready(page);
+
+    for (const title of ["Ada 2", "Ada 3", "Zed"]) {
+      await server.send((client) =>
+        client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title }),
+      );
+      await until(() => page.get(ada.NoteId)?.title === title, title);
+    }
+
+    HighAlch.reload(db, NoteRows);
+    await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Zed");
+    expect(countAsked(server).NotesByTitle).toBe(1);
+
+    clock.advance();
+    await until(() => page.has(cyd.NoteId), "window reordered");
+
+    expect(countAsked(server).NotesByTitle).toBe(2);
+  });
+
+  it("f(window loading, a held row is renamed) → the buffered change triggers a fresh answer", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const witness = observe<Note>(db, notes.get({ NoteId: ada.NoteId }), cleanup);
+
+    await ready(witness);
+    const release = server.hold();
+    const page = window(db);
+
+    await until(() => countAsked(server).NotesByTitle === 1, "first answer held");
+
+    await server.send((client) =>
+      client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title: "Zed" }),
+    );
+    await until(() => witness.get(ada.NoteId)?.title === "Zed", "feed delivered during load");
+    await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Zed");
+
+    release();
+    await ready(page);
+    expect(titles(page)).toEqual(["n1:Zed", "n2:Bob"]);
+
+    clock.advance();
+    await until(() => page.has(cyd.NoteId), "window reordered");
+
+    expect(titles(page)).toEqual(["n2:Bob", "n3:Cyd"]);
+    expect(countAsked(server).NotesByTitle).toBe(2);
+  });
+
+  it.each([false, true])(
+    "f(window, optimistic insert confirmed by cause) → visible until the corrective reload (query already in flight: %s)",
+    async (inFlight) => {
+      const server = await open();
+
+      await seed(server, ada, bob);
+
+      const clock = reloads();
+      const api = server.wire.client;
+      const cause = "window-insert";
+      let confirmed = false;
+      const db = account(server, input.account, cleanup, {
+        timers: clock.timers,
+        layer: Layer.succeed(NotesApi.Client, {
+          ...api,
+          NotebookChanges: {
+            ...api.NotebookChanges,
+            events: (key, options) =>
+              api.NotebookChanges.events(key, options).pipe(
+                Stream.map((frame) => {
+                  if (Domain.Read.isCaughtUp(frame) || frame.envelope.commandId !== cause)
+                    return frame;
+
+                  confirmed = true;
+
+                  return {
+                    ...frame,
+                    event: { ...frame.event, cause },
+                    envelope: { ...frame.envelope, commandId: "feed-writer" },
+                  };
+                }),
+              ),
+          },
+        }),
+      });
+      const page = window(db);
+
+      await ready(page);
+
+      let release = server.hold();
+
+      if (inFlight) {
+        HighAlch.reload(db, NoteRows);
+        clock.advance();
+        await until(() => countAsked(server).NotesByTitle === 2, "older query held");
+      }
+
+      const inserted = notes.create.with({ client: db })(
+        { account: input.account, BookId: "b1", title: "Zed" },
+        { id: cause },
+      );
+      const key = HighAlch.created(inserted);
+      const seen: Array<string | undefined> = [];
+      const subscription = page.subscribeChanges(() => seen.push(page.get(key)?.title));
+
+      cleanup.push(async () => subscription.unsubscribe());
+
+      expect(page.get(key)?.title).toBe("Zed");
+      await inserted.when("settled");
+      await until(() => confirmed, "feed delivered cause");
+      await server.indexed((stored) => stored.has(key));
+      expect(page.get(key)?.title).toBe("Zed");
+
+      const asked = countAsked(server).NotesByTitle;
+
+      clock.advance();
+
+      if (inFlight) {
+        await tick();
+        expect(countAsked(server).NotesByTitle).toBe(asked);
+        release();
+        release = server.hold();
+      }
+
+      await until(() => countAsked(server).NotesByTitle === asked + 1, "corrective query held");
+      expect(page.get(key)?.title).toBe("Zed");
+      expect(seen).not.toContain(undefined);
+
+      release();
+      await until(() => !page.has(key), "insert excluded by the fresh answer");
+
+      expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
+      expect(seen.filter((value) => value === undefined)).toEqual([undefined]);
+      expect(countAsked(server).NotesByTitle).toBe(asked + 1);
+    },
+  );
+
+  it("f(window, unknown row removed) → no reload; a server-rendering window also stays as loaded", async () => {
+    const server = await open();
+
+    await seed(server, ada, bob, cyd);
+
+    const clock = reloads();
+    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const rendering = account(server, input.account, cleanup, {
+      live: false,
+      timers: clock.timers,
+    });
+    const page = window(db);
+    const snapshot = window(rendering);
+    const witness = observe<Note>(db, notes.get({ NoteId: cyd.NoteId }), cleanup);
+
+    await ready(page, snapshot, witness);
+
+    await server.send((client) =>
+      client.DeleteNote(address(input.account, cyd.NoteId), { NoteId: cyd.NoteId }),
+    );
+    await until(() => !witness.has(cyd.NoteId), "unknown removal delivered");
+    clock.advance();
+    await tick();
+
+    expect(countAsked(server).NotesByTitle).toBe(2);
+    expect(server.wire.counts.open).toBe(1);
+
+    await server.send((client) =>
+      client.DeleteNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId }),
+    );
+    await until(() => !page.has(ada.NoteId), "held removal delivered");
+    clock.advance();
+    await until(() => countAsked(server).NotesByTitle === 3, "live window reloaded");
+
+    expect(titles(snapshot)).toEqual(["n1:Ada", "n2:Bob"]);
+  });
+});
 
 describe("f(ready subsets, command)", () => {
   it("f(subsets, insert/update/custom edit/delete) → optimistic in every subset that shows the row, then committed", async () => {

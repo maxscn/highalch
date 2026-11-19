@@ -68,7 +68,7 @@ export type Settings = {
   readonly retry?: Retry;
   /** Milliseconds a command waits for the feed to deliver its change (default 10 000). */
   readonly settleTimeout?: number;
-  /** Milliseconds a subset waits before reloading for rows it cannot place (default 50). */
+  /** Milliseconds a subset waits before reloading after a feed change or a reload call (default 50). */
   readonly reloadDelay?: number;
   /** Milliseconds an unobserved subset collection is kept (TanStack DB's `gcTime`). */
   readonly gcTime?: number;

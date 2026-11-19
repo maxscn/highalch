@@ -314,6 +314,12 @@ export class NotesByBook extends Domain.Query("NotesByBook", {
   rejects: [QueryRefused],
 }) {}
 
+export class NotesByTitle extends Domain.Query("NotesByTitle", {
+  input: { account: Schema.String, Offset: Schema.Number, Limit: Schema.Number },
+  success: Schema.Struct({ Items: Schema.Array(Note) }),
+  rejects: [QueryRefused],
+}) {}
+
 export class NoteStats extends Domain.Query("NoteStats", {
   input: { account: Schema.String },
   success: Schema.Struct({ count: Schema.Number }),
@@ -379,6 +385,20 @@ const NotesByBookLive = NotesByBook.toLayer(
   }),
 );
 
+const NotesByTitleLive = NotesByTitle.toLayer(
+  Effect.gen(function* () {
+    const store = yield* NoteStore;
+
+    return ({ account, Offset, Limit }) =>
+      answer(store, "NotesByTitle", (notes) => ({
+        Items: notes
+          .filter((note) => note.account === account)
+          .sort((a, b) => a.title.localeCompare(b.title) || a.NoteId.localeCompare(b.NoteId))
+          .slice(Offset, Offset + Limit),
+      }));
+  }),
+);
+
 const NoteStatsLive = NoteStats.toLayer(
   Effect.gen(function* () {
     const store = yield* NoteStore;
@@ -390,7 +410,7 @@ const NoteStatsLive = NoteStats.toLayer(
   }),
 );
 
-const queries = [Notes, NoteById, NotesByBook, NoteStats, Books] as const;
+const queries = [Notes, NoteById, NotesByBook, NotesByTitle, NoteStats, Books] as const;
 
 export class Notebook extends Domain.Model("Notebook", {
   aggregates: [NoteAggregate, BookAggregate],
@@ -586,6 +606,7 @@ export const notebook = () =>
     NotesLive,
     NoteByIdLive,
     NotesByBookLive,
+    NotesByTitleLive,
     NoteStatsLive,
     BooksLive,
     NotebookWriter.layer,
@@ -610,6 +631,7 @@ export const host = async (options: { readonly history?: ReadonlyArray<Seed> } =
     NotesLive,
     NoteByIdLive,
     NotesByBookLive,
+    NotesByTitleLive,
     NoteStatsLive,
     BooksLive,
   ).pipe(Layer.provide(Layer.succeed(NoteStore, store)));
