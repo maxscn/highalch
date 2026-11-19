@@ -4,10 +4,10 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
-import { Option, Predicate } from "effect";
+import { Option } from "effect";
 import * as HighAlch from "@highalch/db";
 import { Provider } from "@highalch/db/react";
-import { account, seed, tick, until, type Host } from "../../../fixtures/harness";
+import { account, retryTransport, seed, tick, until, type Host } from "../../../fixtures/harness";
 import { host, QueryRefused } from "../../../fixtures/notebook";
 import { notes, stats } from "../../../fixtures/notes";
 
@@ -154,6 +154,8 @@ describe("f(stock useLiveQuery result, match)", () => {
 
     const db = account(server, "acc-1", cleanup);
 
+    const release = server.hold();
+
     const view = await render(
       <Provider client={db}>
         <Page />
@@ -161,6 +163,7 @@ describe("f(stock useLiveQuery result, match)", () => {
     );
 
     expect(view.text()).toBe("loading");
+    release();
 
     await settle(view.text, /^ready:Ada,Bob:live$/);
 
@@ -198,10 +201,7 @@ describe("f(stock useLiveQuery result, match)", () => {
 
     await seed(server, ada);
 
-    const retry: HighAlch.Retry = (error, attempt) =>
-      attempt <= 2 && Predicate.isTagged(error, "RpcClientError")
-        ? Option.some(150)
-        : Option.none();
+    const retry = retryTransport(150, 2);
 
     const db = account(server, "acc-1", cleanup, { retry });
 

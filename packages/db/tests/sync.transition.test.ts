@@ -6,9 +6,20 @@ import {
   debounceStrategy,
   DbClient,
 } from "@tanstack/db";
-import { Effect, Layer, Option, Predicate, Stream } from "effect";
+import { Clock, Effect, Exit, Layer, Option, Predicate, Scope, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import * as HighAlch from "@highalch/db";
-import { account, observe, seed, tick, titles, until, type Host } from "../../../fixtures/harness";
+import { waitKind } from "@highalch/db/internal";
+import {
+  account,
+  observe,
+  retryTransport,
+  seed,
+  tick,
+  titles,
+  until,
+  type Host,
+} from "../../../fixtures/harness";
 import {
   address,
   host,
@@ -20,6 +31,7 @@ import {
   NotesApi,
   Notes,
   NotesByCursor,
+  NotesByTitle,
   WrappedNotes,
   RenameNote,
   TouchNote,
@@ -76,6 +88,31 @@ const subsets = (db: DbClient) => ({
 
 const ready = (...collections: ReadonlyArray<{ isReady: () => boolean }>) =>
   until(() => collections.every((collection) => collection.isReady()), "ready");
+
+it("f(scoped HighAlch client, a command and scope exit) → command uses the service and the feed stops", async () => {
+  const server = await open();
+  await seed(server, ada);
+  const config = {
+    api: NotesApi,
+    layer: Layer.succeed(NotesApi.Client, server.wire.client),
+    scope: ada.account,
+  };
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const db = yield* HighAlch.Client;
+      const list = observe(db, notes.list({ account: ada.account }), cleanup);
+
+      yield* Effect.promise(() => ready(list));
+      expect(server.wire.counts.open).toBe(1);
+      expect(titles(list)).toEqual(["n1:Ada"]);
+      yield* notes.rename.effect({ NoteId: ada.NoteId, title: "Abel" });
+      expect(titles(list)).toEqual(["n1:Abel"]);
+    }).pipe(Effect.provide(HighAlch.layer(config))),
+  );
+
+  await until(() => server.wire.counts.open === 0, "scope closed the feed");
+});
 
 describe("f(subsets, load)", () => {
   it("f(nothing loaded, first load) → ready with each query's rows, one feed for all", async () => {
@@ -156,7 +193,7 @@ describe("f(ready subsets, feed change)", () => {
     await seed(server, ada, bob);
 
     const clock = reloads();
-    const db = account(server, "acc-1", cleanup, { timers: clock.timers });
+    const db = account(server, "acc-1", cleanup, { clock: clock.clock });
     const { list, book } = subsets(db);
     const later = observe<Note>(db, notes.get({ NoteId: "n3" }), cleanup);
 
@@ -200,7 +237,7 @@ describe("f(ready subsets, feed change)", () => {
       },
     });
     const clock = reloads();
-    const db = account(server, "acc-1", cleanup, { timers: clock.timers });
+    const db = account(server, "acc-1", cleanup, { clock: clock.clock });
     const list = observe<Note>(
       db,
       wrapped.list({ account: "acc-1", Offset: 0, Limit: 100 }),
@@ -270,22 +307,32 @@ const countAsked = (server: Host) => {
 /** Controls the reload delay while letting command settlement and feed I/O run normally. */
 const reloads = () => {
   const pending = new Set<() => void>();
-  const timers: NonNullable<HighAlch.Settings["timers"]> = {
-    set: (run, ms, wait) => {
-      if (wait !== "reload") {
-        const timer = setTimeout(run, ms);
+  const live = Effect.runSync(Clock.Clock);
+  const clock: Clock.Clock = {
+    currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
+    currentTimeMillis: live.currentTimeMillis,
+    currentTimeNanosUnsafe: () => live.currentTimeNanosUnsafe(),
+    currentTimeNanos: live.currentTimeNanos,
+    monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: live.monotonicTimeNanos,
+    sleep: (duration) =>
+      Effect.flatMap(waitKind, (wait) => {
+        if (wait !== "reload") return live.sleep(duration);
 
-        return () => clearTimeout(timer);
-      }
+        return Effect.callback<void>((resume) => {
+          const run = () => resume(Effect.void);
 
-      pending.add(run);
+          pending.add(run);
 
-      return () => pending.delete(run);
-    },
+          return Effect.sync(() => {
+            pending.delete(run);
+          });
+        });
+      }),
   };
 
   return {
-    timers,
+    clock,
     advance: () => {
       const elapsed = [...pending];
 
@@ -356,7 +403,7 @@ it("f(two cursor pages, deletion) → both pages re-ask with their own cursor an
 
   await seed(server, ada, bob, cyd, dan);
   const clock = reloads();
-  const db = account(server, input.account, cleanup, { timers: clock.timers });
+  const db = account(server, input.account, cleanup, { clock: clock.clock });
   const first = observe(db, notes.cursor(input, { take: 1 }), cleanup);
   const next = observe(db, notes.cursor(input, { after: "1", take: 2 }), cleanup);
 
@@ -378,6 +425,212 @@ it("f(two cursor pages, deletion) → both pages re-ask with their own cursor an
   expect(countAsked(server).NotesByCursor).toBe(4);
 });
 
+const manualClock = async () => {
+  const scope = Scope.makeUnsafe();
+
+  cleanup.push(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+
+  return Effect.runPromise(Scope.provide(TestClock.make(), scope));
+};
+
+describe("f(query-decided page, a lagging answer)", () => {
+  const input = { account: "acc-1", Offset: 0, Limit: 2 };
+
+  it.each(["delete", "upsert"])(
+    "f(ready, applied %s contradicted on every re-ask) → keeps the feed value and stops after three retries",
+    async (action) => {
+      const server = await open();
+      await seed(server, ada, bob, cyd);
+      const clock = await manualClock();
+      const api = server.wire.client;
+      let previous: Domain.Query.ResultOf<typeof NotesByTitle> | undefined;
+      let lagging = false;
+
+      const db = account(server, input.account, cleanup, {
+        clock,
+        layer: Layer.succeed(NotesApi.Client, {
+          ...api,
+          NotesByTitle: (query, options) =>
+            api.NotesByTitle(query, options).pipe(
+              Effect.map((answer) => {
+                if (lagging && previous) return previous;
+
+                previous = answer;
+
+                return answer;
+              }),
+            ),
+        }),
+      });
+      const page = observe(db, notes.page(input), cleanup);
+
+      await ready(page);
+      expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
+      lagging = true;
+
+      if (action === "delete")
+        await server.send((client) =>
+          client.DeleteNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId }),
+        );
+      else
+        await server.send((client) =>
+          client.RenameNote(address(input.account, ada.NoteId), {
+            NoteId: ada.NoteId,
+            title: "Abel",
+          }),
+        );
+
+      const expected = ["n2:Bob"];
+
+      if (action === "upsert") expected.unshift("n1:Abel");
+
+      await until(() => page.get(ada.NoteId)?.title !== ada.title, "feed patched Ada");
+      expect(titles(page)).toEqual(expected);
+      const asked = countAsked(server).NotesByTitle;
+
+      for (const [index, delay] of [10, 20, 40, 80].entries()) {
+        await Effect.runPromise(clock.adjust(delay));
+        await until(() => countAsked(server).NotesByTitle === asked + index + 1, "lagging re-ask");
+        await tick();
+        expect(titles(page)).toEqual(expected);
+        expect(page.isReady()).toBe(true);
+      }
+
+      await Effect.runPromise(clock.adjust(10_000));
+      expect(countAsked(server).NotesByTitle).toBe(asked + 4);
+
+      lagging = false;
+      HighAlch.reload(db, NoteRows);
+      await Effect.runPromise(clock.adjust(10));
+      await until(() => countAsked(server).NotesByTitle === asked + 5, "fresh re-ask");
+      if (action === "delete") await until(() => page.has(cyd.NoteId), "fresh answer backfills");
+      else expect(titles(page)).toEqual(expected);
+    },
+  );
+
+  it("f(page, a held answer followed by a removal) → keeps the unaffected row visible", async () => {
+    const server = await open();
+    await seed(server, ada, bob);
+    const clock = await manualClock();
+    const db = account(server, input.account, cleanup, { clock });
+    const page = observe(db, notes.page(input), cleanup);
+    const list = observe(db, notes.list({ account: input.account }), cleanup);
+    await ready(page, list);
+    const shown = history(page, bob.NoteId, (row) => row.title);
+    const aaron = { ...ada, NoteId: "n4", title: "Aaron" };
+
+    await seed(server, aaron);
+    await until(() => list.has(aaron.NoteId), "insert delivered");
+    const release = server.hold();
+    await Effect.runPromise(clock.adjust(10));
+    await until(() => countAsked(server).NotesByTitle === 2, "answer with Aaron and Ada held");
+
+    await server.send((client) =>
+      client.DeleteNote(address(input.account, aaron.NoteId), { NoteId: aaron.NoteId }),
+    );
+    await until(() => !list.has(aaron.NoteId), "removal delivered");
+    await server.indexed((stored) => !stored.has(aaron.NoteId));
+    release();
+    await tick();
+    expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
+
+    await Effect.runPromise(clock.adjust(10));
+    await until(() => countAsked(server).NotesByTitle === 3, "corrective answer");
+    await tick();
+    expect(titles(page)).toEqual(["n1:Ada", "n2:Bob"]);
+    expect(shown).not.toContain("-");
+  });
+
+  it("f(page, three stale answers in a row) → publishes the third with later changes", async () => {
+    const server = await open();
+    await seed(server, ada, bob);
+    const clock = await manualClock();
+    const db = account(server, input.account, cleanup, { clock });
+    const page = observe(db, notes.page(input), cleanup);
+    await ready(page);
+
+    const aaron = { ...ada, NoteId: "n4", title: "Aaron" };
+    await seed(server, aaron);
+    HighAlch.reload(db, NoteRows);
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const release = server.hold();
+      await Effect.runPromise(clock.adjust(10));
+      await until(() => countAsked(server).NotesByTitle === attempt + 1, "held stale answer");
+      const title = `Ada ${attempt}`;
+
+      await server.send((client) =>
+        client.RenameNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId, title }),
+      );
+      await until(() => page.get(ada.NoteId)?.title === title, "later rename delivered");
+      await server.indexed((stored) => stored.get(ada.NoteId)?.title === title);
+      release();
+      if (attempt < 3) {
+        await tick();
+        expect(titles(page)).toEqual([`n1:${title}`, "n2:Bob"]);
+      }
+    }
+
+    await until(() => page.has(aaron.NoteId), "third stale answer accepted");
+    expect(titles(page)).toEqual(["n1:Ada 3", "n4:Aaron"]);
+    expect(countAsked(server).NotesByTitle).toBe(4);
+  });
+
+  it.each(["explicit reload", "feed change"])(
+    "f(retry waiting, %s) → re-asks after the debounce",
+    async (reason) => {
+      const server = await open();
+      await seed(server, ada, bob);
+      const clock = await manualClock();
+      const api = server.wire.client;
+      let fail = false;
+      const db = account(server, input.account, cleanup, {
+        clock,
+        retry: retryTransport(60_000, 1),
+        layer: Layer.succeed(NotesApi.Client, {
+          ...api,
+          NotesByTitle: (query, options) =>
+            api.NotesByTitle(query, options).pipe(
+              Effect.flatMap((answer) => {
+                if (fail) return Effect.fail(transport());
+
+                return Effect.succeed(answer);
+              }),
+            ),
+        }),
+      });
+      const page = observe(db, notes.page(input), cleanup);
+      await ready(page);
+
+      fail = true;
+      HighAlch.reload(db, NoteRows);
+      await Effect.runPromise(clock.adjust(10));
+      await until(() => page.health.failureReason !== null, "reload waiting to retry");
+      expect(countAsked(server).NotesByTitle).toBe(2);
+
+      fail = false;
+      if (reason === "explicit reload") HighAlch.reload(db, NoteRows);
+      else {
+        await server.send((client) =>
+          client.RenameNote(address(input.account, ada.NoteId), {
+            NoteId: ada.NoteId,
+            title: "Abel",
+          }),
+        );
+        await until(() => page.get(ada.NoteId)?.title === "Abel", "rename delivered");
+      }
+
+      await Effect.runPromise(clock.adjust(9));
+      expect(countAsked(server).NotesByTitle).toBe(2);
+      await Effect.runPromise(clock.adjust(1));
+      await until(() => page.health.failureReason === null, "recovered before retry delay");
+      expect(countAsked(server).NotesByTitle).toBe(3);
+      await Effect.runPromise(clock.adjust(60_000));
+      expect(countAsked(server).NotesByTitle).toBe(3);
+    },
+  );
+});
+
 describe("f(offset/limit page, feed change)", () => {
   const input = { account: "acc-1", Offset: 0, Limit: 2 };
 
@@ -389,7 +642,7 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const page = observePage(db);
 
     await ready(page);
@@ -426,7 +679,7 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const page = observePage(db);
 
     await ready(page);
@@ -467,7 +720,7 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const page = observePage(db);
 
     await ready(page);
@@ -495,7 +748,7 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const witness = observe<Note>(db, notes.get({ NoteId: ada.NoteId }), cleanup);
 
     await ready(witness);
@@ -532,7 +785,7 @@ describe("f(offset/limit page, feed change)", () => {
       const cause = "page-insert";
       const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
       const db = account(server, input.account, cleanup, {
-        timers: clock.timers,
+        clock: clock.clock,
         layer: causeLayer(server, cause),
       });
       const page = observePage(db);
@@ -593,7 +846,7 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const page = observePage(db);
 
     await ready(page);
@@ -638,7 +891,7 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const page = observePage(db);
 
     await ready(page);
@@ -685,7 +938,7 @@ describe("f(offset/limit page, feed change)", () => {
     let holdCursor = false;
     let readingCursor = false;
     const db = account(server, input.account, cleanup, {
-      timers: clock.timers,
+      clock: clock.clock,
       layer: Layer.succeed(NotesApi.Client, {
         ...api,
         NotebookChanges: {
@@ -734,10 +987,10 @@ describe("f(offset/limit page, feed change)", () => {
     await seed(server, ada, bob, cyd, dan);
 
     const clock = reloads();
-    const db = account(server, input.account, cleanup, { timers: clock.timers });
+    const db = account(server, input.account, cleanup, { clock: clock.clock });
     const rendering = account(server, input.account, cleanup, {
       live: false,
-      timers: clock.timers,
+      clock: clock.clock,
     });
     const source = notes.page({ ...input, Offset: 1 });
     const page = observe<Note>(db, source, cleanup);
@@ -778,7 +1031,7 @@ describe("f(offset/limit page, feed change)", () => {
       const cause = `page-${action}`;
       const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
       const db = account(server, input.account, cleanup, {
-        timers: clock.timers,
+        clock: clock.clock,
         layer: causeLayer(server, cause),
       });
       const page = observePage(db);
@@ -948,7 +1201,7 @@ describe("f(ready subsets, command)", () => {
 
     expect(failed).toBeInstanceOf(NoteLocked);
 
-    const result = await rename.result(locked);
+    const result = await Effect.runPromise(rename.result(locked));
 
     const shown = HighAlch.match(result).on({
       Committed: () => "committed",
@@ -972,9 +1225,9 @@ describe("f(ready subsets, command)", () => {
     await ready(one);
     server.wire.mute(true);
 
-    const outcome = await notes.rename
-      .with({ client: db })
-      .result({ NoteId: "n1", title: "Ada 2" });
+    const outcome = await Effect.runPromise(
+      notes.rename.with({ client: db }).result({ NoteId: "n1", title: "Ada 2" }),
+    );
 
     server.wire.mute(false);
 
@@ -994,7 +1247,9 @@ describe("f(ready subsets, command)", () => {
     await ready(one);
 
     const started = Date.now();
-    const outcome = await notes.touch.with({ client: db }).result({ NoteId: "n1" });
+    const outcome = await Effect.runPromise(
+      notes.touch.with({ client: db }).result({ NoteId: "n1" }),
+    );
 
     expect(outcome).toMatchObject({ _tag: "Committed", reply: { touched: true } });
     expect(Date.now() - started).toBeLessThan(1_000);
@@ -1259,8 +1514,7 @@ describe("f(feed, failure)", () => {
 
     await seed(server, ada);
 
-    const retry: HighAlch.Retry = (error, attempt) =>
-      attempt <= 3 && Predicate.isTagged(error, "RpcClientError") ? Option.some(60) : Option.none();
+    const retry = retryTransport(60, 3);
 
     const db = account(server, "acc-1", cleanup, { retry });
     const book = observe<Note>(db, notes.byBook({ BookId: "b1" }), cleanup);
@@ -1432,9 +1686,9 @@ describe("f(one feed, two entities)", () => {
     expect(seen).toEqual(["Ada 2", "Ada 3", "Ada 4"]);
 
     // A command still settles on its (redelivered) change.
-    const settled = await notes.rename
-      .with({ client: db })
-      .result({ NoteId: "n1", title: "Ada 5" });
+    const settled = await Effect.runPromise(
+      notes.rename.with({ client: db }).result({ NoteId: "n1", title: "Ada 5" }),
+    );
 
     await tick(30);
 
@@ -1474,9 +1728,9 @@ describe("f(deployment with history, feed projection added)", () => {
 
     expect(titles(list)).toEqual(["n1:Ada", "n2:Bob"]);
 
-    const outcome = await notes.rename
-      .with({ client: db })
-      .result({ NoteId: "n2", title: "Bob 2" });
+    const outcome = await Effect.runPromise(
+      notes.rename.with({ client: db }).result({ NoteId: "n2", title: "Bob 2" }),
+    );
 
     expect(outcome).toMatchObject({ _tag: "Committed" });
     expect(list.get("n2")?.title).toBe("Bob 2");
@@ -1593,7 +1847,7 @@ describe("f(client, close)", () => {
 
     void renamed.when("settled").then(() => order.push("settled"));
 
-    const closed = HighAlch.close(db).then(() => order.push("closed"));
+    const closed = Effect.runPromise(HighAlch.close(db)).then(() => order.push("closed"));
 
     await tick();
 

@@ -1,10 +1,23 @@
 import type * as Domain from "@alchemy.run/domain";
 import type { Collection, SyncConfig } from "@tanstack/db";
-import { Exit, Option, Predicate } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Predicate,
+  Pull,
+  Schedule,
+  Scope,
+} from "effect";
 import type { Defect, TaggedFailure } from "./state";
-import { cursorOf, failureOf, type Connection } from "./client";
+import { cursorOf, failureOf, read, waitKind, type Connection } from "./client";
 import { subscriptionOf, type Delivered, type Subscription } from "./feed";
-import * as Rows from "./rows";
+import type * as Rows from "./rows";
+import { apply, reconcile, remember, settle } from "./sync-rows";
 import { keyOf, type Answer, type Input, type Row } from "./values";
 
 type Params = Parameters<SyncConfig<Row, string>["sync"]>[0];
@@ -21,12 +34,11 @@ export type Spec = {
   readonly select: Option.Option<(answer: Answer) => ReadonlyArray<Row>>;
 };
 
-type Buffered = {
-  readonly entries: Array<Delivered>;
-  /** Optimistic inserts confirmed while this query was in flight. */
-  readonly inserted: Set<number>;
-  /** Latest change whose delay elapsed in flight, or Infinity for an explicit reload. */
-  reload: number;
+type Request = {
+  after: number;
+  readonly elapsed: Deferred.Deferred<void>;
+  correction: boolean;
+  timer?: Fiber.Fiber<void>;
 };
 
 /**
@@ -51,29 +63,19 @@ export const rowsOf = (
   return [result];
 };
 
-/** A failure's retry delay, if the connection's policy retries it. */
-const delayOf = (connection: Connection, error: TaggedFailure | Defect, attempt: number) =>
-  connection.retry(error, attempt);
-
-/**
- * The sync run of one subset collection. It loads with the cursor-then-events protocol, keeps
- * its rows in step with its entity's entries on the shared feed. Without a membership rule,
- * the query runs again after changes to confirm which rows belong.
- */
+/** One collection's sync run, with one query worker for its entire lifetime. */
 export class Subset {
   ready = false;
-  /** The run ended: cleaned up, or failed for good (a reload starts a new run). */
-  private closed = false;
-  /** Errors this run's own reloads reported; a successful reload clears exactly these. */
-  private reported: Array<TaggedFailure | Defect> = [];
-  /** The rows this subset synced, by key. */
+  private readonly scope: Scope.Closeable;
+  private readonly reported: Array<TaggedFailure | Defect> = [];
   private synced = new Map<string, Row>();
-  /** Changes the feed delivered while a load or reload runs; applied on top of its answer. */
-  private buffer: Buffered | undefined;
-  /** Cursor of the last accepted answer for a query that decides membership. */
+  private readonly applied = new Map<string, Delivered>();
+  private buffer: Array<Delivered> | undefined;
   private cursor = 0;
-  /** Latest change covered by the timer, or Infinity for an explicit reload. */
-  private reloading: { after: number; readonly cancel: () => void } | undefined;
+  private discarded = 0;
+  private corrections = 0;
+  private pending: Request | undefined;
+  private queued = Deferred.makeUnsafe<Request>();
   private feed: Subscription | undefined;
   private readonly release: () => void;
 
@@ -82,27 +84,27 @@ export class Subset {
     private readonly spec: Spec,
     private readonly params: Params,
   ) {
+    this.scope = connection.openScope();
     this.release = connection.register(spec.entity.entityName, this);
   }
 
-  /** The entity whose rows this subset holds. */
   get entity(): Rows.Any {
     return this.spec.entity;
   }
 
-  /** The collection this run syncs; commands edit it optimistically. */
   get collection(): Collection<Row, string> {
     return this.params.collection;
   }
 
-  /** The key of a row. */
   keyOf = (row: Row): string => keyOf(this.spec.entity.rows.key, row);
 
-  /** Whether an optimistic insert shows here: its rule holds, or there is no rule. */
   accepts = (row: Row) => Option.getOrElse(this.member(row), () => true);
 
-  /** Whether a row belongs here by the membership rule; `None` without a rule. */
-  private member = (row: Row) => Option.map(this.spec.rule, (rule) => rule(row, this.spec.input));
+  member = (row: Row) => Option.map(this.spec.rule, (rule) => rule(row, this.spec.input));
+
+  private get byQuery() {
+    return Option.isNone(this.spec.rule);
+  }
 
   start = () => {
     if (this.connection.live) {
@@ -110,255 +112,235 @@ export class Subset {
       this.feed.acquire(this);
     }
 
-    void this.load(1);
+    this.connection.fork(this.work(), this.scope);
 
-    return () => this.stop();
+    return this.stop;
   };
 
-  private stop() {
-    this.closed = true;
-    this.reloading?.cancel();
+  private stop = () => {
     this.feed?.release(this);
     this.release();
-  }
 
-  /** Changes from the feed: applied now when ready, buffered while a load or reload runs. */
+    return Effect.runPromise(Scope.close(this.scope, Exit.void));
+  };
+
+  /** Patch ready rows immediately and retain changes received during a query for its answer. */
   receive = (delivered: ReadonlyArray<Delivered>) => {
-    if (this.closed) return;
-
-    const byQuery = Option.isNone(this.spec.rule);
     let changes = delivered;
 
-    if (byQuery) changes = delivered.filter(({ seq }) => seq > this.cursor);
+    if (this.byQuery) changes = delivered.filter(({ seq }) => seq > this.cursor);
 
-    this.buffer?.entries.push(...changes);
+    this.buffer?.push(...changes);
 
-    if (!this.ready) return;
+    if (!this.ready || changes.length === 0) return;
 
-    this.apply(changes);
+    const writes = apply(this.synced, changes, this, (key) => this.collection.has(key));
+
+    if (this.byQuery) remember(changes, this.applied, this.synced, this);
+
+    if (writes.length > 0) {
+      this.params.begin();
+      for (const write of writes) this.params.write(write);
+      void this.params.commit();
+    }
 
     const last = changes.at(-1);
 
-    if (byQuery && last) this.requestReload(last.seq);
+    if (this.byQuery && last) {
+      this.corrections = 0;
+      this.request(last.seq);
+    }
   };
 
-  /** The feed failed and is trying again. */
   interrupted = (error: TaggedFailure | Defect) => {
-    if (this.ready && !this.closed) this.params.reportError(error);
+    if (this.ready) this.params.reportError(error);
   };
 
-  /** The feed caught up again. */
   healthy = () => {
-    if (this.ready && !this.closed) this.params.reportHealthy();
+    if (this.ready) this.params.reportHealthy();
   };
 
-  /** The feed gave up: a ready subset keeps its rows and shows the error; a loading one fails. */
-  stopped = (error: TaggedFailure | Defect) => this.fail(error);
-
-  private fail(error: TaggedFailure | Defect) {
-    if (this.closed) return;
-
-    this.closed = true;
-    this.buffer = undefined;
-    this.reloading?.cancel();
+  stopped = (error: TaggedFailure | Defect) => {
+    void this.stop();
     this.params.fail(error);
-  }
+  };
 
-  /** Reloads soon; several reasons within the delay reload once. */
-  schedule = () => this.requestReload(Infinity);
+  schedule = () => {
+    this.corrections = 0;
+    this.request(Infinity);
+  };
 
-  private requestReload(after: number) {
-    if (this.closed) return;
+  private request(after: number, correction = false, delay = this.connection.reloadDelay) {
+    if (this.pending) {
+      if (this.pending.correction && !correction) {
+        const request = this.pending;
 
-    if (this.reloading) {
-      this.reloading.after = Math.max(this.reloading.after, after);
+        request.correction = false;
+        request.after = after;
+        if (request.timer) Effect.runFork(Fiber.interrupt(request.timer));
+        this.arm(request, delay);
+      } else this.pending.after = Math.max(this.pending.after, after);
 
       return;
     }
 
-    const cancel = this.connection.after(this.connection.reloadDelay, "reload", () => {
-      const request = this.reloading;
+    const request: Request = { after, correction, elapsed: Deferred.makeUnsafe() };
 
-      this.reloading = undefined;
-
-      if (Option.isNone(this.spec.rule) && this.buffer && request) {
-        this.buffer.reload = Math.max(this.buffer.reload, request.after);
-
-        return;
-      }
-
-      void this.load(1);
-    });
-
-    this.reloading = { after, cancel };
+    this.pending = request;
+    this.arm(request, delay);
+    Deferred.doneUnsafe(this.queued, Effect.succeed(request));
   }
 
-  /** Applies feed changes to the synced rows in one sync transaction. */
-  private apply(delivered: ReadonlyArray<Delivered>) {
-    const { begin, write, commit } = this.params;
-    let open = false;
-
-    const start = () => {
-      if (!open) begin();
-
-      open = true;
-    };
-
-    for (const { seq, change } of delivered)
-      if (Rows.isRemoved(change)) {
-        if (this.synced.delete(change.key)) {
-          start();
-          write({ type: "delete", key: change.key });
-        }
-      } else {
-        const key = this.keyOf(change.row);
-        const belongs = this.member(change.row);
-
-        if (this.synced.has(key)) {
-          start();
-
-          if (Option.getOrElse(belongs, () => true)) {
-            this.synced.set(key, change.row);
-            write({ type: "update", value: change.row });
-          } else {
-            this.synced.delete(key);
-            write({ type: "delete", key });
-          }
-        } else if (Option.getOrElse(belongs, () => this.collection.has(key))) {
-          // A rule placed it, or this client shows it already (its own optimistic insert).
-          start();
-          this.synced.set(key, change.row);
-          write({ type: "insert", value: change.row });
-
-          if (Option.isNone(belongs)) this.buffer?.inserted.add(seq);
-        }
-      }
-
-    if (open) void commit();
+  private arm(request: Request, delay: number) {
+    request.timer = this.connection.fork(
+      Effect.sleep(delay).pipe(
+        Effect.andThen(Deferred.succeed(request.elapsed, undefined)),
+        Effect.asVoid,
+        Effect.provideService(waitKind, "reload"),
+      ),
+      this.scope,
+    );
   }
 
-  /** Applies buffered changes after `cursor` to a fresh answer, without writing. */
-  private settle(rows: Map<string, Row>, buffered: Buffered, cursor: number) {
-    const byQuery = Option.isNone(this.spec.rule);
-    let latest = cursor;
+  private clearRequest() {
+    const timer = this.pending?.timer;
 
-    for (const { seq, change } of buffered.entries) {
-      if (seq <= cursor) continue;
+    this.pending = undefined;
+    this.queued = Deferred.makeUnsafe();
 
-      latest = seq;
-
-      if (Rows.isRemoved(change)) {
-        rows.delete(change.key);
-        continue;
-      }
-
-      const key = this.keyOf(change.row);
-      const belongs = this.member(change.row);
-
-      if (rows.has(key) && !Option.getOrElse(belongs, () => true)) rows.delete(key);
-      else if (rows.has(key) || Option.getOrElse(belongs, () => false)) rows.set(key, change.row);
-      // Keep a changed row already shown until an answer can place it after the change.
-      else if (byQuery && (buffered.inserted.has(seq) || this.synced.has(key)))
-        rows.set(key, change.row);
-    }
-
-    return latest;
+    if (timer) Effect.runFork(Fiber.interrupt(timer));
   }
 
-  /**
-   * Loads (or reloads) the subset: the feed's cursor (its latest entry's `seq`), the query, the
-   * changes after the cursor,
-   * one snapshot sync transaction, then ready. A failure retries per the connection's policy;
-   * before the first readiness it then fails the collection, after it reports the error.
-   */
-  private load = async (attempt: number): Promise<void> => {
-    if (this.closed) return;
+  private next = Effect.suspend(() =>
+    Deferred.await(this.queued).pipe(Effect.flatMap(({ elapsed }) => Deferred.await(elapsed))),
+  );
 
-    const buffered: Buffered = { entries: [], inserted: new Set(), reload: 0 };
-    const { entity, query } = this.spec;
-    const name = `${entity.entityName}/${query.queryName}`;
+  private work() {
+    const name = `${this.entity.entityName}/${this.spec.query.queryName}`;
 
-    this.buffer = buffered;
+    return Effect.gen({ self: this }, function* () {
+      yield* Effect.yieldNow;
 
-    const failure = await this.fetch(name).then(
-      ({ cursor, result }) => {
-        if (this.closed) return Option.none();
+      while (true) {
+        yield* this.load(name);
+        yield* this.next;
+        this.clearRequest();
+        yield* Effect.yieldNow;
+      }
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.void;
 
-        const rows = new Map(
-          rowsOf(query, result, this.spec.select).map((row) => [this.keyOf(row), row]),
+        return Effect.sync(() => this.stopped(failureOf(name, cause)));
+      }),
+    );
+  }
+
+  private load(name: string) {
+    return Effect.gen({ self: this }, function* () {
+      let step = yield* Schedule.toStep(this.connection.retry);
+
+      while (true) {
+        const changes: Array<Delivered> = [];
+
+        this.buffer = changes;
+        const result = yield* Effect.result(
+          read(name, this.fetch()).pipe(
+            Effect.tap((answer) => Effect.sync(() => this.accept(answer, changes))),
+            Effect.ensuring(
+              Effect.sync(() => {
+                this.buffer = undefined;
+              }),
+            ),
+          ),
         );
 
-        const latest = this.settle(rows, buffered, cursor);
-        const byQuery = Option.isNone(this.spec.rule);
+        if (result._tag === "Success") return;
 
-        this.buffer = undefined;
-        if (byQuery) this.cursor = cursor;
-        this.write(rows);
+        const error = result.failure;
+        const now = yield* Clock.currentTimeMillis;
+        const [, duration] = yield* Pull.catchDone(step(now, error), () => Effect.fail(error));
 
-        if (byQuery) {
-          if (buffered.reload > cursor) {
-            // The follow-up covers every request made so far.
-            this.reloading?.cancel();
-            this.reloading = undefined;
-            void this.load(1);
-          } else {
-            if (this.reloading && this.reloading.after <= cursor) {
-              this.reloading.cancel();
-              this.reloading = undefined;
-            }
-
-            if (latest > cursor) this.requestReload(latest);
-          }
+        if (this.ready) {
+          this.reported.push(error);
+          this.params.reportError(error);
         }
 
-        return Option.none();
-      },
-      (error: TaggedFailure | Defect) => Option.some(error),
+        const requested = yield* Effect.raceFirst(
+          Effect.as(this.next, true),
+          Effect.as(Effect.sleep(duration), false),
+        );
+
+        if (requested) {
+          this.clearRequest();
+          step = yield* Schedule.toStep(this.connection.retry);
+        }
+      }
+    });
+  }
+
+  private fetch() {
+    return Effect.gen({ self: this }, function* () {
+      const { entity, query, input, page } = this.spec;
+      let cursor = 0;
+
+      if (this.feed) {
+        const stream = yield* this.connection.stream(entity.feed.streamName);
+
+        cursor = cursorOf(yield* stream.peek(this.connection.scope));
+      }
+
+      const ask = yield* this.connection.query(query.queryName);
+      const result = yield* ask(input, page);
+
+      if (this.feed) yield* this.feed.ready;
+
+      return { cursor, result };
+    });
+  }
+
+  private accept(
+    { cursor, result }: { readonly cursor: number; readonly result: Answer | null },
+    changes: ReadonlyArray<Delivered>,
+  ) {
+    const later = changes.filter(({ seq }) => seq > cursor);
+    const latest = later.at(-1);
+
+    if (this.byQuery && this.ready && latest && this.discarded < 2) {
+      this.discarded += 1;
+      this.request(latest.seq);
+
+      return;
+    }
+
+    this.discarded = 0;
+    const rows = new Map(
+      rowsOf(this.spec.query, result, this.spec.select).map((row) => [this.keyOf(row), row]),
     );
 
-    if (Option.isNone(failure) || this.closed) return;
+    if (this.byQuery && this.pending && this.pending.after <= cursor) this.clearRequest();
 
-    // For a query that decides, the retry also covers reloads requested during this attempt.
-    if (Option.isSome(this.spec.rule)) this.buffer = undefined;
+    const contradicted = this.byQuery && reconcile(rows, this.applied, cursor);
 
-    const error = failure.value;
-    const delay = delayOf(this.connection, error, attempt);
+    settle(rows, later, this);
 
-    if (Option.isNone(delay)) return this.fail(error);
-
-    if (this.ready) {
-      this.reported.push(error);
-      this.params.reportError(error);
+    if (this.byQuery) {
+      this.cursor = cursor;
+      remember(later, this.applied, rows, this);
     }
 
-    await this.connection.sleep(delay.value, "retry");
+    this.write(rows);
 
-    return this.load(attempt + 1);
-  };
+    if (this.byQuery && latest) this.request(latest.seq);
 
-  /** The cursor, the query's answer, and the feed caught up; rejects with a typed failure. */
-  private async fetch(name: string) {
-    const { entity, query, input, page } = this.spec;
-    const scope = this.connection.scope;
-    let cursor = 0;
-
-    if (this.connection.live) {
-      const stream = await this.connection.stream(entity.feed.streamName);
-      const latest = await this.connection.run(stream.peek(scope));
-
-      if (Exit.isFailure(latest)) throw failureOf(name, latest.cause);
-
-      cursor = cursorOf(latest.value);
-    }
-
-    const ask = await this.connection.query(query.queryName);
-    const answer = await this.connection.run(ask(input, page));
-
-    if (Exit.isFailure(answer)) throw failureOf(name, answer.cause);
-
-    if (this.feed) await this.feed.ready();
-
-    return { cursor, result: answer.value };
+    if (contradicted && this.corrections < 3) {
+      this.corrections += 1;
+      this.request(
+        Infinity,
+        true,
+        Math.max(1, this.connection.reloadDelay) * 2 ** this.corrections,
+      );
+    } else if (!contradicted) this.corrections = 0;
   }
 
   /** Replaces the synced rows with a fresh answer in one sync transaction. */

@@ -1,7 +1,20 @@
 import * as Domain from "@alchemy.run/domain";
-import { Cause, Effect, Exit, Fiber, Option, Predicate, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Predicate,
+  Pull,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { Defect, type TaggedFailure } from "./state";
-import { cursorOf, failureOf, type Connection, type Frame } from "./client";
+import { cursorOf, failureOf, read, type Connection, type Frame } from "./client";
 import * as Rows from "./rows";
 import type { Subset } from "./subset";
 import type { Answer, Row } from "./values";
@@ -13,7 +26,10 @@ export type Delivered = {
   readonly change: Rows.Change<Row>;
 };
 
-type Waiter = { readonly resolve: (confirmed: boolean) => void };
+type Waiter = Deferred.Deferred<boolean>;
+
+const confirm = (waiter: Waiter, confirmed: boolean) =>
+  Deferred.doneUnsafe(waiter, Effect.succeed(confirmed));
 
 /** The command an entry delivers when its entity names one (`cause`), else the recorder's. */
 const causeOf = (event: Answer): Option.Option<string> =>
@@ -29,8 +45,6 @@ const entityOf = (event: Answer): Option.Option<string> =>
     Option.filter(Predicate.isString),
   );
 
-const none = () => {};
-
 /**
  * One feed's live subscription for one client: `peek(scope)` for the starting cursor (the latest
  * entry's `seq`), then `events(scope, { after })`, resumed from the last applied `seq` after a
@@ -43,14 +57,11 @@ export class Subscription {
   private started = false;
   private live = false;
   private failed: Option.Option<TaggedFailure | Defect> = Option.none();
-  private failures = 0;
+  private recoveries = 0;
   private readonly listeners = new Set<Subset>();
   private readonly waiters = new Map<string, Set<Waiter>>();
   private readonly cursors = new Set<{ readonly cursor: number; readonly waiter: Waiter }>();
-  private readonly caughtUp = new Set<{
-    readonly resolve: () => void;
-    readonly reject: (error: TaggedFailure | Defect) => void;
-  }>();
+  private caughtUp = Deferred.makeUnsafe<void, TaggedFailure | Defect>();
   private fiber: Fiber.Fiber<void> | undefined;
 
   constructor(
@@ -66,7 +77,7 @@ export class Subscription {
   acquire = (subset: Subset) => {
     this.listeners.add(subset);
 
-    if (!this.fiber) this.fiber = Effect.runFork(this.follow());
+    if (!this.fiber) this.fiber = this.connection.fork(this.follow());
   };
 
   /** Removes a listener; the last one (of any entity) stops the subscription and forgets it. */
@@ -80,7 +91,7 @@ export class Subscription {
 
   /** Whether any subset listens: the subscription then delivers every entry of its scope. */
   get active() {
-    return this.listeners.size > 0;
+    return this.listeners.size > 0 && Option.isNone(this.failed);
   }
 
   /**
@@ -91,48 +102,38 @@ export class Subscription {
     return this.live && Option.isNone(this.failed);
   }
 
-  /** Resolves once the feed has caught up at least once; rejects if it gave up. */
-  ready = () =>
-    new Promise<void>((resolve, reject) => {
-      if (this.live) return resolve();
+  /** Completes when the feed is current, or fails if it gave up. */
+  ready = Effect.suspend(() => Deferred.await(this.caughtUp));
 
-      if (Option.isSome(this.failed)) return reject(this.failed.value);
-
-      this.caughtUp.add({ resolve, reject });
-    });
-
-  /**
-   * Resolves `true` once a change caused by `commandId` was applied to every subset, or once the
-   * feed passed `cursor` (see `passed`); `false` if the subscription stops first.
-   */
+  /** Registers before sending so a confirmation that beats the receipt is still observed. */
   settle = (commandId: string) => {
-    let resolve: (confirmed: boolean) => void = none;
-    const promise = new Promise<boolean>((done) => (resolve = done));
-    const waiter = { resolve };
+    const waiter = Deferred.makeUnsafe<boolean>();
     const known = this.waiters.get(commandId) ?? new Set<Waiter>();
 
     known.add(waiter);
     this.waiters.set(commandId, known);
 
-    const forget = () => {
-      known.delete(waiter);
-
-      if (known.size === 0) this.waiters.delete(commandId);
-
-      for (const entry of this.cursors) if (entry.waiter === waiter) this.cursors.delete(entry);
-    };
-
     return {
-      promise: promise.finally(forget),
-      /** The feed reached the stream's cursor after the command: every change it caused is in. */
+      confirmed: Deferred.await(waiter),
       passed: (cursor: number) => {
-        if (this.seq >= cursor) return resolve(true);
+        if (Deferred.isDoneUnsafe(waiter)) return;
+        if (this.seq >= cursor) {
+          confirm(waiter, true);
+
+          return;
+        }
 
         this.cursors.add({ cursor, waiter });
       },
       cancel: () => {
-        forget();
-        resolve(false);
+        known.delete(waiter);
+
+        if (known.size === 0 && this.waiters.get(commandId) === known)
+          this.waiters.delete(commandId);
+
+        for (const entry of this.cursors) if (entry.waiter === waiter) this.cursors.delete(entry);
+
+        confirm(waiter, false);
       },
     };
   };
@@ -148,7 +149,7 @@ export class Subscription {
 
     if (fiber) Effect.runFork(Fiber.interrupt(fiber));
 
-    for (const waiter of this.waiters.values()) for (const each of waiter) each.resolve(false);
+    for (const waiter of this.waiters.values()) for (const each of waiter) confirm(each, false);
 
     this.waiters.clear();
     this.cursors.clear();
@@ -210,26 +211,23 @@ export class Subscription {
       }
 
     for (const commandId of commands)
-      for (const waiter of this.waiters.get(commandId) ?? []) waiter.resolve(true);
+      for (const waiter of this.waiters.get(commandId) ?? []) confirm(waiter, true);
 
     for (const entry of this.cursors)
       if (this.seq >= entry.cursor) {
         this.cursors.delete(entry);
-        entry.waiter.resolve(true);
+        confirm(entry.waiter, true);
       }
 
     if (!caughtUp) return;
 
-    const recovered = !this.live || this.failures > 0;
+    if (this.live) return;
 
     this.live = true;
-    this.failures = 0;
+    this.recoveries += 1;
+    Deferred.doneUnsafe(this.caughtUp, Effect.void);
 
-    for (const waiter of this.caughtUp) waiter.resolve();
-
-    this.caughtUp.clear();
-
-    if (recovered) for (const subset of this.listeners) subset.healthy();
+    for (const subset of this.listeners) subset.healthy();
   };
 
   /** An entry as a change of its entity: an upsert's row is decoded by the entity's row schema. */
@@ -268,7 +266,7 @@ export class Subscription {
   /** One connection: the starting cursor once, then the entries after the last applied `seq`. */
   private session() {
     return Effect.gen({ self: this }, function* () {
-      const stream = yield* Effect.promise(() => this.connection.stream(this.feed.streamName));
+      const stream = yield* this.connection.stream(this.feed.streamName);
       const scope = this.connection.scope;
 
       if (!this.started) {
@@ -284,41 +282,41 @@ export class Subscription {
     });
   }
 
-  /** Follows the feed, retrying after a failure until the retry policy stops it. */
-  private follow(): Effect.Effect<void> {
+  /** Reconnects from the last applied cursor. A catch-up starts a fresh retry schedule. */
+  private follow() {
+    const name = this.name;
+    const ended = new Defect({ name, cause: Cause.die(new Error("The feed ended")) });
+    const session = read(name, this.session().pipe(Effect.andThen(Effect.fail(ended))));
+
     return Effect.gen({ self: this }, function* () {
-      const exit = yield* Effect.exit(this.session());
-      const name = this.name;
+      let step = yield* Schedule.toStep(this.connection.retry);
 
-      const error = Exit.match(exit, {
-        onSuccess: () => new Defect({ name, cause: Cause.die(new Error("The feed ended")) }),
-        onFailure: (cause) => failureOf(name, cause),
-      });
+      while (true) {
+        const before = this.recoveries;
+        const error = yield* Effect.flip(session);
 
-      if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return;
+        if (this.recoveries !== before) step = yield* Schedule.toStep(this.connection.retry);
 
-      this.failures += 1;
+        // Report only failures the schedule will retry, before sleeping.
+        const now = yield* Clock.currentTimeMillis;
+        const [, duration] = yield* Pull.catchDone(step(now, error), () => Effect.fail(error));
 
-      const delay = this.connection.retry(error, this.failures);
+        if (this.live) {
+          this.live = false;
+          this.caughtUp = Deferred.makeUnsafe();
+        }
 
-      if (Option.isNone(delay)) return this.fail(error);
+        for (const subset of this.listeners) subset.interrupted(error);
 
-      this.live = false;
+        yield* Effect.sleep(duration);
+      }
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.void;
 
-      for (const subset of this.listeners) subset.interrupted(error);
-
-      yield* this.wait(delay.value);
-      yield* this.follow();
-    });
-  }
-
-  /** Waits `ms` through the connection's timers; interrupting the wait cancels the timer. */
-  private wait(ms: number) {
-    return Effect.callback<void>((resume) => {
-      const cancel = this.connection.after(ms, "retry", () => resume(Effect.void));
-
-      return Effect.sync(cancel);
-    });
+        return Effect.sync(() => this.fail(failureOf(name, cause)));
+      }),
+    );
   }
 
   /** The feed gave up: its listeners stop following it, and a new subset starts a new one. */
@@ -328,11 +326,9 @@ export class Subscription {
     if (this.connection.feeds.get(this.feed.streamName) === this)
       this.connection.feeds.delete(this.feed.streamName);
 
-    for (const waiter of this.caughtUp) waiter.reject(error);
+    Deferred.doneUnsafe(this.caughtUp, Effect.fail(error));
 
-    this.caughtUp.clear();
-
-    for (const waiter of this.waiters.values()) for (const each of waiter) each.resolve(false);
+    for (const waiter of this.waiters.values()) for (const each of waiter) confirm(each, false);
 
     this.waiters.clear();
 

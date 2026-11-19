@@ -6,10 +6,10 @@ import {
   type NonSingleResult,
   type SyncConfig,
 } from "@tanstack/db";
-import { Exit, Option, Predicate } from "effect";
+import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
 import type { TaggedFailure } from "./state";
-import { connectionOf, failureOf } from "./client";
+import { connectionOf, failureOf, read } from "./client";
 import {
   make,
   type Command,
@@ -109,7 +109,7 @@ export const where = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
 
 /** A whole-list query that contains every row in the client's scope. */
 export const all = <S extends Reader>(
-  source: S & (NonNullable<ReaderQuery<S>["definition"]["paged"]> extends true ? never : unknown),
+  source: S & (true extends NonNullable<ReaderQuery<S>["definition"]["paged"]> ? never : unknown),
 ) => {
   const membership = where<S>(source, includesAll);
   const query = membership.query;
@@ -711,41 +711,39 @@ export const query =
     return collectionOptions(id, (db: DbClient) => {
       const connection = connectionOf(db);
 
-      const load = async (
-        params: Parameters<SyncConfig<ResultRow<Q>, string>["sync"]>[0],
-        attempt: number,
-      ): Promise<void> => {
-        const ask = await connection.query(source.queryName);
-        const exit = await connection.run(ask(input, page));
-
-        if (Exit.isSuccess(exit)) {
-          params.begin({ snapshot: true });
-
-          if (exit.value !== null) {
-            // SAFETY: the query's schema decoded its one result.
-            const value = exit.value as ResultRow<Q>;
-
-            params.write({ type: "insert", value });
-          }
-
-          void params.commit();
-
-          return params.markReady();
-        }
-
-        const error = failureOf(source.queryName, exit.cause);
-        const delay = connection.retry(error, attempt);
-
-        if (Option.isNone(delay)) return params.fail(error);
-
-        await connection.sleep(delay.value, "retry");
-
-        return load(params, attempt + 1);
-      };
-
       const sync: SyncConfig<ResultRow<Q>, string> = {
         sync: (params) => {
-          void load(params, 1);
+          const scope = connection.openScope();
+          const ask = connection
+            .query(source.queryName)
+            .pipe(Effect.flatMap((endpoint) => endpoint(input, page)));
+
+          connection.fork(
+            read(source.queryName, ask).pipe(
+              Effect.retry(connection.retry),
+              Effect.tap((answer) =>
+                Effect.sync(() => {
+                  params.begin({ snapshot: true });
+
+                  if (answer !== null) {
+                    // SAFETY: the query's schema decoded its one result.
+                    params.write({ type: "insert", value: answer as ResultRow<Q> });
+                  }
+
+                  void params.commit();
+                  params.markReady();
+                }),
+              ),
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+
+                return Effect.sync(() => params.fail(failureOf(source.queryName, cause)));
+              }),
+            ),
+            scope,
+          );
+
+          return () => Effect.runPromise(Scope.close(scope, Exit.void));
         },
       };
 

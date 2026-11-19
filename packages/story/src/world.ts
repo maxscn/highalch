@@ -7,7 +7,18 @@ import {
   type HealthNode,
   type Transaction,
 } from "@tanstack/db";
-import { Cause, Data, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "effect";
+import {
+  Cause,
+  Data,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Predicate,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import * as HighAlch from "@highalch/db";
 import {
   createdKey,
@@ -233,14 +244,17 @@ export type Client = {
 };
 
 /** What a story's clients are, besides how they reach the Api. */
-export type Options = Partial<Omit<Settings, "scope" | "timers">> & {
+export type Options = Partial<Omit<Settings, "scope" | "clock">> & {
   /** The clock retries, reload debounces and settle timeouts wait on (default `manual`). */
   readonly clock?: "manual" | "real";
 };
 
 /** Retries transport failures (every 100 ms on the story's clock); stops for anything else. */
-export const retryTransport: Retry = (error) =>
-  Option.liftPredicate(100, () => Predicate.isTagged(error, "RpcClientError"));
+export const retryTransport: Retry = Schedule.spaced(100).pipe(
+  Schedule.while(({ input }: { input: HighAlch.TaggedFailure | HighAlch.Defect }) =>
+    Predicate.isTagged(input, "RpcClientError"),
+  ),
+);
 
 /** Lets timers, I/O and the fibers they wake run once. */
 export const macrotask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -340,7 +354,7 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
       reloadDelay: reloadDelay ?? 10,
       settleTimeout: settleTimeout ?? 2_000,
       retry: retry ?? retryTransport,
-      timers: this.clock.timers,
+      clock: this.clock.service,
     });
 
     const client = { scope, db, wire, observed: new Map<string, Observed>() };
@@ -633,7 +647,7 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   private close = async (client: Client, deadline: number) => {
     let closed = false;
 
-    const closing = HighAlch.close(client.db).finally(() => {
+    const closing = Effect.runPromise(HighAlch.close(client.db)).finally(() => {
       closed = true;
     });
 

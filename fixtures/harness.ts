@@ -1,16 +1,20 @@
 import type { Collection, CollectionOptions, DbClient, NonSingleResult } from "@tanstack/db";
-import { Layer, Option, Predicate } from "effect";
+import { Effect, Layer, Predicate, Schedule } from "effect";
 import * as HighAlch from "@highalch/db";
 import { address, host, NotesApi, type Note } from "./notebook";
 
 export type Host = Awaited<ReturnType<typeof host>>;
 
 /** Retries a transport failure once after 20 ms; anything else fails at once. */
-export const quick: HighAlch.Retry = (error, attempt) => {
-  if (attempt > 1 || !Predicate.isTagged(error, "RpcClientError")) return Option.none();
+export const retryTransport = (delay: number, times: number): HighAlch.Retry =>
+  Schedule.spaced(delay).pipe(
+    Schedule.upTo({ times }),
+    Schedule.while(({ input }: { input: HighAlch.TaggedFailure | HighAlch.Defect }) =>
+      Predicate.isTagged(input, "RpcClientError"),
+    ),
+  );
 
-  return Option.some(20);
-};
+export const quick = retryTransport(20, 1);
 
 /** Opens one account's client on the host; `close` is registered with `cleanup`. */
 export const account = (
@@ -29,7 +33,7 @@ export const account = (
     ...options,
   });
 
-  cleanup.push(() => HighAlch.close(db));
+  cleanup.push(() => Effect.runPromise(HighAlch.close(db)));
 
   return db;
 };
