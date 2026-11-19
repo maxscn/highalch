@@ -324,7 +324,8 @@ customers.addComment({ CustomerId: id, Comment });
 - `updates` commands also have `command.paced`: `{ onMutate, mutationFn }` for
   `usePacedMutations` (add a `strategy`). Each call resolves its row key and target as a direct
   call does; the merged transaction sends one command per edited row to that target, with its
-  input read from the merged row (so the input fields must be row fields), under the id
+  input read from the row's key and the fields the merged calls changed (so the input fields
+  must be row fields; `input(row)` receives that partial row), under the id
   `<transaction id>:<row key>` (paced transactions cannot take a caller id).
 
 ### The created key

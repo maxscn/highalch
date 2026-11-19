@@ -30,7 +30,12 @@ export type Floor = Register extends { readonly errors: infer E extends TaggedFa
   ? E
   : TaggedFailure;
 
-type RowErrors<T> = T extends { readonly [Errors]?: infer E } ? Exclude<E, undefined> : never;
+// A value that is not a row (e.g. a field typed `Record<string, Json>`) infers `unknown`: no errors.
+type RowErrors<T> = T extends { readonly [Errors]?: infer E }
+  ? unknown extends E
+    ? never
+    : Exclude<E, undefined>
+  : never;
 
 /** A joined or `select`ed result nests rows under its aliases; each alias keeps its marker. */
 type NestedErrors<T> = T extends object
