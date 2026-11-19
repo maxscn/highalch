@@ -47,9 +47,9 @@ jobs:
 
       - uses: changesets/action@v2.1.2
         with:
-          version: vp run release:version
-          publish: vp run release:publish
-          title: Version Packages
-          commit: Version packages
+          version-script: vp run release:version
+          publish-script: vp run release:publish
+          pr-title: Version Packages
+          commit-message: Version packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
