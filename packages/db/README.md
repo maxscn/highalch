@@ -177,7 +177,9 @@ row (none for `null`). For an answer that wraps its rows, such as `{ Items, Coun
 | A bare `Query`                                 | Use `read(Query)` to add steps                                               |
 
 - `.where(rule)` uses a boolean `(row, input)` rule to decide membership in a list. After
-  `.rows(select)`, the rule's row type comes from the selector.
+  `.rows(select)`, the rule's row type comes from the selector. The feed gives a rule the
+  entity's own rows, so a rule may read only what those rows have: selecting rows with extra
+  fields and reading them in a rule is a type error on that declaration.
 - `.one(rule)` uses the same kind of rule for a single row. Read it with `.findOne()` to render
   the `Missing` state.
 - `.all()` includes every row in the client's scope. For a paged query the method is absent

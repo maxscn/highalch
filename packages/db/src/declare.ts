@@ -27,12 +27,15 @@ import { Subset, type Spec } from "./subset";
 export type QueryInput<Q extends Domain.Query.Any> = Domain.Query.InputOf<Q>;
 
 /** One entry of a query's answer: a page's entry, an array's element, or the one result. */
-export type EntryOf<Q extends Domain.Query.Any> =
-  Domain.Query.ResultOf<Q> extends Domain.Query.Page<infer Entry>
+export type EntryOf<Q extends Domain.Query.Any> = EntryIn<NonNullable<Domain.Query.ResultOf<Q>>>;
+
+/** The entry of a non-null answer: an answer that may be `null` holds the same entries. */
+type EntryIn<A> =
+  A extends Domain.Query.Page<infer Entry>
     ? Entry
-    : Domain.Query.ResultOf<Q> extends ReadonlyArray<infer Entry>
+    : A extends ReadonlyArray<infer Entry>
       ? Entry
-      : NonNullable<Domain.Query.ResultOf<Q>>;
+      : A;
 
 /** A page of a paged query; part of a subset's identity. */
 export type Page = { readonly after?: string; readonly take?: number };
@@ -70,6 +73,17 @@ type ReadDeclaration<Q extends Domain.Query.Any, Entry> = {
   readonly [ReadOptions]: ReadOptions<Q, Entry>;
 };
 
+/** Marks a declaration whose rule reads rows, so `collection` checks what the rule may read. */
+const Ruled: unique symbol = Symbol("@highalch/db/read/ruled");
+
+/**
+ * A declaration with a rule that reads rows (`where`, `one`). The feed gives the rule the
+ * entity's own rows, so the rule may read only what those rows have.
+ */
+type RuledDeclaration<Q extends Domain.Query.Any, Entry> = ReadDeclaration<Q, Entry> & {
+  readonly [Ruled]: true;
+};
+
 /** Which optional facets have already been applied while the query decides membership. */
 type ReadFacets = { readonly rows?: true };
 
@@ -78,9 +92,9 @@ type ReadBuilder<Q extends Domain.Query.Any, Entry, Used extends ReadFacets> = R
   Entry
 > & {
   /** Gives a many-row subset a membership rule that places feed rows. */
-  where(rule: Rule<Q, Entry>): ReadDeclaration<Q, Entry>;
+  where(rule: Rule<Q, Entry>): RuledDeclaration<Q, Entry>;
   /** Gives a single-row subset a membership rule. Use `.findOne()` to read `Missing`. */
-  one(rule: Rule<Q, Entry>): ReadDeclaration<Q, Entry>;
+  one(rule: Rule<Q, Entry>): RuledDeclaration<Q, Entry>;
 } & (Used["rows"] extends true
     ? unknown
     : {
@@ -103,8 +117,9 @@ const buildRead = <Q extends Domain.Query.Any, Entry, const Used extends ReadFac
   used: Used,
 ): ReadBuilder<Q, Entry, Used> => {
   const { query } = options;
-  const withRule = (rule: Rule<Q, Entry>, single: boolean): ReadDeclaration<Q, Entry> => ({
+  const withRule = (rule: Rule<Q, Entry>, single: boolean): RuledDeclaration<Q, Entry> => ({
     [ReadOptions]: { ...options, rule, single },
+    [Ruled]: true,
   });
 
   const builder = {
@@ -432,10 +447,18 @@ export type Subsets<R extends Rows.Any, Q extends Domain.Query.Any> = (
   ...args: Args<Q>
 ) => Source<SubsetRow<R, Q>>;
 
-/** Each query's entries must be the entity's rows. Report a mismatch on that query. */
+/**
+ * Each query's entries must be the entity's rows, and a rule may read only what the entity's rows
+ * have, since the feed gives it those rows and not the query's entries. Report a mismatch on that
+ * query.
+ */
 type Checks<R extends Rows.Any, Queries> = {
   readonly [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>]
-    ? unknown
+    ? Queries[K] extends { readonly [Ruled]: true }
+      ? [Rows.RowOf<R>] extends [SpecEntryOf<Queries[K]>]
+        ? unknown
+        : { readonly "the rule reads rows the feed does not deliver": Rows.RowOf<R> }
+      : unknown
     : { readonly "query entries are not this entity's rows": Rows.RowOf<R> };
 };
 
