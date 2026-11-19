@@ -19,7 +19,8 @@ import {
   NoteRows,
   NotesApi,
   Notes,
-  NotesByTitle,
+  NotesByCursor,
+  WrappedNotes,
   RenameNote,
   TouchNote,
   transport,
@@ -193,7 +194,7 @@ describe("f(ready subsets, feed change)", () => {
     const wrapped = HighAlch.collection(NoteRows, {
       queries: {
         list: HighAlch.where(
-          HighAlch.entries(NotesByTitle, (answer) => answer.Items),
+          HighAlch.entries(WrappedNotes, (answer) => answer.Items),
           (row, input) => row.account === input.account,
         ),
       },
@@ -215,7 +216,7 @@ describe("f(ready subsets, feed change)", () => {
     await tick();
 
     expect(titles(list)).toEqual(["n1:Ada", "n2:Bob", "n3:Cyd"]);
-    expect(countAsked(server).NotesByTitle).toBe(1);
+    expect(countAsked(server).WrappedNotes).toBe(1);
   });
 
   it("f(two accounts, module-level declarations) → each client follows only its own scope", async () => {
@@ -260,6 +261,8 @@ const countAsked = (server: Host) => {
     NoteById: count("NoteById"),
     NotesByBook: count("NotesByBook"),
     NotesByTitle: count("NotesByTitle"),
+    NotesByCursor: count("NotesByCursor"),
+    WrappedNotes: count("WrappedNotes"),
     NoteStats: count("NoteStats"),
   };
 };
@@ -320,6 +323,60 @@ const causeLayer = (server: Host, cause: string) => {
     },
   });
 };
+
+describe("f(query declaration, configuration)", () => {
+  it("rejects a second declaration with different membership in one call or across calls", () => {
+    class Rows extends NoteRows {}
+    const full = HighAlch.all(Notes);
+
+    expect(() => HighAlch.collection(Rows, { queries: { bare: Notes, full } })).toThrow(
+      "HighAlch.collection: conflicting declarations of query Notes for NoteRows",
+    );
+    const configured = HighAlch.collection(Rows, { queries: { full } });
+
+    expect(() => HighAlch.collection(Rows, { queries: { bare: Notes } })).toThrow(
+      "HighAlch.collection: conflicting declarations of query Notes for NoteRows",
+    );
+    const repeated = HighAlch.collection(Rows, { queries: { full: HighAlch.all(Notes) } });
+
+    expect(repeated.full({ account: "acc-1" }).id).toBe(configured.full({ account: "acc-1" }).id);
+  });
+
+  it("rejects all over a cursor page at runtime", () => {
+    expect(() => HighAlch.all(NotesByCursor as never)).toThrow(
+      "HighAlch.all cannot declare paged query NotesByCursor",
+    );
+  });
+});
+
+it("f(two cursor pages, deletion) → both pages re-ask with their own cursor and size", async () => {
+  const server = await open();
+  const input = { account: "acc-1" };
+  const dan = { ...ada, NoteId: "n4", title: "Dan" };
+
+  await seed(server, ada, bob, cyd, dan);
+  const clock = reloads();
+  const db = account(server, input.account, cleanup, { timers: clock.timers });
+  const first = observe(db, notes.cursor(input, { take: 1 }), cleanup);
+  const next = observe(db, notes.cursor(input, { after: "1", take: 2 }), cleanup);
+
+  await ready(first, next);
+  expect(titles(first)).toEqual(["n1:Ada"]);
+  expect(titles(next)).toEqual(["n2:Bob", "n3:Cyd"]);
+  expect(countAsked(server).NotesByCursor).toBe(2);
+
+  await server.send((client) =>
+    client.DeleteNote(address(input.account, ada.NoteId), { NoteId: ada.NoteId }),
+  );
+  await until(() => !first.has(ada.NoteId), "cursor page patched");
+  await server.indexed((stored) => !stored.has(ada.NoteId));
+  clock.advance();
+
+  await until(() => first.has(bob.NoteId) && next.has(dan.NoteId), "both pages reloaded");
+  expect(titles(first)).toEqual(["n2:Bob"]);
+  expect(titles(next)).toEqual(["n3:Cyd", "n4:Dan"]);
+  expect(countAsked(server).NotesByCursor).toBe(4);
+});
 
 describe("f(offset/limit page, feed change)", () => {
   const input = { account: "acc-1", Offset: 0, Limit: 2 };

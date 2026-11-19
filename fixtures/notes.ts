@@ -11,6 +11,7 @@ import {
   NoteRows,
   Notes,
   NotesByBook,
+  NotesByCursor,
   NotesByTitle,
   NoteStats,
   PinNote,
@@ -28,6 +29,7 @@ export const notes = HighAlch.collection(NoteRows, {
     list: HighAlch.all(Notes),
     get: HighAlch.one(NoteById, (row, input) => row.NoteId === input.NoteId),
     byBook: HighAlch.where(NotesByBook, (row, input) => row.BookId === input.BookId),
+    cursor: NotesByCursor,
     page: HighAlch.entries(NotesByTitle, (answer) => answer.Items),
   },
   commands: {

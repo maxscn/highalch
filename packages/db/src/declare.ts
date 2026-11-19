@@ -108,7 +108,19 @@ export const where = <S extends Reader>(source: S, rule: Rule<NoInfer<S>>) =>
   new Membership(source, rule, false);
 
 /** A whole-list query that contains every row in the client's scope. */
-export const all = <S extends Reader>(source: S) => where(source, () => true);
+export const all = <S extends Reader>(
+  source: S & (NonNullable<ReaderQuery<S>["definition"]["paged"]> extends true ? never : unknown),
+) => {
+  const membership = where<S>(source, includesAll);
+  const query = membership.query;
+
+  if (query.definition.paged)
+    throw new Error(`HighAlch.all cannot declare paged query ${query.queryName}`);
+
+  return membership;
+};
+
+const includesAll = () => true;
 
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
@@ -408,11 +420,13 @@ export type Subsets<R extends Rows.Any, Q extends Domain.Query.Any> = (
 ) => Source<SubsetRow<R, Q>>;
 
 /** Each query's entries must be the entity's rows. */
-type Checks<R extends Rows.Any, Queries> = {
-  readonly [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>]
-    ? unknown
-    : { readonly "query entries are not this entity's rows": K };
+type InvalidQueries<R extends Rows.Any, Queries> = {
+  [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>] ? never : K;
 }[keyof Queries];
+
+type Checks<R extends Rows.Any, Queries> = [InvalidQueries<R, Queries>] extends [never]
+  ? unknown
+  : { readonly "query entries are not this entity's rows": InvalidQueries<R, Queries> };
 
 /** A declared entity: one subset accessor per query, one command per command. */
 export type Collection<R extends Rows.Any, Queries, Commands> = {
@@ -611,6 +625,24 @@ const editOf = (entity: Rows.Any, spec: CommandSpec<Row>): Edit => {
   return { ...base, apply: () => 0 };
 };
 
+const declarations = new WeakMap<Rows.Any, Map<string, QuerySpec>>();
+
+const sameDeclaration = (first: QuerySpec, second: QuerySpec): boolean => {
+  if (first === second) return true;
+
+  if (first instanceof Membership && second instanceof Membership)
+    return (
+      first.single === second.single &&
+      first.rule === second.rule &&
+      sameDeclaration(first.source, second.source)
+    );
+
+  if (first instanceof Entries && second instanceof Entries)
+    return first.query === second.query && first.select === second.select;
+
+  return false;
+};
+
 /**
  * Declares an entity: a subset accessor per query and a command per command, at module level.
  * `customers.list(input)` is a collection descriptor for stock `useLiveQuery`; every subset of the
@@ -627,9 +659,18 @@ export const collection = <
     readonly commands?: Commands & CommandChecks<R, Commands>;
   } & Checks<R, Queries>,
 ): Collection<R, Queries, Commands> => {
+  const known = new Map(declarations.get(rows));
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
     const reader = readerOf(spec);
     const { query } = reader;
+    const previous = known.get(query.queryName);
+
+    if (previous && !sameDeclaration(previous, spec))
+      throw new Error(
+        `HighAlch.collection: conflicting declarations of query ${query.queryName} for ${rows.entityName}`,
+      );
+
+    known.set(query.queryName, spec);
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
@@ -643,6 +684,8 @@ export const collection = <
   const commands = Object.entries(declaration.commands ?? {}).map(([name, spec]) => {
     return [name, make(declaredOf(spec).command, editOf(rows, spec))] as const;
   });
+
+  declarations.set(rows, known);
 
   // SAFETY: one accessor per query and one command per command, under their declared names.
   return Object.fromEntries([...queries, ...commands]) as Collection<R, Queries, Commands>;

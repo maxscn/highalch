@@ -313,7 +313,20 @@ export class NotesByBook extends Domain.Query("NotesByBook", {
   rejects: [QueryRefused],
 }) {}
 
+export class NotesByCursor extends Domain.Query("NotesByCursor", {
+  input: { account: Schema.String },
+  success: Note,
+  paged: true,
+  rejects: [QueryRefused],
+}) {}
+
 export class NotesByTitle extends Domain.Query("NotesByTitle", {
+  input: { account: Schema.String, Offset: Schema.Number, Limit: Schema.Number },
+  success: Schema.Struct({ Items: Schema.Array(Note) }),
+  rejects: [QueryRefused],
+}) {}
+
+export class WrappedNotes extends Domain.Query("WrappedNotes", {
   input: { account: Schema.String, Offset: Schema.Number, Limit: Schema.Number },
   success: Schema.Struct({ Items: Schema.Array(Note) }),
   rejects: [QueryRefused],
@@ -372,19 +385,39 @@ const NotesByBookLive = NotesByBook.toLayer(
   }),
 );
 
-const NotesByTitleLive = NotesByTitle.toLayer(
+const NotesByCursorLive = NotesByCursor.toLayer(
   Effect.gen(function* () {
     const store = yield* NoteStore;
 
-    return ({ account, Offset, Limit }) =>
-      answer(store, "NotesByTitle", (notes) => ({
+    return ({ account }, { after, take }) =>
+      answer(store, "NotesByCursor", (notes) => {
+        const mine = notes.filter((note) => note.account === account);
+        const start = Number(after ?? 0);
+        const next = start + take;
+
+        return {
+          entries: mine.slice(start, next),
+          cursor: next < mine.length ? String(next) : null,
+        };
+      });
+  }),
+);
+
+const titlePage = (name: string) =>
+  Effect.gen(function* () {
+    const store = yield* NoteStore;
+
+    return ({ account, Offset, Limit }: Domain.Query.InputOf<typeof NotesByTitle>) =>
+      answer(store, name, (notes) => ({
         Items: notes
           .filter((note) => note.account === account)
           .sort((a, b) => a.title.localeCompare(b.title) || a.NoteId.localeCompare(b.NoteId))
           .slice(Offset, Offset + Limit),
       }));
-  }),
-);
+  });
+
+const NotesByTitleLive = NotesByTitle.toLayer(titlePage("NotesByTitle"));
+const WrappedNotesLive = WrappedNotes.toLayer(titlePage("WrappedNotes"));
 
 const NoteStatsLive = NoteStats.toLayer(
   Effect.gen(function* () {
@@ -397,7 +430,16 @@ const NoteStatsLive = NoteStats.toLayer(
   }),
 );
 
-const queries = [Notes, NoteById, NotesByBook, NotesByTitle, NoteStats, Books] as const;
+const queries = [
+  Notes,
+  NoteById,
+  NotesByBook,
+  NotesByTitle,
+  WrappedNotes,
+  NotesByCursor,
+  NoteStats,
+  Books,
+] as const;
 
 export class Notebook extends Domain.Model("Notebook", {
   aggregates: [NoteAggregate, BookAggregate],
@@ -594,6 +636,8 @@ export const notebook = () =>
     NoteByIdLive,
     NotesByBookLive,
     NotesByTitleLive,
+    WrappedNotesLive,
+    NotesByCursorLive,
     NoteStatsLive,
     BooksLive,
     NotebookWriter.layer,
@@ -619,6 +663,8 @@ export const host = async (options: { readonly history?: ReadonlyArray<Seed> } =
     NoteByIdLive,
     NotesByBookLive,
     NotesByTitleLive,
+    WrappedNotesLive,
+    NotesByCursorLive,
     NoteStatsLive,
     BooksLive,
   ).pipe(Layer.provide(Layer.succeed(NoteStore, store)));

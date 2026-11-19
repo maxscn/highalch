@@ -14,6 +14,7 @@ import {
   Note,
   NotesByBook,
   NotesByTitle,
+  NotesByCursor,
   NoteStats,
   type NotesApi,
   PinNote,
@@ -213,12 +214,22 @@ export function Membership() {
     () => true,
   );
 
+  // @ts-expect-error a page cannot be the whole list
+  HighAlch.all(NotesByCursor);
+
+  const paged = HighAlch.entries(NotesByCursor, (answer) => answer.entries);
+  // @ts-expect-error wrapping a page does not make it the whole list
+  HighAlch.all(paged);
+
   const wrong = HighAlch.entries(NotesByTitle, (answer) => answer.Items.map((row) => row.title));
 
   // @ts-expect-error the selected rows are strings, even after composing a membership rule
   HighAlch.collection(NoteRows, {
     queries: { bad: HighAlch.where(wrong, (row) => row.length > 0) },
   });
+
+  // @ts-expect-error the valid sibling does not make the invalid selector valid
+  HighAlch.collection(NoteRows, { queries: { good: Notes, bad: wrong } });
 
   // @ts-expect-error the bare query's result is still checked when using all
   HighAlch.collection(NoteRows, { queries: { bad: HighAlch.all(NoteStats) } });
