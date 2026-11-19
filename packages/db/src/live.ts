@@ -1,6 +1,6 @@
 import { Data, Option, Predicate } from "effect";
 import { findProblems, type HealthNode } from "@tanstack/db";
-import { type ClientClosed, Defect, type TaggedFailure } from "./state";
+import { Defect, type TaggedFailure } from "./state";
 
 /**
  * The type-only key under which a row type carries the errors its collection can fail with. It
@@ -105,8 +105,7 @@ type Shown<V extends LiveResult> = Exclude<V["data"], undefined>;
 export type LiveState<V extends LiveResult> =
   | Data.TaggedEnum.Value<Live<Shown<V>, ErrorsOf<V["data"]>>, "Loading" | "Retrying" | "Ready">
   | Data.TaggedEnum.Value<Live<Shown<V>, ErrorsOf<V["data"]>>, Single<V["data"]> | Off<V>>
-  | ErrorsOf<V["data"]>
-  | ClientClosed;
+  | ErrorsOf<V["data"]>;
 
 const none = () => {};
 

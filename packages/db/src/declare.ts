@@ -8,8 +8,8 @@ import {
 } from "@tanstack/db";
 import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
-import { ClientClosed, type TaggedFailure } from "./state";
-import { connectionOf, failureOf, read } from "./client";
+import { Defect, type TaggedFailure } from "./state";
+import { closedClientError, connectionOf, failureOf, read } from "./client";
 import {
   make,
   type Command,
@@ -470,6 +470,9 @@ const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
   return { query: spec, rule: Option.none(), select: Option.none() };
 };
 
+/** The defect a read started on a closing or closed HighAlch client fails with. */
+const closedRead = (name: string) => new Defect({ name, cause: Cause.die(closedClientError()) });
+
 /** A subset's descriptor: materialised per client, synced by a `Subset` run. */
 const subset = (spec: Spec, id: string) =>
   collectionOptions(id, (db: DbClient) => {
@@ -477,7 +480,8 @@ const subset = (spec: Spec, id: string) =>
 
     const sync: SyncConfig<Row, string> = {
       sync: (params) => {
-        if (connection.closingOrClosed) return params.fail(new ClientClosed());
+        // A read from a closing or closed client is a bug in the caller: a defect, not a state.
+        if (connection.closingOrClosed) return params.fail(closedRead(id));
 
         return new Subset(connection, spec, params).start();
       },
@@ -717,7 +721,7 @@ export const query =
 
       const sync: SyncConfig<ResultRow<Q>, string> = {
         sync: (params) => {
-          if (connection.closingOrClosed) return params.fail(new ClientClosed());
+          if (connection.closingOrClosed) return params.fail(closedRead(source.queryName));
 
           const scope = connection.openScope();
           let stopping = false;

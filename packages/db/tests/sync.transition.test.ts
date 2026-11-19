@@ -8,6 +8,7 @@ import {
   DbClient,
 } from "@tanstack/db";
 import {
+  Cause,
   Clock,
   Context,
   Effect,
@@ -2537,7 +2538,7 @@ describe("f(client, close)", () => {
   });
 
   it.each(["during cleanup", "after close"] as const)(
-    "f(client %s, observe new collections) → immediate matchable error and no registrations",
+    "f(client %s, observe new collections) → an immediate defect and no registrations",
     async (when) => {
       const server = await open();
       const db = account(server, ada.account, cleanup);
@@ -2565,21 +2566,28 @@ describe("f(client, close)", () => {
         cleanup.push(() => live.cleanup());
         live.startSyncImmediate();
         expect(live.status).toBe("error");
-        expect(
-          HighAlch.match({
-            data: undefined as ReadonlyArray<Note> | undefined,
-            status: live.status,
-            isEnabled: true,
-            isReady: live.isReady(),
-            isLoadingError: live.status === "error",
-            isCrashed: live.status === "crashed",
-            health: live.health,
-            collection: live,
-          }).on({
-            "HighAlch.ClientClosed": (error) => error.message,
-            orElse: (state) => state._tag,
-          }),
-        ).toBe("HighAlch client is closing or closed");
+        // A read from a closed client is a bug in the caller: `match` throws it as a defect.
+        const thrown = (() => {
+          try {
+            HighAlch.match({
+              data: undefined as ReadonlyArray<Note> | undefined,
+              status: live.status,
+              isEnabled: true,
+              isReady: live.isReady(),
+              isLoadingError: live.status === "error",
+              isCrashed: live.status === "crashed",
+              health: live.health,
+              collection: live,
+            }).on({ orElse: (state) => state._tag });
+          } catch (error) {
+            return error;
+          }
+        })();
+
+        expect(thrown).toBeInstanceOf(HighAlch.Defect);
+        expect(String(Cause.squash((thrown as HighAlch.Defect).cause))).toContain(
+          "HighAlch client is closing or closed",
+        );
         expect(connectionOf(db).subsets.size).toBe(0);
         expect(connectionOf(db).feeds.size).toBe(0);
         expect(server.wire.counts.connections).toBe(0);
@@ -2680,6 +2688,64 @@ describe("f(client, close)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("f(two optimistic renames waiting on a debounce, a subscriber throws on the first rollback, close) → both roll back and close completes", async () => {
+    const server = await open();
+    await seed(server, ada, bob);
+    const clock = await manualClock();
+    const db = account(server, ada.account, cleanup, { clock });
+    const list = observe(db, notes.list({ account: ada.account }), cleanup);
+    const release = HighAlch.activate(db);
+    cleanup.push(async () => release());
+    await ready(list);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const paced = () =>
+        createPacedMutations({ ...notes.rename.paced, strategy: debounceStrategy({ wait: 500 }) });
+      const first = paced()({ NoteId: ada.NoteId, title: "Abel" });
+      const second = paced()({ NoteId: bob.NoteId, title: "Bert" });
+
+      first.when("settled").catch(() => {});
+      second.when("settled").catch(() => {});
+      expect(titles(list)).toEqual(["n1:Abel", "n2:Bert"]);
+
+      let threw = false;
+      const subscription = list.subscribeChanges(() => {
+        if (threw) return;
+
+        threw = true;
+        throw new Error("a subscriber that throws");
+      });
+      cleanup.push(async () => subscription.unsubscribe());
+
+      await Effect.runPromise(HighAlch.close(db));
+
+      expect(threw).toBe(true);
+      expect([first.state, second.state]).toEqual(["failed", "failed"]);
+      vi.advanceTimersByTime(500);
+      expect(server.wire.counts.commands).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("f(a collection's cleanup awaits close) → close completes", async () => {
+    const server = await open();
+    const db = account(server, ada.account, cleanup);
+    const dispose = db.cleanup.bind(db);
+    let inner = 0;
+
+    db.cleanup = async () => {
+      await Effect.runPromise(HighAlch.close(db));
+      inner += 1;
+      await dispose();
+    };
+
+    await Effect.runPromise(HighAlch.close(db));
+
+    expect(inner).toBe(1);
   });
 
   it("f(scoped client, user fails) → closes its feed and owned runtime once", async () => {

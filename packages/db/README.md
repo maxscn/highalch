@@ -262,11 +262,8 @@ recover by itself when its source does. Untagged failures (bugs, undecodable dat
 defect) are defects: `match` throws them to the error boundary. `Retrying` also carries `data`
 (an addition to the approved shape: after first readiness there is always data to keep showing).
 
-Without `orElse`, name every live state and Domain error. The optional
-`"HighAlch.ClientClosed"` branch handles reads started on a closing or closed client.
-`orElse` also handles this error. If neither handler is present, `match` throws the
-original `HighAlch.ClientClosed` error. Unknown and duplicate tags are type errors.
-Use `anyOf(...)` to share a handler across tags.
+Without `orElse`, name every live state and Domain error. Unknown and duplicate tags are type
+errors. Use `anyOf(...)` to share a handler across tags.
 
 ### Suspense
 
@@ -439,8 +436,11 @@ Run `yield* HighAlch.close(db)` in an Effect or
 `await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. When close begins,
 new commands and paced transactions still waiting for their strategy fail immediately with
 `HighAlch client is closing or closed`. Pending optimistic edits roll back. A read that
-starts syncing during or after close fails immediately with `HighAlch.ClientClosed` and
-registers no subset or feed.
+starts syncing during or after close is a bug in the caller: its collection fails immediately
+with a `HighAlch.Defect` whose cause says the client is closing or closed, which `match` throws
+to the error boundary, and it registers no subset or feed. A subscriber that throws while its
+transaction rolls back does not stop the shutdown, and a `close` called from a collection's
+cleanup returns at once.
 
 Close keeps the collections and feeds available while admitted commands settle. A server
 rejection rolls back with the original error. A reply received before the deadline gets the
