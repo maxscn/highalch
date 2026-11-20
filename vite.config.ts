@@ -32,6 +32,10 @@ const workspace = [
     replacement: source("./packages/story/src/tanstack-db/index.ts"),
   },
   {
+    find: /^@highalch\/story\/lowalch$/,
+    replacement: source("./packages/story/src/lowalch/index.ts"),
+  },
+  {
     find: /^@highalch\/story\/takumi$/,
     replacement: source("./packages/story/src/takumi/index.ts"),
   },
@@ -61,7 +65,7 @@ export default defineConfig({
     dedupe: ["effect", "react", "react-dom"],
   },
   test: {
-    include: ["packages/*/tests/**/*.test.{ts,tsx}"],
+    include: ["packages/*/tests/**/*.test.{ts,tsx}", "examples/**/*.test.{ts,tsx}"],
   },
   run: {
     cache: true,

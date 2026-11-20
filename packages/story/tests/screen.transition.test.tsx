@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
 import { Db } from "@highalch/story/tanstack-db";
+import { LowAlchDb } from "@highalch/story/lowalch";
 import { Screen } from "@highalch/story/screen";
 import { Takumi } from "@highalch/story/takumi";
 import { install, serialize } from "../src/screen/dom";
@@ -25,7 +26,7 @@ import { notes } from "../../../fixtures/notes";
  * takumi after every step and compared with the reviewed baselines in `tests/baselines`.
  * `UPDATE_SCREENS=1` rewrites them; the filmstrips land in `artifacts/stories` (ignored).
  */
-const story = Story.make(Story.memory({ api: NotesApi, layer: notebook, services: store }), {
+const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, services: store }), {
   scope: "acc-1",
 });
 

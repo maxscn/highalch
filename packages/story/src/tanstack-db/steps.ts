@@ -1,10 +1,8 @@
 import type { DbClient, Transaction } from "@tanstack/db";
 import { Option, Predicate } from "effect";
-import * as LowAlch from "@lowalch/tanstack-db";
-import { activate, type Settled, type TaggedFailure } from "@lowalch/tanstack-db";
-import type { Input } from "@lowalch/tanstack-db/internal";
 import { Mismatch } from "../stage";
 import { partial, staged, type Step } from "../steps";
+import type { Input, Tagged } from "../values";
 import { json, type Plain, type World } from "../world";
 import {
   clients,
@@ -12,8 +10,8 @@ import {
   type Clients,
   type Declared,
   type Observed,
-  type Reply,
   type Run,
+  type Settled,
   type Shown,
   type Source,
 } from "./state";
@@ -80,7 +78,7 @@ export type Expected<Row> =
   | ((rows: ReadonlyArray<ShownRow<Row>>) => boolean);
 
 /** Which client a step acts as, and the source's label in reports. */
-type Scoped = { readonly as?: string };
+export type Scoped = { readonly as?: string };
 
 /** Opens a source (once) in the step's client; a newly opened source is settled. */
 const opened = async <Row extends object>(db: Clients, source: Source<Row>, scope?: string) => {
@@ -140,10 +138,10 @@ const rowsHold = <Row extends object>(observed: Observed, expected: Expected<Row
 };
 
 /** A read state as a `then` step names it: one of `match`'s own tags, or a typed error. */
-export type ReadState = "Loading" | "Retrying" | "Ready" | "Missing" | TaggedFailure;
+export type ReadState = "Loading" | "Retrying" | "Ready" | "Missing" | Tagged;
 
 /** Whether a state is what a `then` step expects: the tag (and fields), or the error's fields. */
-const matches = (expected: ReadState, fields: Plain, actual: TaggedFailure) => {
+const matches = (expected: ReadState, fields: Plain, actual: Tagged) => {
   if (Predicate.isString(expected))
     return Predicate.isTagged(actual, expected) && partial(fields, actual);
 
@@ -215,14 +213,11 @@ export const thenShows = <Row extends object>(
     if (rows !== undefined) rowsHold(observed, rows);
   });
 
-/** A command a `when` step can call: a `LowAlch` command, bound to the story's client. */
+/** A command a `when` step can call: a declared command, bound to the story's client. */
 export type Callable<I> = {
   readonly with: (options: {
     readonly client?: DbClient;
-  }) => (
-    input: I,
-    callbacks?: { readonly onCommitted?: (value: Settled<Reply>) => void },
-  ) => Transaction;
+  }) => (input: I, callbacks?: { readonly onCommitted?: (value: Settled) => void }) => Transaction;
 };
 
 /** What a `when(label, call)` step's call gets: the client, and `activate` for `.options`/`.paced`. */
@@ -251,7 +246,7 @@ export function when(
         argument({
           client,
           activate: () => {
-            const release = activate(client);
+            const release = db.connector.activate(client);
 
             db.releases.push(release);
           },
@@ -320,7 +315,7 @@ export const settled = (expected?: "Committed" | "Unconfirmed") =>
  * The last command was rejected with this typed error: the same class (its original instance)
  * with the same fields. The transaction rolled back.
  */
-export const rejected = (expected: TaggedFailure) =>
+export const rejected = (expected: Tagged) =>
   dbStep(`rejected ${expected._tag}`, async (db, world) => {
     const run = last(db);
     const outcome = await ended(world, run);
@@ -340,36 +335,21 @@ export const rejected = (expected: TaggedFailure) =>
     await world.settle();
   });
 
-/** An entity, as `LowAlch.reload(db, Rows)` takes it. */
-type Entity = { readonly entityName: string };
-
-const isEntity = <Row extends object>(target: Source<Row> | Entity): target is Entity =>
-  Predicate.hasProperty(target, "entityName") && Predicate.isString(target.entityName);
-
 /**
  * `reload(source)` reloads a source, as the `retry` a `match` handler receives does
- * (`collection.reload()`). `reload(Rows)` reloads every loaded subset of an entity in the step's
- * client, as `LowAlch.reload(db, Rows)` does after a write the feed does not carry; its debounce
- * (`reloadDelay`) passes, so the subsets have reloaded when the step ends.
+ * (`collection.reload()`), on a collection that can reload. The step ends when the world is quiet.
  */
-export function reload<Row extends object>(source: Source<Row>, options?: Scoped): Step;
-export function reload(entity: Entity, options?: Scoped): Step;
-export function reload<Row extends object>(target: Source<Row> | Entity, options: Scoped = {}) {
-  if (isEntity(target))
-    return dbStep(`reload ${target.entityName}`, async (db, world) => {
-      LowAlch.reload((await db.connect(options.as)).db, target);
+export const reload = <Row extends object>(source: Source<Row>, options: Scoped = {}) =>
+  dbStep(`reload ${source.id ?? "source"}`, async (db, world) => {
+    const { observed } = await db.observe(source, options.as);
 
-      while (world.clock.fireNext(Number.POSITIVE_INFINITY, ["reload"])) await world.settle();
+    const collection = observed.collection;
 
-      await world.settle();
-    });
-
-  return dbStep(`reload ${target.id ?? "source"}`, async (db, world) => {
-    const { observed } = await db.observe(target, options.as);
+    if (collection.reload === undefined)
+      throw new Mismatch(`${observed.label} cannot reload: its collection has no reload()`);
 
     // A reload that fails waits for its retry on the story's clock: the step ends when the world
     // is quiet, not when the reload succeeded (`advance` lets the retry run).
-    void observed.collection.reload().catch(() => undefined);
+    void collection.reload().catch(() => undefined);
     await world.settle();
   });
-}

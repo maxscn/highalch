@@ -3,9 +3,9 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RegistryContext } from "@effect/atom-react";
 import { Context, Layer, Option, Schema } from "effect";
+import { DbProvider } from "@tanstack/react-db";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { Provider } from "@lowalch/tanstack-db/react";
 import { registryOf } from "../atoms";
 import { Mismatch, type Done, type Stage } from "../stage";
 import { staged, type Step } from "../steps";
@@ -199,8 +199,8 @@ const index = async (output: string) => {
 /**
  * A viewport for stories: `const List = Screen.make(options)` gives a screen of that size,
  * whose `List.render(element)` is a step that mounts a React
- * element under the package's `Provider` with the story's client (stock `useLiveQuery` reads the
- * story's data) in a happy-dom document, and captures a frame after it and after every later
+ * element under its client's provider (TanStack DB's `DbProvider`, or the connector's: LowAlch's
+ * `Provider`) with the story's client (stock `useLiveQuery` reads the story's data) in a happy-dom document, and captures a frame after it and after every later
  * step: once the world is quiet (command replies still held) and React has flushed, the DOM is
  * serialised (current control values) and painted by the screen's painter with `css` (takumi's
  * WASM renderer with `Takumi.layer()`), then compared pixel by pixel with its painter's baseline. `List.shot(label?)` captures a frame on demand (with
@@ -312,7 +312,8 @@ export const make = (options: Options) => {
       // The story's report starts afresh: no frame or diff of an earlier run stays beside it.
       await rm(join(output, slug(story)), { recursive: true, force: true });
 
-      const client = await (await stage.use(clients)).connect();
+      const db = await stage.use(clients);
+      const client = await db.connect();
       const registry = await registryOf(stage);
       const dom = install(options.width, options.height);
       const container = document.createElement("div");
@@ -338,7 +339,10 @@ export const make = (options: Options) => {
           createElement(
             RegistryContext.Provider,
             { value: registry },
-            createElement(Provider, { client: client.db }, element),
+            Option.match(Option.fromUndefinedOr(db.connector.provide), {
+              onNone: () => createElement(DbProvider, { client: client.db }, element),
+              onSome: (provide) => provide(client.db, element),
+            }),
           ),
         ),
       );

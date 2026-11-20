@@ -78,7 +78,14 @@ export class Stage {
     // SAFETY: built from this adapter, under its own service key.
     if (known) return known as Promise<S>;
 
-    const layer = adapter.layer.pipe(Layer.provide(Layer.succeed(CurrentStage, this)));
+    const provided = Option.match(this.world, {
+      onNone: () => [],
+      onSome: (world) => world.host.adapters ?? [],
+    });
+
+    const layer = adapter.layer.pipe(
+      Layer.provide(Layer.mergeAll(Layer.succeed(CurrentStage, this), ...provided)),
+    );
 
     const made = Effect.runPromise(
       Layer.buildWithMemoMap(layer, this.memo, this.scope).pipe(

@@ -1,5 +1,7 @@
 import { Clock as EffectClock, Duration, Effect } from "effect";
-import { waitKind, type Wait } from "@lowalch/tanstack-db/internal";
+
+/** What a timer waits for, as the client that set it names it (`retry`, `reload`, …). */
+export type Wait = string;
 
 const live = Effect.runSync(EffectClock.Clock);
 
@@ -32,7 +34,11 @@ export class Clock {
 
   private timeNanos = () => BigInt(this.timeMillis()) * 1_000_000n;
 
-  readonly service: EffectClock.Clock = {
+  /**
+   * The clock as an Effect `Clock` service for a client: its `sleep` sets a timer on this clock,
+   * of the kind `wait` reads when it is called (a client's own reference, `retry` or `reload`).
+   */
+  effect = (wait: Effect.Effect<Wait>): EffectClock.Clock => ({
     currentTimeMillisUnsafe: this.timeMillis,
     currentTimeMillis: Effect.sync(this.timeMillis),
     currentTimeNanosUnsafe: this.timeNanos,
@@ -48,12 +54,12 @@ export class Clock {
       return Effect.sync(this.timeNanos);
     }),
     sleep: (duration) =>
-      Effect.flatMap(waitKind, (wait) =>
+      Effect.flatMap(wait, (kind) =>
         Effect.callback<void>((resume) =>
-          Effect.sync(this.set(() => resume(Effect.void), Duration.toMillis(duration), wait)),
+          Effect.sync(this.set(() => resume(Effect.void), Duration.toMillis(duration), kind)),
         ),
       ),
-  };
+  });
 
   private set(run: () => void, ms: number, wait: Wait) {
     const id = (this.sequence += 1);

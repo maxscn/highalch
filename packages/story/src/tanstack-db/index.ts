@@ -1,7 +1,8 @@
 /**
  * TanStack DB steps for stories: what a client's sources show, the commands it runs and how they
  * settle, and the invariants of what it shows. They run on the story runner of
- * `@highalch/story`, beside machine and screen steps.
+ * `@highalch/story`, beside machine and screen steps, on plain TanStack DB clients or on the
+ * clients a connector makes (`@highalch/story/lowalch`).
  *
  * ```ts
  * import * as Story from "@highalch/story";
@@ -16,17 +17,15 @@
  * );
  * ```
  */
-import {
-  invariants,
-  noFlickerBack,
-  nothingPending,
-  rejectedRestores,
-  subsetsAgree,
-} from "./invariants";
+import { connected, invariants, nothingPending } from "./invariants";
+import { clients } from "./state";
 import { check, historyOf, open, rejected, reload, settled, thenShows, when } from "./steps";
-import { Live, Settled, view } from "./view";
 
-/** The TanStack DB steps, invariants and view helpers. */
+/**
+ * The TanStack DB steps and invariants. They work on plain TanStack DB clients; a connector
+ * (`LowAlchDb` from `@highalch/story/lowalch`) makes them LowAlch clients that sync the story's
+ * Domain, and its own invariants join `Db.invariants`.
+ */
 export const Db = {
   open,
   when,
@@ -37,20 +36,18 @@ export const Db = {
   reload,
   historyOf,
   check,
-  view,
-  Live,
-  Settled,
   invariants,
-  noFlickerBack,
   nothingPending,
-  subsetsAgree,
-  rejectedRestores,
+  connected,
+  clients,
 } as const;
 
-export { clients, Clients, DbClients, Observed, Outcome, plain, retryTransport } from "./state";
+export { Connect, plain as plainConnector } from "./connector";
 
-export type { Client, Entry, Observation, Run, Shown, Source, Watched } from "./state";
+export type { Change, Connector, Watched } from "./connector";
 
-export type { Acting, Callable, Expected, ReadState, ShownRow, Then } from "./steps";
+export { Clients, DbClients, Observed, Outcome, plain } from "./state";
 
-export type { ViewResult, ViewState } from "./view";
+export type { Client, Observation, Run, Settled, Shown, Source } from "./state";
+
+export type { Acting, Callable, Expected, ReadState, Scoped, ShownRow, Then } from "./steps";
