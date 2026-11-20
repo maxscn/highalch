@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
-import { Explore } from "@highalch/story";
+import { Explore, reader } from "@highalch/story";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
@@ -33,33 +33,53 @@ const list = notes.list({ account: "acc-1" });
  * A transition rule: it reads the step that just ran and the list before it. A title changes only
  * on a step that writes or settles a write.
  */
-const titlesChangeOnWrites = Explore.rule("a title changes only when something writes it", {
-  reads: { list: Db.rows(list) },
-  holds: ({ step, list: now, previous }) =>
-    now.get("n1")?.title === previous.list.get("n1")?.title ||
-    ["Given", "Open", "When", "Rejected", "Settled", "Remote"].includes(step._tag),
-});
+const titlesChangeOnWrites = Explore.rule(
+  "a title changes only when something writes it",
+  function* ({ step }) {
+    const now = yield* Db.rows(list);
+    const was = yield* Explore.before(Db.rows(list));
+
+    return (
+      now.get("n1")?.title === was.get("n1")?.title ||
+      ["Given", "Open", "When", "Rejected", "Settled", "Remote"].includes(step._tag)
+    );
+  },
+);
 
 /** A transition rule on the step alone: a rejection leaves nothing pending. */
-const rejectionLeavesNothingPending = Explore.rule("a rejection leaves nothing pending", {
-  reads: { list: Db.rows(list) },
-  holds: ({ step, list: now }) =>
-    step._tag !== "Rejected" || [...now.values()].every((row) => !row.$hasPendingWrites),
-});
+const rejectionLeavesNothingPending = Explore.rule(
+  "a rejection leaves nothing pending",
+  function* ({ step }) {
+    // Read only after a rejection: on any other step the rule holds without reading.
+    if (step._tag !== "Rejected") return true;
+
+    const now = yield* Db.rows(list);
+
+    return [...now.values()].every((row) => !row.$hasPendingWrites);
+  },
+);
 
 /** A rest rule: only judged when nothing is in flight. */
-const nothingSavingAtRest = Explore.rule("no title is saving at rest", {
-  at: "rest",
-  reads: { list: Db.rows(list) },
-  holds: ({ list: now }) => [...now.values()].every((row) => !row.$hasPendingWrites),
-});
+const nothingSavingAtRest = Explore.rule(
+  "no title is saving at rest",
+  function* () {
+    const now = yield* Db.rows(list);
+
+    return [...now.values()].every((row) => !row.$hasPendingWrites);
+  },
+  { at: "rest" },
+);
 
 /** An end rule: the story ran its course, its replies arrived and its timers fired. */
-const everySaveEnds = Explore.rule("every save ends", {
-  at: "end",
-  reads: { machine: Machine.snapshot() },
-  holds: ({ machine }) => !machine?.matches("Saving"),
-});
+const everySaveEnds = Explore.rule(
+  "every save ends",
+  function* () {
+    const machine = yield* Machine.snapshot();
+
+    return !machine?.matches("Saving");
+  },
+  { at: "end" },
+);
 
 describe("f(story, rules) → each rule checked at its moment", () => {
   it("f(rename rejected) → the transition, rest and end rules hold", async () => {
@@ -91,9 +111,10 @@ describe("f(story, rules) → each rule checked at its moment", () => {
   });
 
   it("f(a rule that breaks) → the failure names it by its sentence and shows what it read", async () => {
-    const titleIsAda = Explore.rule("the title stays Ada", {
-      reads: { list: Db.rows(list) },
-      holds: ({ list: now }) => [undefined, "Ada"].includes(now.get("n1")?.title),
+    const titleIsAda = Explore.rule("the title stays Ada", function* () {
+      const now = yield* Db.rows(list);
+
+      return [undefined, "Ada"].includes(now.get("n1")?.title);
     });
 
     const failure = await story
@@ -129,6 +150,53 @@ describe("f(story, rules) → each rule checked at its moment", () => {
 
     // The rename is in flight after every step and at the end: never at rest, so never judged.
     expect(failure).toBeUndefined();
+  });
+});
+
+describe("f(rule yielding its reads) → only what it reached is read, by name", () => {
+  /** A reader that fails if it is ever read. */
+  const untouchable = reader<string>("untouchable", async () => {
+    throw new Error("read although the rule returned before it");
+  });
+
+  it("f(a branch that returns first) → the reader after it is never read", () =>
+    story.with({
+      rules: [
+        Explore.rule("reads only on a rejection", function* ({ step }) {
+          if (step._tag !== "Rejected") return true;
+
+          return (yield* untouchable) === "never";
+        }),
+      ],
+    })(Story.given(n1, new NoteCreated({ note: ada })), Db.open(list)));
+
+  it("f(a title that changes, Explore.before) → the failure shows the read and its value before", async () => {
+    const titleNeverChanges = Explore.rule("a title, once shown, never changes", function* () {
+      const now = yield* Db.rows(list);
+      const was = yield* Explore.before(Db.rows(list));
+
+      return was.get("n1") === undefined || now.get("n1")?.title === was.get("n1")?.title;
+    });
+
+    const failure = await story
+      .with({ rules: [titleNeverChanges] })(
+        Story.given(n1, new NoteCreated({ note: ada })),
+        Db.open(list),
+        Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+      )
+      .then(
+        () => undefined,
+        (error: Story.StoryFailure) => error,
+      );
+
+    // Steps 1 and 2 keep it (at the first check, before is now); the rename breaks it.
+    expect(failure?.step).toBe(3);
+    expect(failure?.message).toContain(
+      'it read rows NoteRows/Notes:{"account":"acc-1"}:{}: {"n1":{"$hasPendingWrites":true,"account":"acc-1","BookId":"b1","NoteId":"n1","pinned":false,"title":"Ada 2"}}\n',
+    );
+    expect(failure?.message).toContain(
+      'it read before: rows NoteRows/Notes:{"account":"acc-1"}:{}: {"n1":{"$hasPendingWrites":false,"account":"acc-1","BookId":"b1","NoteId":"n1","pinned":false,"title":"Ada"}}',
+    );
   });
 });
 

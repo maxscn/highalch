@@ -1,7 +1,7 @@
 import type { DbClient, Transaction } from "@tanstack/db";
 import { Option, Predicate } from "effect";
 import { Mismatch } from "../stage";
-import type { Reader } from "../rules";
+import { reader, type Reader } from "../rules";
 import { partial, staged, type Step } from "../steps";
 import type { Input, Tagged } from "../values";
 import { json, type Plain, type World } from "../world";
@@ -362,17 +362,23 @@ export const reload = <Row extends object>(source: Source<Row>, options: Scoped 
 export const rows = <Row extends object>(
   source: Source<Row>,
   options: Scoped = {},
-): Reader<ReadonlyMap<string, ShownRow<Row>>> => ({
-  read: async (stage) => {
-    stage.hosted(`rows of ${source.id ?? "source"}`);
+): Reader<ReadonlyMap<string, ShownRow<Row>>> =>
+  reader(
+    [
+      "rows",
+      source.id ?? "source",
+      ...[options.as].filter((as) => as !== undefined).map((as) => `as ${as}`),
+    ].join(" "),
+    async (stage) => {
+      stage.hosted(`rows of ${source.id ?? "source"}`);
 
-    const db = await stage.use(clients);
-    const { observed } = await db.observe(source, options.as);
+      const db = await stage.use(clients);
+      const { observed } = await db.observe(source, options.as);
 
-    // SAFETY: an observed source's rows are its `Row`s, without TanStack DB's virtual fields.
-    return new Map(observed.sorted().map(([key, shown]) => [key, asRow(shown) as ShownRow<Row>]));
-  },
-});
+      // SAFETY: an observed source's rows are its `Row`s, without TanStack DB's virtual fields.
+      return new Map(observed.sorted().map(([key, shown]) => [key, asRow(shown) as ShownRow<Row>]));
+    },
+  );
 
 /** A command the story's clients ran, as a rule reads it: its label, who ran it, how it ended. */
 export type CommandOf = {
@@ -382,12 +388,11 @@ export type CommandOf = {
 };
 
 /** The commands the story's clients ran so far, in order, as a rule reads them. */
-export const commands = (): Reader<ReadonlyArray<CommandOf>> => ({
-  read: async (stage) => {
+export const commands = (): Reader<ReadonlyArray<CommandOf>> =>
+  reader("commands", async (stage) => {
     stage.hosted("commands");
 
     const db = await stage.use(clients);
 
     return db.runs.map((run) => ({ label: run.label, by: run.by, outcome: run.outcome._tag }));
-  },
-});
+  });

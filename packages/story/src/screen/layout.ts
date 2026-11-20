@@ -148,7 +148,7 @@ const describe = (overflow: Overflow) =>
   `${overflow.element}: ${overflow.what} runs ${overflow.by}px past its ${overflow.side} edge`;
 
 /**
- * A screen's layout as a rule reads it (`reads: { layout: List.layout() }`): every element's box.
+ * A screen's layout as a rule reads it (`yield* Card.layout()`): every element's box.
  * It prints as what overflows, so a failing rule's report stays readable.
  */
 export class Layout {

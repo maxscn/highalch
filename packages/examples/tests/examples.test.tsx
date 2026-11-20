@@ -122,10 +122,10 @@ describe("example: a long title runs off its card", () => {
   // Only this example's rule reads a layout, so only its screen has a layout engine.
   const Card = screen(OverflowingTitle.css, 240).pipe(Takumi.layout());
 
-  const fits = Explore.rule("nothing on screen spills out of its box", {
-    at: "step",
-    reads: { layout: Card.layout() },
-    holds: ({ layout }) => Screen.overflowing(layout).length === 0,
+  const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+    const layout = yield* Card.layout();
+
+    return Screen.overflowing(layout).length === 0;
   });
 
   const renamed = (name: string, view: React.JSX.Element) =>
