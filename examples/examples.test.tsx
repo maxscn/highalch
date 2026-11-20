@@ -20,7 +20,7 @@ describe("example: the list claims to be empty while it loads", () => {
   const List = screen(EmptyWhileLoading.css);
 
   const loads = (name: string, view: React.JSX.Element) =>
-    story.with({ name, invariants: Db.invariants })(
+    story.with({ name, rules: Db.rules })(
       exist(ada, bob),
       Story.hold(),
       List.render(view),
@@ -54,7 +54,7 @@ describe("example: a rejected rename stays on screen", () => {
   const List = screen(StickyOptimistic.css);
 
   const renamed = (name: string, view: React.JSX.Element) =>
-    story.with({ name, invariants: Db.invariants })(
+    story.with({ name, rules: Db.rules })(
       exist(ada),
       List.render(view),
       Db.when(notes.rename, { NoteId: "n1", title: "locked" }),
@@ -85,7 +85,7 @@ describe("example: a rejected save says Saved", () => {
   const Editor = screen(SwallowedRejection.css);
 
   const saved = (name: string, atoms: ReturnType<typeof SwallowedRejection.approvedEditing>) =>
-    story.with({ name, invariants: Db.invariants })(
+    story.with({ name, rules: Db.rules })(
       exist(ada),
       Machine.mounted(atoms),
       Editor.render(<SwallowedRejection.EditorView atoms={atoms} />),

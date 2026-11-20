@@ -9,8 +9,8 @@ mounted React component without a browser.
 | Entry point                   | What                                                                                                |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time)               |
-| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling and invariants (plain TanStack DB)           |
-| `@highalch/story/lowalch`     | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, invariants, view helpers |
+| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)       |
+| `@highalch/story/lowalch`     | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, feed rules, view helpers |
 | `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                 |
 | `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom                   |
 | `@highalch/story/takumi`      | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`                   |
@@ -63,7 +63,7 @@ const story = Story.make(
 const pure = Story.make();
 
 it("renames optimistically, then settles through the feed", () =>
-  story.with({ invariants: Db.invariants })(
+  story.with({ rules: Db.rules })(
     Story.given(Note.ref(id), new NoteCreated({ note: ada })),
     Db.then(notes.list({ account: "acc-1" }), [{ title: "Ada" }]),
     Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
@@ -87,7 +87,7 @@ a deployed model's records over HTTP.
 A hostless story runs any step that needs no Domain: machines stepped purely, and your own steps
 built with `staged`. A data step or a running machine in it fails at once, naming itself:
 `Step 2 (then …) failed: "then …" needs a host, and this story has none`. `pure.with(...)` is
-refused (it has no clients, clock or invariants).
+refused (it has no clients, clock or rules).
 
 ## The steps
 
@@ -235,7 +235,7 @@ machine steps alike (an `EDIT` can be a running editor's `Machine.when(Edit)` an
 (`xstate/graph`'s `getShortestPaths` and `getSimplePaths`), keeps the longest of each prefix
 (every step is checked, so prefixes are), at most `maxLength` events and `maxPaths` paths, in a
 deterministic order, and runs each as a fresh story on the given runner (`before`, the events,
-`after`) with the invariants checked after every step. A failure is shrunk to a shorter failing
+`after`) with the rules checked at their moments. A failure is shrunk to a shorter failing
 path and reported as its event sequence (`A generated story failed (path 3 of 64): EDIT → DROP →
 REMOTE`) with the story's report. The model must be finite (bound it with a counter) and must
 record what distinguishes interleavings, since paths are simple paths through its states.
@@ -255,20 +255,48 @@ delete and insert of a row in one batch is one change). When a story ends, or fa
 in flight, closing its clients (`LowAlch.close` waits for sent commands) lets the replies through
 and runs the clock's waits, so a failure is reported instead of hanging.
 
-**Invariants.** `story.with({ invariants })` checks invariants after every step and at the end.
-`Db.invariants` are the clients' defaults: `nothingPending`, and the invariants their connector
-adds (`Db.connected`). With LowAlch clients those are `LowAlchDb.invariants`:
+**Rules.** `story.with({ rules })` checks rules, each at the moment it names. A rule is one
+declaration with a sentence for its name, which failures quote word for word:
 
-- `noFlickerBack`: a source never shows a row of the feed older than one it already showed for that
-  key, and once a command's optimistic row showed, never one older than the command's own change
-  (no new → old → new when it settles).
-- `nothingPending` (any client): at rest (settled, every command ended, every feed live) no row is
-  pending.
-- `subsetsAgree`: at rest, every ready subset of an entity in one client agrees on a shared row.
+```ts
+import { Explore } from "@highalch/story";
+
+const listMatchesEditor = Explore.rule("the list matches the editor", {
+  at: "rest", // "step" (default) | "rest" | "end"
+  reads: { list: Db.rows(list), editor: Machine.snapshot() },
+  holds: ({ list, editor }) => list.get("n1")?.title === editor.context.draft,
+});
+
+const rejectionLeavesNothingPending = Explore.rule("a rejection leaves nothing pending", {
+  reads: { list: Db.rows(list) },
+  holds: ({ step, list }) =>
+    step._tag !== "Rejected" || [...list.values()].every((row) => !row.$hasPendingWrites),
+});
+
+story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPending] });
+```
+
+- `at`: `"step"` after every step (and at the end); `"rest"` whenever nothing is in flight (settled,
+  every command ended, no feed held down), the end included; `"end"` once the story ran its course:
+  what was in flight arrives and every timer on its clock fires before the rule is checked.
+- `reads` names the views `holds` destructures: `Db.rows(source, { as? })` (a source's rows by key,
+  with `$hasPendingWrites`), `Machine.snapshot({ machine? })`. `holds` also gets `step` (the step
+  that just ran: its `_tag`, the verb of its label, such as `When`, `Rejected`, `Remote`, `Send`;
+  its number and label) and `previous` (the reads and step at the rule's previous check), so a
+  transition rule is the same shape.
+- A rule that does not hold fails the story after the step it broke at, quoting its name and what it
+  read: `After step 3 (when …), "the title stays Ada" does not hold / it read {"list":{…}}`.
+
+`Db.rules` are the clients' defaults: `nothingPending` ("nothing is pending at rest"), and the rules
+their connector adds (`Db.connected`, each checked at its own moment). With LowAlch clients those are
+`LowAlchDb.rules`, judged against the feed's own entries (read from the Domain, not through the wire):
+
+- `noFlickerBack` ("a row never flickers back"): a source never shows a row of the feed older than
+  one it already showed for that key, and once a command's optimistic row showed, never one older
+  than the command's own change (no new → old → new when it settles).
+- `subsetsAgree` (at rest): every ready subset of an entity in one client agrees on a shared row.
 - `rejectedRestores`: right after a rejection, each source shows the row it showed before the
   command (or a newer row of the feed), not pending.
-
-They judge rows against the feed's own entries (read from the Domain, not through the wire).
 
 ## Screens: a filmstrip of a story
 
@@ -429,7 +457,7 @@ decisions stay alchemy's stories; these stories are about what a client shows.
 They prove what a consumer's sources show and how its commands settle against the real model, the
 real client and TanStack DB, through the same states `match` renders, including failures and
 timing the story controls; a stepped machine's decisions and the commands it asks for, exactly;
-and a running machine together with the data. Generated stories prove the invariants over every
+and a running machine together with the data. Generated stories check the rules over every
 modelled interleaving up to the bound; nothing outside the model or beyond the bound. They do not
 test React rendering (use the view helpers), the websocket protocol (the wire is the Api client in
 process, or whatever transport your `Hosting` uses), or orders the story does not try.

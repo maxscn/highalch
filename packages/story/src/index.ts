@@ -52,7 +52,18 @@ export { registryOf as registry } from "./atoms";
 
 export type { Step, Steps } from "./steps";
 
-export type { Invariant, Moment } from "./invariants";
+export { Explore } from "./explore";
+
+export type {
+  At,
+  Declaration,
+  Moment,
+  Read,
+  Reader,
+  Rule,
+  StepOf,
+  World as RuleWorld,
+} from "./rules";
 
 export { transport, Wire } from "./wire";
 

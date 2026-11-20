@@ -70,7 +70,7 @@ parallel, and start no dev servers.
   machines over it, write them as stories: `Story.make(LowAlchDb.memory(...))` hosts the Domain in
   memory with real clients. Domain steps (`Story.given`, `Story.remote`, the transport's faults), data steps
   (`Db.when`, `Db.then`, `Db.settled`, `Db.rejected`, ...) and machine steps (`Machine.given` stepped purely, `Machine.start` running) compose in one
-  story. `explore` generates interleavings checked against `Db.invariants`.
+  story. `explore` generates interleavings checked against `Db.rules`.
 - `examples/` holds bugs a story catches: each a broken and an approved variant of a view or
   machine, one story run against both, both variants' frames as reviewed baselines
   (`examples/baselines/takumi/`). Its components and machines are fixtures too.

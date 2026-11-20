@@ -1,5 +1,5 @@
 import { Option, Predicate } from "effect";
-import type { Invariant } from "../invariants";
+import type { Rule } from "../rules";
 import { clients, type Clients, type Observed, type Run, type Shown } from "../tanstack-db/state";
 import { json } from "../world";
 import { entityOf, entries as entriesIn, type Entry } from "./connector";
@@ -41,20 +41,15 @@ const entriesOf = async (db: Clients, scope: string, cache: Map<string, Readonly
 
 const brief = (shown: Shown) => `${json(shown.row)}${shown.pending ? " (pending)" : ""}`;
 
-/** Whether the world is at rest now: settled since the last change, every run ended, feeds live. */
-const atRest = (db: Clients) =>
-  db.world.settled === db.world.tick &&
-  db.runs.every((run) => !Predicate.isTagged(run.outcome, "Pending")) &&
-  db.world.all().every((wire) => !wire.dropped);
-
 /**
  * No flicker back: once a source showed a row of the feed at `seq`, it never shows an older one
  * for that key (rows the feed never carried, such as pending ones, are not judged). And once a
  * command's optimistic row showed, the source never shows a row older than the command's own
  * change after it (no "new → old → new" when the command settles).
  */
-export const noFlickerBack: Invariant = {
-  name: "no flicker back",
+export const noFlickerBack: Rule = {
+  name: "a row never flickers back",
+  at: "step",
   check: async (stage) => {
     const db = await stage.use(clients);
 
@@ -140,12 +135,11 @@ export const noFlickerBack: Invariant = {
 };
 
 /** At rest, every ready subset of an entity in one client that shows a row shows the same row. */
-export const subsetsAgree: Invariant = {
-  name: "subsets agree",
-  check: async (stage, moment) => {
+export const subsetsAgree: Rule = {
+  name: "every subset of an entity agrees on a row",
+  at: "rest",
+  check: async (stage) => {
     const db = await stage.use(clients);
-
-    if (!atRest(db) && !moment.final) return [];
 
     const groups = new Map<string, Array<Observed>>();
 
@@ -183,8 +177,9 @@ const judged = new WeakMap<Clients, Set<Run>>();
  * A rejected command leaves the value it found: right after its rejection, each source that showed
  * its row shows what it showed before the command (or a newer row of the feed), not pending.
  */
-export const rejectedRestores: Invariant = {
+export const rejectedRestores: Rule = {
   name: "a rejection restores the row",
+  at: "step",
   check: async (stage) => {
     const db = await stage.use(clients);
 
@@ -250,5 +245,5 @@ export const rejectedRestores: Invariant = {
   },
 };
 
-/** The invariants of LowAlch clients, judged against the feed's own entries. */
-export const fed: ReadonlyArray<Invariant> = [noFlickerBack, subsetsAgree, rejectedRestores];
+/** The rules of LowAlch clients, judged against the feed's own entries. */
+export const fed: ReadonlyArray<Rule> = [noFlickerBack, subsetsAgree, rejectedRestores];

@@ -1,7 +1,7 @@
 import { DbClient, type CollectionStatus, type HealthNode, type Transaction } from "@tanstack/db";
 import { Context, Option, Predicate } from "effect";
 import type { ReactElement } from "react";
-import type { Invariant } from "../invariants";
+import type { Rule } from "../rules";
 import type { Tagged } from "../values";
 import type { World } from "../world";
 
@@ -52,8 +52,8 @@ export type Connector = {
    * TanStack DB's `DbProvider` when a connector has none).
    */
   readonly provide?: (db: DbClient, element: ReactElement) => ReactElement;
-  /** Invariants `Db.invariants` adds for these clients (a feed's: rows never flicker back). */
-  readonly invariants: ReadonlyArray<Invariant>;
+  /** Rules `Db.rules` adds for these clients (a feed's: a row never flickers back). */
+  readonly rules: ReadonlyArray<Rule>;
 };
 
 /**
@@ -95,5 +95,5 @@ export const plain = (): Connector => ({
       onSome: (mutation) => String(mutation.key),
     }),
   activate: () => () => {},
-  invariants: [],
+  rules: [],
 });

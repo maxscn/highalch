@@ -11,9 +11,11 @@ export type Plain = Readonly<Record<string, Field>>;
 /** A field of a row (any value, or nothing). */
 export type Field = Answer | null | undefined;
 
-/** A row as stable JSON (fields sorted), for comparisons. */
+/** A row as stable JSON (fields sorted, a `Map` as an object of its entries), for comparisons. */
 export const json = <V>(value: V): string =>
   JSON.stringify(value, (_key, field: Field) => {
+    if (field instanceof Map) return Object.fromEntries(field);
+
     if (Predicate.isObject(field) && !Array.isArray(field))
       return Object.fromEntries(Object.entries(field).sort(([a], [b]) => a.localeCompare(b)));
 
@@ -51,6 +53,8 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   readonly waits: Array<() => Promise<Option.Option<string>>> = [];
   /** What `idle` waits for besides a quiet world, added by adapters (commands to end). */
   readonly idles: Array<() => Promise<void>> = [];
+  /** What must hold for the world to be at rest besides being settled, added by adapters. */
+  readonly rests: Array<() => boolean> = [];
 
   /** The scope steps act as now: the story's first scope, or the one an `as` step names. */
   scope: string;
@@ -167,6 +171,29 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
     while (this.clock.fireNext(until)) await this.settle();
 
     this.clock.now = until;
+    await this.settle();
+  };
+
+  /**
+   * At rest: settled since the last change, no wire held down, and nothing an adapter tracks in
+   * flight (every command ended).
+   */
+  rest = () =>
+    this.settled === this.tick &&
+    this.all().every((wire) => !wire.dropped) &&
+    this.rests.every((check) => check());
+
+  /**
+   * Lets the story run its course: settles, then fires every timer on its clock, settling after
+   * each, and lets every adapter's work end (`idles`).
+   */
+  exhaust = async () => {
+    await this.settle();
+
+    while (this.clock.fireNext(Number.POSITIVE_INFINITY)) await this.settle();
+
+    for (const wait of this.idles) await wait();
+
     await this.settle();
   };
 

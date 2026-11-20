@@ -126,7 +126,7 @@ const List = Screen.make({
 });
 
 it("renames optimistically, then settles through the feed", () =>
-  story.with({ name: "rename settles", invariants: Db.invariants })(
+  story.with({ name: "rename settles", rules: Db.rules })(
     Story.given(NoteAggregate.ref(id), new NoteCreated({ note: ada })),
     List.render(<NoteList account="acc-1" />), // a frame after this step and every later one
     Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),

@@ -88,7 +88,7 @@ describe("f(read declarations, feed burst) as stories", () => {
     const patched = [{ title: "Ada 2" }, { title: "Bob" }];
     const added = [...patched, { title: "Cyd" }];
 
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada, bob),
       allSources.map((source) => Db.open(source)),
       Db.then(list, initial),
@@ -136,7 +136,7 @@ describe("f(read declarations, feed burst) as stories", () => {
 
 describe("f(ready subsets, command) as stories", () => {
   it("f(ready, rename) → optimistic at once, then committed in every subset; never back", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada, bob),
       Db.then(list, [{ title: "Ada" }, { title: "Bob" }]),
       Db.then(one, [{ title: "Ada" }]),
@@ -150,7 +150,7 @@ describe("f(ready subsets, command) as stories", () => {
   });
 
   it("f(ready, rejected rename) → rolled back with the original NoteLocked", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada),
       Db.then(one, [{ title: "Ada" }]),
       Db.when(notes.rename, { NoteId: "n1", title: "locked" }),
@@ -161,7 +161,7 @@ describe("f(ready subsets, command) as stories", () => {
   });
 
   it("f(insert, update, edit, delete) → each optimistic where its rule holds, then committed", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada, bob),
       Db.open(list),
       Db.open(book),
@@ -181,7 +181,7 @@ describe("f(ready subsets, command) as stories", () => {
   });
 
   it("f(.options and .paced) → the same steps run createOptimisticAction and paced mutations", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada),
       Db.open(one),
       Db.when("pin through createOptimisticAction", ({ activate }) => {
@@ -228,7 +228,7 @@ describe("f(ready subsets, command) as stories", () => {
 
 describe("f(subsets, load) as stories", () => {
   it("f(load in flight, writes race the query) → every write applied once, nothing missed", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada, bob),
       Story.hold(),
       Db.open(list),
@@ -268,7 +268,7 @@ describe("f(subsets, load) as stories", () => {
 
 describe("f(ready subsets, another client's change) as stories", () => {
   it("f(three subsets, server rename then delete) → every subset that shows the row follows", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada, bob),
       Db.open(list),
       Db.open(one),
@@ -289,7 +289,7 @@ describe("f(ready subsets, another client's change) as stories", () => {
   it("f(ready, feed drops; a write meanwhile; feed resumes) → Retrying, then the write, from the last seq", async () => {
     let asked = 0;
 
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada),
       Db.then(book, [{ NoteId: "n1" }]),
       Story.check("count the queries", (world) => {
@@ -312,7 +312,7 @@ describe("f(ready subsets, another client's change) as stories", () => {
   });
 
   it("f(two accounts, module-level declarations) → each client follows only its own scope", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada, eve),
       Db.then(book, [{ NoteId: "e1" }, { NoteId: "n1" }]),
       Story.as("acc-2", Db.then(book, [{ NoteId: "e1" }, { NoteId: "n1" }])),
@@ -337,7 +337,7 @@ describe("f(ready subsets, another client's change) as stories", () => {
   });
 
   it("f(alchemy's Story.given and Db.when) → history and another client's write on the host", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.alchemy(Alchemy.given(refOf(ada), new NoteCreated({ note: ada }))),
       Db.then(one, [{ title: "Ada" }]),
       Story.alchemy(Alchemy.when(refOf(ada), new RenameNote({ NoteId: "n1", title: "Ada 2" }))),
@@ -418,7 +418,7 @@ describe("f(deferred settlement, command) as stories", () => {
     );
 
   it("f(stored later, update) → settled by the row delivered under the command's id (cause)", async () => {
-    await ledgerStory.with({ invariants: Db.invariants })(
+    await ledgerStory.with({ rules: Db.rules })(
       saved("e1", "Ada"),
       Db.then(ledgerList, [{ EntryId: "e1", text: "Ada" }]),
       Db.when(entries.save, { value: { EntryId: "e1", text: "Ada 2" } }),
@@ -451,7 +451,7 @@ describe("f(deferred settlement, command) as stories", () => {
   });
 
   it("f(rejected decision, update) → rolls back with EntryEmpty", async () => {
-    await ledgerStory.with({ invariants: Db.invariants })(
+    await ledgerStory.with({ rules: Db.rules })(
       saved("e1", "Ada"),
       Db.open(ledgerList),
       Db.when(entries.save, { value: { EntryId: "e1", text: "" } }),
@@ -506,7 +506,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
   it("f(rename) → the row is pending when result returns; the promise resolves Committed", async () => {
     const rename = held();
 
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada),
       Db.open(one),
       rename.call("Ada 2"),
@@ -533,7 +533,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
   it("f(locked rename) → the promise resolves with the typed rejection; the row rolls back", async () => {
     const rename = held();
 
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       exist(ada),
       Db.open(one),
       rename.call("locked"),

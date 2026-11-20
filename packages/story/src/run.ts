@@ -1,7 +1,7 @@
 import type * as Domain from "@alchemy.run/domain";
 import { Option } from "effect";
 import type { Hosting } from "./host";
-import type { Invariant } from "./invariants";
+import { due, type Rule } from "./rules";
 import { Mismatch, Stage } from "./stage";
 import { flatten, type Step, type Steps } from "./steps";
 import { describeDefect, World, type Options } from "./world";
@@ -40,12 +40,12 @@ export class StoryFailure extends Error {
   }
 }
 
-/** The options of a story: its clients' settings, its first scope, and invariants to keep. */
+/** The options of a story: its world's settings, its first scope, and the rules it keeps. */
 export type StoryOptions = Options & {
   /** The scope of the story's first client; `as(scope, ...)` steps open others. */
   readonly scope: string;
-  /** Checked after every step and at the end. */
-  readonly invariants?: ReadonlyArray<Invariant>;
+  /** Checked at the moments each names (`at`): after every step, at rest, at the end. */
+  readonly rules?: ReadonlyArray<Rule>;
   /** The story's name: what kinds of steps that write files per story (a screen) name them by. */
   readonly name?: string;
 };
@@ -69,21 +69,29 @@ const why = <E>(error: E) => {
   return { reason: describeDefect(error), detail: [] };
 };
 
-/** Checks every invariant; the violations as a failure of `number`. */
+/** Checks every rule due now; the violations as a failure of `number`. */
 const keep = async (
   stage: Stage,
-  invariants: ReadonlyArray<Invariant>,
+  world: World,
+  rules: ReadonlyArray<Rule>,
   steps: ReadonlyArray<Step>,
   number: number,
   final: boolean,
 ) => {
-  for (const invariant of invariants) {
-    const violations = await invariant.check(stage, { final });
+  // The end is when the story ran its course: what is in flight arrives, every timer fires.
+  if (final && rules.some((rule) => rule.at === "end")) await world.exhaust();
+
+  const moment = { rest: world.rest(), final };
+
+  for (const rule of rules) {
+    if (!due(rule, moment)) continue;
+
+    const violations = await rule.check(stage, moment);
 
     if (violations.length > 0)
       throw new StoryFailure(
         number,
-        `${final ? "At the end of the story" : `After step ${number} (${steps[number - 1]?.label})`}, "${invariant.name}" does not hold`,
+        `${final ? "At the end of the story" : `After step ${number} (${steps[number - 1]?.label})`}, "${rule.name}" does not hold`,
         violations,
         reportOf(steps, final ? steps.length + 1 : number),
       );
@@ -109,13 +117,13 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
     Option.flatMap(setup, ({ options }) => Option.fromUndefinedOr(options.name)),
   );
 
-  const invariants = Option.match(setup, {
+  const rules = Option.match(setup, {
     onNone: () => [],
-    onSome: ({ options }) => options.invariants ?? [],
+    onSome: ({ options }) => options.rules ?? [],
   });
 
   const kept = async (number: number, final: boolean) => {
-    if (Option.isSome(world)) await keep(stage, invariants, steps, number, final);
+    if (Option.isSome(world)) await keep(stage, world.value, rules, steps, number, final);
   };
 
   try {
@@ -123,6 +131,7 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
       const number = index + 1;
 
       stage.step = number;
+      stage.current = { _tag: each._tag ?? "Step", number, label: each.label };
 
       if (Option.isSome(world)) world.value.step = number;
 
@@ -161,7 +170,7 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
 
 /** A story runner: call it with steps inside your test runner's test; it returns a promise. */
 export type Story = ((...steps: ReadonlyArray<Steps>) => Promise<void>) & {
-  /** The same runner with other options (invariants, clock, settings); a hosted story's only. */
+  /** The same runner with other options (rules, clock, name); a hosted story's only. */
   readonly with: (options: Partial<StoryOptions>) => Story;
 };
 
@@ -172,7 +181,7 @@ const runner = (setup: Option.Option<Setup>): Story => {
     Option.match(setup, {
       onNone: () => {
         throw new Error(
-          "A hostless story has no clients, clock or invariants to set: Story.make(hosting, options) makes a hosted one",
+          "A hostless story has no clients, clock or rules to set: Story.make(hosting, options) makes a hosted one",
         );
       },
       onSome: (hosted) =>

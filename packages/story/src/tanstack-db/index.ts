@@ -1,6 +1,6 @@
 /**
  * TanStack DB steps for stories: what a client's sources show, the commands it runs and how they
- * settle, and the invariants of what it shows. They run on the story runner of
+ * settle, and the rules of what it shows. They run on the story runner of
  * `@highalch/story`, beside machine and screen steps, on plain TanStack DB clients or on the
  * clients a connector makes (`@highalch/story/lowalch`).
  *
@@ -17,14 +17,14 @@
  * );
  * ```
  */
-import { connected, invariants, nothingPending } from "./invariants";
+import { connected, nothingPending, rules } from "./rules";
 import { clients } from "./state";
-import { check, historyOf, open, rejected, reload, settled, thenShows, when } from "./steps";
+import { check, historyOf, open, rejected, reload, rows, settled, thenShows, when } from "./steps";
 
 /**
- * The TanStack DB steps and invariants. They work on plain TanStack DB clients; a connector
+ * The TanStack DB steps, readers and rules. They work on plain TanStack DB clients; a connector
  * (`LowAlchDb` from `@highalch/story/lowalch`) makes them LowAlch clients that sync the story's
- * Domain, and its own invariants join `Db.invariants`.
+ * Domain, and its own rules join `Db.rules`.
  */
 export const Db = {
   open,
@@ -36,7 +36,8 @@ export const Db = {
   reload,
   historyOf,
   check,
-  invariants,
+  rows,
+  rules,
   nothingPending,
   connected,
   clients,
