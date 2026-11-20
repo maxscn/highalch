@@ -222,6 +222,18 @@ const schemaOf = (form: Declared) => {
 };
 
 /**
+ * A field's sampling seed, from its form's and its own name (FNV-1a): adding or reordering fields
+ * leaves every other field's values as they were.
+ */
+const seedOf = (name: string) => {
+  let hash = 0x811c9dc5;
+
+  for (const char of name) hash = Math.imul(hash ^ (char.codePointAt(0) ?? 0), 0x01000193);
+
+  return hash >>> 0;
+};
+
+/**
  * Values for a field: its schema's boundaries, then values sampled from it (seeded, so every run
  * tries the same ones).
  */
@@ -317,11 +329,11 @@ export const typing = <F extends Declared>(form: F, options: Typing<F>): AnySour
     options.fields ?? (Predicate.isObject(defaults) ? Object.keys(defaults) : []);
   const given: object = options.values ?? {};
 
-  const moves = fields.flatMap((field, index): ReadonlyArray<Typed> => {
+  const moves = fields.flatMap((field): ReadonlyArray<Typed> => {
     const values = Option.getOrThrowWith(
       Option.orElse(
         Option.filter(Option.fromUndefinedOr<unknown>(Reflect.get(given, field)), Array.isArray),
-        () => sampled(form, field, index + 1),
+        () => sampled(form, field, seedOf(`${nameOf(form)}.${field}`)),
       ),
       () =>
         new Error(

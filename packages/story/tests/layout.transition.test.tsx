@@ -166,7 +166,7 @@ describe("f(Form.typing, a layout rule) → overflow explored", () => {
     );
 
     // 6 moves (4 values, submit, settle): 6 + 36 + 216 sequences.
-    expect(explored).toEqual({ sequences: 258, walks: 0, truncated: false });
+    expect(explored.checked).toEqual({ sequences: 258, depth: 3, complete: true });
   }, 300_000);
 
   it("f(broken card) → shrunk to typing the longest title and submitting", async () => {
