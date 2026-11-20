@@ -1,8 +1,9 @@
 import type * as Domain from "@alchemy.run/domain";
 import { Option } from "effect";
 import type { Hosting } from "./host";
+import { pathOf, readText, slug, write, type Place } from "./files";
 import { due, type Rule } from "./rules";
-import { Mismatch, Stage } from "./stage";
+import { Mismatch, Stage, type Capture } from "./stage";
 import { flatten, type Step, type Steps } from "./steps";
 import { describeDefect, World, type Options } from "./world";
 
@@ -48,6 +49,61 @@ export type StoryOptions = Options & {
   readonly rules?: ReadonlyArray<Rule>;
   /** The story's name: what kinds of steps that write files per story (a screen) name them by. */
   readonly name?: string;
+  /** What the story captures (screens' frames); `compare` by default. */
+  readonly capture?: Capture;
+  /**
+   * Keeps a text trace of the story (each step, then what every adapter shows: sources' rows,
+   * machines, the screen's HTML) as a snapshot `<traces>/<name>.trace.txt`, compared like a
+   * screen's baseline: a missing or different trace fails the story; `update` writes it.
+   */
+  readonly trace?: boolean;
+  /** Where traces are kept (with `trace: true`). */
+  readonly traces?: Place;
+  /** Writes traces instead of comparing them. Never implicitly. */
+  readonly update?: boolean;
+  /** Writes the trace to this file, passed or failed, without comparing (an exploration's replay). */
+  readonly traceTo?: string;
+};
+
+/** One step of a trace: its number, label, and what every adapter showed after it. */
+const section = (number: number, label: string, lines: ReadonlyArray<string>) =>
+  [`${number}. ${label}`, ...lines.map((line) => `   ${line}`)].join("\n");
+
+/** Compares a story's trace with its snapshot (or writes it, with `update`). */
+const snapshot = async (options: StoryOptions, trace: string) => {
+  const name = Option.getOrThrowWith(
+    Option.fromUndefinedOr(options.name),
+    () => new Mismatch("a traced story needs a name, since its trace is named by it"),
+  );
+
+  const traces = Option.getOrThrowWith(
+    Option.fromUndefinedOr(options.traces),
+    () => new Mismatch("a traced story needs `traces`: where its trace snapshots are kept"),
+  );
+
+  const file = `${pathOf(traces)}/${slug(name)}.trace.txt`;
+
+  if (options.update) return write(file, trace);
+
+  const known = await readText(file);
+
+  if (Option.isNone(known))
+    throw new Mismatch(`the trace ${slug(name)}.trace.txt has no snapshot`, [
+      "review the story, then write traces with the story's `update` option",
+    ]);
+
+  if (known.value === trace) return;
+
+  const actual = file.replace(/\.trace\.txt$/, ".actual.trace.txt");
+  const expected = known.value.split("\n");
+  const line = trace.split("\n").findIndex((each, index) => each !== expected[index]);
+
+  await write(actual, trace);
+
+  throw new Mismatch(`the trace differs from its snapshot ${slug(name)}.trace.txt`, [
+    `first at line ${line + 1}: expected ${JSON.stringify(expected[line] ?? "")}`,
+    `actual:   ${actual}`,
+  ]);
 };
 
 const reportOf = (steps: ReadonlyArray<Step>, failed: number): ReadonlyArray<StepReport> =>
@@ -86,7 +142,10 @@ const keep = async (
   for (const rule of rules) {
     if (!due(rule, moment)) continue;
 
-    const violations = await rule.check(stage, moment);
+    // A rule that cannot be read (a reader whose adapter has nothing yet) fails the story, named.
+    const violations = await rule
+      .check(stage, moment)
+      .catch((error: unknown) => [`it could not be checked: ${why(error).reason}`]);
 
     if (violations.length > 0)
       throw new StoryFailure(
@@ -112,10 +171,24 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
       Option.some(new World(await hosting(), options.scope, options)),
   });
 
+  const options = Option.map(setup, (each) => each.options);
+
   const stage = new Stage(
     world,
-    Option.flatMap(setup, ({ options }) => Option.fromUndefinedOr(options.name)),
+    Option.flatMap(options, (each) => Option.fromUndefinedOr(each.name)),
+    Option.match(options, { onNone: () => "compare", onSome: (each) => each.capture ?? "compare" }),
   );
+
+  const tracing = Option.match(options, {
+    onNone: () => false,
+    onSome: (each) => each.trace === true || each.traceTo !== undefined,
+  });
+
+  const trace: Array<string> = [];
+
+  const traced = async (number: number, label: string) => {
+    if (tracing) trace.push(section(number, label, await stage.described()));
+  };
 
   const rules = Option.match(setup, {
     onNone: () => [],
@@ -138,10 +211,13 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
       try {
         await each.run(stage);
         await stage.passed({ step: number, label: each.label });
+        await traced(number, each.label);
       } catch (error) {
         if (error instanceof StoryFailure) throw error;
 
         const { reason, detail } = why(error);
+
+        if (tracing) trace.push(`${number}. ${each.label}\n   ✗ ${reason}`);
 
         throw new StoryFailure(
           number,
@@ -156,14 +232,28 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
 
     await kept(steps.length, true);
 
+    await Option.match(options, {
+      onNone: async () => {},
+      onSome: async (each) => {
+        if (each.trace === true) await snapshot(each, `${trace.join("\n")}\n`);
+      },
+    });
+
     const ended = await stage.close();
 
     if (Option.isSome(ended)) throw ended.value;
   } catch (error) {
+    if (error instanceof StoryFailure && tracing)
+      trace.push(`✗ ${error.reason}`, ...error.detail.map((line) => `   ${line}`));
+
     await stage.close();
 
     throw error;
   } finally {
+    const to = Option.flatMap(options, (each) => Option.fromUndefinedOr(each.traceTo));
+
+    if (Option.isSome(to)) await write(to.value, `${trace.join("\n")}\n`);
+
     if (Option.isSome(world)) await world.value.dispose();
   }
 };

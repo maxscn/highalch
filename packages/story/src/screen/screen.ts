@@ -39,7 +39,7 @@ export type Options = {
 };
 
 /** How one frame compared with its baseline. */
-export type Status = "matched" | "created" | "updated" | "missing" | "mismatch";
+export type Status = "matched" | "created" | "updated" | "missing" | "mismatch" | "recorded";
 
 /** One captured frame, as the manifest lists it. */
 export type Frame = {
@@ -235,10 +235,13 @@ export const make = (options: Options) => {
     await write(join(target, file), png);
     await write(join(target, `${name}.html`), html);
 
-    const known = await readable(baseline);
-
     const record = (status: Status, differing?: number) =>
       mounted.frames.push({ step: done.step, label: done.label, file, status, differing });
+
+    // An exploration's replay records its frames: they have no baselines to compare with.
+    if (stage.capture === "record") return record("recorded");
+
+    const known = await readable(baseline);
 
     if (options.update) {
       await write(baseline, png);
@@ -332,6 +335,11 @@ export const make = (options: Options) => {
       };
 
       screened.mounted = Option.some(mounted);
+      stage.describe(async () => {
+        await flush();
+
+        return [`screen: ${serialize(container)}`];
+      });
       stage.end(finish(stage, mounted, label));
 
       await flush(() =>
@@ -348,7 +356,7 @@ export const make = (options: Options) => {
       );
 
       stage.after(async (done) => {
-        if (mounted.every) await capture(stage, mounted, done, label);
+        if (mounted.every && stage.capture !== "off") await capture(stage, mounted, done, label);
       });
     });
   };
@@ -361,7 +369,8 @@ export const make = (options: Options) => {
         () => new Mismatch("nothing is rendered yet: render(element) first"),
       );
 
-      if (!mounted.every) await capture(stage, mounted, { step: stage.step, label }, label);
+      if (!mounted.every && stage.capture !== "off")
+        await capture(stage, mounted, { step: stage.step, label }, label);
     });
 
   /**

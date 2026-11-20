@@ -373,3 +373,21 @@ export const rows = <Row extends object>(
     return new Map(observed.sorted().map(([key, shown]) => [key, asRow(shown) as ShownRow<Row>]));
   },
 });
+
+/** A command the story's clients ran, as a rule reads it: its label, who ran it, how it ended. */
+export type CommandOf = {
+  readonly label: string;
+  readonly by: string;
+  readonly outcome: Run["outcome"]["_tag"];
+};
+
+/** The commands the story's clients ran so far, in order, as a rule reads them. */
+export const commands = (): Reader<ReadonlyArray<CommandOf>> => ({
+  read: async (stage) => {
+    stage.hosted("commands");
+
+    const db = await stage.use(clients);
+
+    return db.runs.map((run) => ({ label: run.label, by: run.by, outcome: run.outcome._tag }));
+  },
+});

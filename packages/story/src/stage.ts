@@ -16,6 +16,13 @@ export class Mismatch extends Error {
 export type Done = { readonly step: number; readonly label: string };
 
 /**
+ * What a story captures: `compare` paints frames and compares them with their baselines (a
+ * story), `record` paints and writes them without comparing (an exploration's replay), `off`
+ * paints nothing (an exploration's sequences).
+ */
+export type Capture = "compare" | "record" | "off";
+
+/**
  * The story run an adapter is built for, as a service: an adapter's Layer reads it to reach the
  * hosted world, register work after every step and at the end, and name what it writes.
  */
@@ -48,6 +55,7 @@ export class Stage {
   current: StepOf = { _tag: "Start", number: 0, label: "start" };
   private readonly afters: Array<(done: Done) => Promise<void>> = [];
   private readonly ends: Array<() => Promise<void>> = [];
+  private readonly describers: Array<() => Promise<ReadonlyArray<string>>> = [];
   private readonly scope = Effect.runSync(Scope.make());
   private readonly memo = Layer.makeMemoMapUnsafe();
   private readonly built = new Map<unknown, Promise<unknown>>();
@@ -56,7 +64,26 @@ export class Stage {
     readonly world: Option.Option<World>,
     /** The story's name (`story.with({ name })`), for what a kind of step writes per story. */
     readonly name: Option.Option<string> = Option.none(),
+    /** What the story captures (frames): everything a story compares, by default. */
+    readonly capture: Capture = "compare",
   ) {}
+
+  /**
+   * Adds what an adapter shows of its state to the story's trace (its sources' rows, a machine's
+   * state, a screen's HTML): lines, read after each step when the story is traced.
+   */
+  describe = (run: () => Promise<ReadonlyArray<string>>) => {
+    this.describers.push(run);
+  };
+
+  /** Every adapter's description now, in the order they were added. */
+  described = async (): Promise<ReadonlyArray<string>> => {
+    const lines: Array<string> = [];
+
+    for (const run of this.describers) lines.push(...(await run()));
+
+    return lines;
+  };
 
   /**
    * Runs `run` after every later step that passed, the registering step included, before the

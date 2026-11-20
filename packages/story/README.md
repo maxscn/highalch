@@ -287,6 +287,47 @@ story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPendi
 - A rule that does not hold fails the story after the step it broke at, quoting its name and what it
   read: `After step 3 (when …), "the title stays Ada" does not hold / it read {"list":{…}}`.
 
+**Exploring.** `Explore.run` tries what can happen instead of one hand-written order: every
+sequence of up to `depth` moves of its sources (then seeded random walks), each a fresh story after
+`setup`, with the rules checked at their moments.
+
+```ts
+const edit = Explore.source("edit", {
+  values: ["Ada 2", "locked"],
+  step: (title: string) => Machine.when({ type: "Edit", title }),
+});
+const save = Explore.source("save", { step: () => Machine.when({ type: "Save" }) });
+const settle = Explore.source("settle", { step: () => Story.settle() });
+
+await Explore.run({
+  name: "rename editor",
+  story,
+  setup: [Story.given(n1, new NoteCreated({ note: ada })), Db.open(list), Machine.start(editor)],
+  sources: [edit, save, settle],
+  rules: [...Db.rules, savedMeansCommitted],
+  depth: 3, // every sequence of up to 3 moves
+  walks: { count: 50, length: 12, seed: 1 }, // optional: longer, seeded random sequences
+});
+```
+
+- While exploring nothing is captured: no frames are painted and no trace is kept (`capture: "off"`).
+- A failing sequence is shrunk to the shortest that fails the same way, then replayed once with
+  everything captured: a text trace (`<artifacts>/<name>/trace.txt`, default
+  `artifacts/explore`) and the screens' frames, recorded without comparing.
+- It throws an `ExploreFailure`: the broken rule, the moves (`edit.step("locked")`, `save.step()`,
+  `settle.step()`), the failure's detail, the same sequence as a story to paste into a test, and
+  where the replay wrote. Runs are deterministic (the manual clock, the controlled wire, seeded
+  walks), so the replay reproduces it.
+- `Db.commands()` reads the commands the clients ran (label, who ran them, how they ended), for
+  rules about outcomes: "an editor says Saved only after its save committed".
+
+**Traces.** `story.with({ name, trace: true, traces, update })` keeps a text snapshot of the story:
+each step, then what every adapter shows after it (each observed source's rows, the commands and
+how they ended, each machine's state and context, the mounted screen's HTML), in
+`<traces>/<name>.trace.txt`. It is compared like a screen's baseline: a missing or different trace
+fails the story (the actual is written beside it, `.actual.trace.txt`), and `update` writes it.
+Opt-in; an exploration's replay writes the same trace without comparing.
+
 `Db.rules` are the clients' defaults: `nothingPending` ("nothing is pending at rest"), and the rules
 their connector adds (`Db.connected`, each checked at its own moment). With LowAlch clients those are
 `LowAlchDb.rules`, judged against the feed's own entries (read from the Domain, not through the wire):
