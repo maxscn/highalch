@@ -30,6 +30,10 @@
       "types": "./dist/index.d.mts",
       "default": "./dist/index.mjs"
     },
+    "./tanstack-db": {
+      "types": "./dist/tanstack-db.d.mts",
+      "default": "./dist/tanstack-db.mjs"
+    },
     "./xstate": {
       "types": "./dist/xstate.d.mts",
       "default": "./dist/xstate.mjs"

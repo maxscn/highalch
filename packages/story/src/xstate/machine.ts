@@ -418,7 +418,7 @@ const given = (
  * The machine enters the story **running**: started with `createEffectActor` against the story's
  * client (of the step's scope, so `as(scope, Machine.start(...))` runs it on that client). The
  * commands it invokes through `invoke(command)` run there and are recorded; their real outcomes
- * arrive by themselves, and `Story.settled`/`Story.rejected` assert them. Stopped when the story
+ * arrive by themselves, and `Db.settled`/`Db.rejected` assert them. Stopped when the story
  * ends. Needs a hosted story.
  */
 const start = (
@@ -625,7 +625,7 @@ const steppedOnly = (machine: Entered, step: string): Stepped => {
   if (machine.mode === "stepped") return machine;
 
   throw new Mismatch(
-    `${step} feeds a result to a machine stepped purely; ${machine.name} is running (Machine.start): its commands settle by themselves, so assert their outcome with Story.settled(...) or Story.rejected(...)`,
+    `${step} feeds a result to a machine stepped purely; ${machine.name} is running (Machine.start): its commands settle by themselves, so assert their outcome with Db.settled(...) or Db.rejected(...)`,
   );
 };
 

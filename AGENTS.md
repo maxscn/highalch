@@ -31,14 +31,16 @@ parallel, and start no dev servers.
 - **Packages.** Two npm scopes in one workspace. LowAlch (`@lowalch/*`) converts alchemy
   Domain primitives for other infrastructure; HighAlch (`@highalch/*`) verifies apps built on
   them. `@lowalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
-  `./internal`). `@highalch/story` is the test kit (`.`, `./xstate`, `./screen`). Shared
+  `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./xstate`, `./screen`). Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy
   execution. JSX keeps ordinary conditional rendering.
 - **Terse names, namespaces for context.** Consumers write `import * as LowAlch from
   "@lowalch/tanstack-db"` and call `LowAlch.collection`, `LowAlch.make`, `LowAlch.match`. Stories
-  use `import * as Story from "@highalch/story"`. Do not add self-namespace projections.
+  use `import * as Story from "@highalch/story"` for the runner and the Domain's steps, and the
+  adapters' namespaces from their entries: `Db` (`./tanstack-db`), `Machine` (`./xstate`),
+  `Screen` (`./screen`). Do not add self-namespace projections.
 - **No React `useEffect`** (nor `useLayoutEffect` or `useInsertionEffect`). Lifetimes are
   native external-store subscriptions (`useSyncExternalStore`) and callback refs.
 - **Boundaries** (`vp run check:patterns`):
@@ -63,9 +65,9 @@ parallel, and start no dev servers.
 
 - Express tests as observable `f(state, action) => next state` transitions. For data and the
   machines over it, write them as stories: `Story.make(Story.memory(...))` hosts the Domain in
-  memory with real clients. Data steps (`given`, `when`, `shows`, `state`, `settled`, `rejected`,
-  ...) and machine steps (`Machine.given` stepped purely, `Machine.start` running) compose in one
-  story. `explore` generates interleavings checked against `Story.invariants`.
+  memory with real clients. Domain steps (`Story.given`, `Story.remote`, the transport's faults), data steps
+  (`Db.when`, `Db.then`, `Db.settled`, `Db.rejected`, ...) and machine steps (`Machine.given` stepped purely, `Machine.start` running) compose in one
+  story. `explore` generates interleavings checked against `Db.invariants`.
 - Shared example Domains and views live in `fixtures/` (`notebook.ts`, `ledger.ts`, `notes.ts`,
   `editor.ts`, `note-list.tsx`). They import `@lowalch/*` and `@highalch/*` like a consumer does.
 - Tests run from source. The aliases in `vite.config.ts` and the `paths` in

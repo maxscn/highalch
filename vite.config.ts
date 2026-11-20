@@ -28,6 +28,10 @@ const workspace = [
   },
   { find: /^@highalch\/story$/, replacement: source("./packages/story/src/index.ts") },
   {
+    find: /^@highalch\/story\/tanstack-db$/,
+    replacement: source("./packages/story/src/tanstack-db/index.ts"),
+  },
+  {
     find: /^@highalch\/story\/xstate$/,
     replacement: source("./packages/story/src/xstate/index.ts"),
   },
