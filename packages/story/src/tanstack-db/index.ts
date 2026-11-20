@@ -19,7 +19,18 @@
  */
 import { connected, nothingPending, rules } from "./rules";
 import { clients } from "./state";
-import { check, historyOf, open, rejected, reload, rows, settled, thenShows, when } from "./steps";
+import {
+  check,
+  commands,
+  historyOf,
+  open,
+  rejected,
+  reload,
+  rows,
+  settled,
+  thenShows,
+  when,
+} from "./steps";
 
 /**
  * The TanStack DB steps, readers and rules. They work on plain TanStack DB clients; a connector
@@ -37,6 +48,7 @@ export const Db = {
   historyOf,
   check,
   rows,
+  commands,
   rules,
   nothingPending,
   connected,
@@ -51,4 +63,13 @@ export { Clients, DbClients, Observed, Outcome, plain } from "./state";
 
 export type { Client, Observation, Run, Settled, Shown, Source } from "./state";
 
-export type { Acting, Callable, Expected, ReadState, Scoped, ShownRow, Then } from "./steps";
+export type {
+  Acting,
+  Callable,
+  CommandOf,
+  Expected,
+  ReadState,
+  Scoped,
+  ShownRow,
+  Then,
+} from "./steps";

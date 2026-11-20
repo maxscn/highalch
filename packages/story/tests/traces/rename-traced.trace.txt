@@ -1,0 +1,9 @@
+1. given Note/["acc-1","n1"]: NoteCreated
+2. open NoteRows/Notes:{"account":"acc-1"}:{}
+   NoteRows/Notes:{"account":"acc-1"}:{}: [{"account":"acc-1","BookId":"b1","NoteId":"n1","pinned":false,"title":"Ada"}]
+3. when {"NoteId":"n1","title":"Ada 2"}
+   NoteRows/Notes:{"account":"acc-1"}:{}: [{"$hasPendingWrites":true,"account":"acc-1","BookId":"b1","NoteId":"n1","pinned":false,"title":"Ada 2"}]
+   command {"NoteId":"n1","title":"Ada 2"}: Pending
+4. settled Committed
+   NoteRows/Notes:{"account":"acc-1"}:{}: [{"account":"acc-1","BookId":"b1","NoteId":"n1","pinned":false,"title":"Ada 2"}]
+   command {"NoteId":"n1","title":"Ada 2"}: Committed

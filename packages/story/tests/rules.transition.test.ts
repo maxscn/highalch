@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
 import { Explore } from "@highalch/story";
@@ -57,7 +58,7 @@ const nothingSavingAtRest = Explore.rule("no title is saving at rest", {
 const everySaveEnds = Explore.rule("every save ends", {
   at: "end",
   reads: { machine: Machine.snapshot() },
-  holds: ({ machine }) => !machine.matches("Saving"),
+  holds: ({ machine }) => !machine?.matches("Saving"),
 });
 
 describe("f(story, rules) → each rule checked at its moment", () => {
@@ -138,5 +139,43 @@ describe("f(step label) → its kind, as a rule's step._tag reads it", () => {
     expect(tagOf("editor: send Save")).toBe("Send");
     expect(tagOf("[acc-2] remote Note/n1: RenameNote")).toBe("Remote");
     expect(tagOf("")).toBe("Step");
+  });
+});
+
+describe("f(story, trace: true) → a text snapshot of every step, compared like a baseline", () => {
+  const traced = (traces: URL) =>
+    story.with({
+      name: "rename traced",
+      trace: true,
+      traces,
+      update: process.env.UPDATE_SCREENS === "1",
+    })(
+      Story.given(n1, new NoteCreated({ note: ada })),
+      Db.open(list),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+      Db.settled("Committed"),
+    );
+
+  it("f(the reviewed trace) → matches", () => traced(new URL("./traces/", import.meta.url)));
+
+  it("f(a different trace) → fails at the first differing line, with the actual beside it", async () => {
+    const elsewhere = new URL("../artifacts/traces-test/", import.meta.url);
+
+    await writeFile(
+      new URL("rename-traced.trace.txt", elsewhere),
+      "1. given something else\n",
+    ).catch(async () => {
+      await mkdir(elsewhere, { recursive: true });
+      await writeFile(new URL("rename-traced.trace.txt", elsewhere), "1. given something else\n");
+    });
+
+    const failure = await traced(elsewhere).then(
+      () => undefined,
+      (error: Error) => error,
+    );
+
+    expect(failure?.message).toContain(
+      "the trace differs from its snapshot rename-traced.trace.txt",
+    );
   });
 });

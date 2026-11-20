@@ -7,7 +7,8 @@
  *   LowAlch, nor an adapter's entry: only effect, alchemy Domain and React. Its `tanstack-db` entry
  *   adds TanStack DB, never LowAlch; LowAlch only in its `lowalch` and `xstate` entries.
  * - `@highalch/story`: XState only in its `xstate` entry;
- *   happy-dom, react-dom, `@effect/atom-react` and node files only in its `screen` entry; takumi
+ *   happy-dom, react-dom, `@effect/atom-react` and node files only in its `screen` entry (and
+ *   the runner's own files: traces and explorations' replays, `node:fs`/`path`/`url`); takumi
  *   (and the node file reading its WASM) only in its `takumi` entry.
  * - Neither reaches an XState, screen or takumi entry from outside it (type-only imports are
  *   erased); a painter entry (`takumi`) may reach the screen entry it paints for.
@@ -100,7 +101,8 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         !(!inDb && lowalchAllowed && /^@lowalch\/tanstack-db(?:\/|$)/.test(module)) &&
         !(xstateEntry && xstate.test(module)) &&
         !(screenEntry && screen.test(module)) &&
-        !(takumiEntry && takumi.test(module))
+        !(takumiEntry && takumi.test(module)) &&
+        !(storyRoot && /^node:(?:fs\/promises|path|url)$/.test(module))
       )
         report(
           node,

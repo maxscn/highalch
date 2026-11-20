@@ -17,7 +17,7 @@ import type { Answer, Input } from "@lowalch/tanstack-db/internal";
 import { commandOf, Runner, type Invocable, type Marked } from "@lowalch/tanstack-db/xstate";
 import { registryOf, stageOf } from "../atoms";
 import type { Reader } from "../rules";
-import { Mismatch, type Stage } from "../stage";
+import { CurrentStage, Mismatch, type Stage } from "../stage";
 import { partial, staged, type Step } from "../steps";
 import { clients, type Clients, type Run, type Source } from "../tanstack-db/state";
 import type { Callable } from "../tanstack-db/steps";
@@ -79,7 +79,23 @@ class MachinesOf extends Context.Service<MachinesOf, Machines>()(
 /** The machines adapter: the story run's machines, by name. */
 const machines = {
   service: MachinesOf,
-  layer: Layer.sync(MachinesOf, (): Machines => ({ entered: new Map(), latest: Option.none() })),
+  layer: Layer.effect(
+    MachinesOf,
+    Effect.gen(function* () {
+      const stage = yield* CurrentStage;
+      const made: Machines = { entered: new Map(), latest: Option.none() };
+
+      stage.describe(async () =>
+        [...made.entered.values()].map((machine) => {
+          const snapshot = snapshotOf(machine);
+
+          return `machine ${where(machine)}: ${json(snapshot.value)} ${json(snapshot.context)}`;
+        }),
+      );
+
+      return made;
+    }),
+  ),
 };
 
 const machinesOf = (stage: Stage) => stage.use(machines);
@@ -716,10 +732,21 @@ const failed = (command: Marked, error: TaggedFailure, options: Addressed = {}):
 
 /**
  * The machine's snapshot now, as a rule reads it (the named machine, or the one introduced
- * last): `snapshot.matches("Saving")`, `snapshot.context`.
+ * last): `snapshot?.matches("Saving")`, `snapshot?.context`; `undefined` before it entered.
  */
-const snapshot = (options: Addressed = {}): Reader<AnyMachineSnapshot> => ({
-  read: async (stage) => snapshotOf(await find(stage, options)),
+const snapshot = (options: Addressed = {}): Reader<AnyMachineSnapshot | undefined> => ({
+  read: async (stage) => {
+    const machines = await machinesOf(stage);
+
+    const name = Option.orElse(Option.fromUndefinedOr(options.machine), () => machines.latest);
+
+    return Option.getOrUndefined(
+      Option.map(
+        Option.flatMap(name, (each) => Option.fromUndefinedOr(machines.entered.get(each))),
+        snapshotOf,
+      ),
+    );
+  },
 });
 
 /**

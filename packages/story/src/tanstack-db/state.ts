@@ -30,7 +30,11 @@ export const plain = (row: object): Plain =>
   Object.fromEntries(Object.entries(row).filter(([name]) => !name.startsWith("$")));
 
 /** A source a consumer passes to `useLiveQuery`: a collection descriptor. */
-export type Source<Row extends object = object> = CollectionOptions<Row, string> & NonSingleResult;
+// `any` utils: a source of any collection kind (local-only, query, a LowAlch subset) fits. The
+// utils type is invariant, so no narrower type accepts them all; steps never read a source's utils.
+// oxlint-disable-next-line typescript/no-explicit-any
+export type Source<Row extends object = object> = CollectionOptions<Row, string, never, any> &
+  NonSingleResult;
 
 /** The row type of a source. */
 export type RowOf<S> = S extends Source<infer Row> ? Row : never;
@@ -363,6 +367,23 @@ export const clients = {
 
       world.waits.push(made.busy);
       world.rests.push(() => made.runs.every((run) => !pending(run)));
+      stage.describe(async () => [
+        ...made.observed().map(
+          (observed) =>
+            `${observed.label}: ${json(
+              observed.sorted().map(([, shown]) =>
+                Option.match(
+                  Option.liftPredicate(shown, (each) => each.pending),
+                  {
+                    onNone: () => shown.row,
+                    onSome: () => ({ ...shown.row, $hasPendingWrites: true }),
+                  },
+                ),
+              ),
+            )}`,
+        ),
+        ...made.runs.map((run) => `command ${run.label}: ${run.outcome._tag}`),
+      ]);
       world.idles.push(async () => {
         for (const run of made.runs) await ended(world, run);
       });

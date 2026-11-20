@@ -47,7 +47,8 @@ parallel, and start no dev servers.
 - **Boundaries** (`vp run check:patterns`):
   - Only `@lowalch/tanstack-db/xstate` and `@highalch/story/xstate` import `xstate` and `@xstate/effect`.
   - Only `@highalch/story/screen` imports `happy-dom`, `react-dom`, `@effect/atom-react` and
-    `node:` files; only `@highalch/story/takumi` (a screen painter) imports `takumi-js`.
+    `node:` files (the runner keeps its traces and replays with `node:fs`, `node:path` and
+    `node:url`); only `@highalch/story/takumi` (a screen painter) imports `takumi-js`.
   - `@lowalch/tanstack-db` never imports `@highalch/story`.
   - The story runner (`@highalch/story`'s root) imports neither TanStack DB nor LowAlch;
     `@highalch/story/tanstack-db` never imports LowAlch; only `./lowalch` and `./xstate` do.
@@ -79,6 +80,9 @@ parallel, and start no dev servers.
 - Tests run from source. The aliases in `vite.config.ts` and the `paths` in
   `tsconfig.base.json` point `@lowalch/*` and `@highalch/*` at `src`, so a test never needs a build. Keep the two
   lists in sync when adding an entry.
+- **Traces** (`packages/story/tests/traces/*.trace.txt`) are reviewed text snapshots of traced
+  stories, written with the same `UPDATE_SCREENS=1` run as screens; review the diff and keep them
+  with the change. Explorations' replays write theirs under `artifacts/explore` (ignored).
 - **Screen baselines** (`packages/story/tests/baselines/<painter>/`) are reviewed PNGs. Write them only with
   `UPDATE_SCREENS=1 vp test packages/story/tests/screen.transition.test.tsx`, open the changed
   PNGs to review them, and keep them with the change. A normal run compares pixels exactly. The

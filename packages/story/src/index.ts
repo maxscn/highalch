@@ -52,7 +52,9 @@ export { registryOf as registry } from "./atoms";
 
 export type { Step, Steps } from "./steps";
 
-export { Explore } from "./explore";
+export { Explore, ExploreFailure } from "./explore";
+
+export type { Exploration, Explored, Source as ExploreSource } from "./explore";
 
 export type {
   At,
