@@ -105,12 +105,21 @@ describe("f(form steps) → the app's own form, found without wiring", () => {
 });
 
 /** The rule the broken form breaks. */
-const keepsYourDraft = Explore.rule("a rejected rename keeps what you typed", {
-  at: "rest",
-  reads: { form: Form.state(renameForm), list: Db.rows(list), commands: Db.commands() },
-  holds: ({ form, list: rows, commands }) =>
-    commands.at(-1)?.outcome !== "Rejected" || form?.values.title !== rows.get("n1")?.title,
-});
+const keepsYourDraft = Explore.rule(
+  "a rejected rename keeps what you typed",
+  function* () {
+    const commands = yield* Db.commands();
+
+    // Only a rejection is judged: nothing else is read otherwise.
+    if (commands.at(-1)?.outcome !== "Rejected") return true;
+
+    const form = yield* Form.state(renameForm);
+    const rows = yield* Db.rows(list);
+
+    return form?.values.title !== rows.get("n1")?.title;
+  },
+  { at: "rest" },
+);
 
 const submit = Explore.source("submit", { step: () => Form.submit(renameForm) });
 

@@ -2,7 +2,7 @@ import type { AnyFormApi, AnyFormState } from "@tanstack/react-form";
 import { Effect, Option, Predicate, Schema } from "effect";
 import * as Arbitrary from "effect/Arbitrary";
 import type { AnySource } from "../explore";
-import type { Reader } from "../rules";
+import { reader, type Reader } from "../rules";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Step } from "../steps";
 import { json, macrotask } from "../world";
@@ -195,20 +195,18 @@ export const thenIs = <F extends Declared>(target: Target<F>, expected: Expected
   });
 
 /** The state of the one instance a target addresses, as a rule reads it (`undefined`: none). */
-export const state = <F extends Declared>(target: Target<F>): Reader<AnyFormState | undefined> => ({
-  read: async () => {
+export const state = <F extends Declared>(target: Target<F>): Reader<AnyFormState | undefined> =>
+  reader(`form ${nameOf(formOf(target))}`, async () => {
     const all = instancesOf(formOf(target));
 
     if (all.length === 0) return undefined;
 
     return instanceOf(target).state;
-  },
-});
+  });
 
 /** The states of every mounted instance of a form, in mount order, as a rule reads them. */
-export const all = <F extends Declared>(form: F): Reader<ReadonlyArray<AnyFormState>> => ({
-  read: async () => instancesOf(form).map((api) => api.state),
-});
+export const all = <F extends Declared>(form: F): Reader<ReadonlyArray<AnyFormState>> =>
+  reader(`forms ${nameOf(form)}`, async () => instancesOf(form).map((api) => api.state));
 
 /** The validator a declared form's values decode with, when it is an Effect Schema struct. */
 const schemaOf = (form: Declared) => {

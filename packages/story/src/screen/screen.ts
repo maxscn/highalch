@@ -7,7 +7,7 @@ import { DbProvider } from "@tanstack/react-db";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { registryOf } from "../atoms";
-import type { Reader } from "../rules";
+import { reader, type Reader } from "../rules";
 import { Mismatch, type Done, type Stage } from "../stage";
 import { staged, type Step } from "../steps";
 import { clients } from "../tanstack-db/state";
@@ -252,7 +252,7 @@ export interface Framed {
 /** A screen with a layout engine (`.pipe(Takumi.layout())`). */
 export interface Laid {
   /**
-   * The screen's layout now, for a rule's `reads`: `{ layout: Card.layout() }`. Laid out by the
+   * The screen's layout now, for a rule to yield: `yield* Card.layout()`. Laid out by the
    * screen's layout engine once the world is quiet (as a frame is), every box matched back to its
    * element; `Screen.overflowing(layout)` lists what spills out of its box. Before the screen
    * renders (a rule judged during setup) there is no layout: `undefined`.
@@ -445,8 +445,8 @@ const build = (options: Options, engines: Engines) => {
       await run(mounted.container);
     });
 
-  const layout = (engine: Layer.Layer<LayoutOf>) => (): Reader<Layout | undefined> => ({
-    read: async (stage) => {
+  const layout = (engine: Layer.Layer<LayoutOf>) => (): Reader<Layout | undefined> =>
+    reader("layout", async (stage) => {
       const found = (await stage.use(screens)).mounted;
 
       if (Option.isNone(found)) return undefined;
@@ -459,8 +459,7 @@ const build = (options: Options, engines: Engines) => {
       const measured = await measurer.measure({ html: framed(html), css, width, height });
 
       return new Layout(measurer.name, screenOf(measured, elements));
-    },
-  });
+    });
 
   // Each engine adds its own steps and readers: no frames, no `shot`; no layout engine, no
   // `layout()`.

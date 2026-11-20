@@ -257,23 +257,47 @@ delete and insert of a row in one batch is one change). When a story ends, or fa
 in flight, closing its clients (`LowAlch.close` waits for sent commands) lets the replies through
 and runs the clock's waits, so a failure is reported instead of hanging.
 
-**Rules.** `story.with({ rules })` checks rules, each at the moment it names. A rule is one
-declaration with a sentence for its name, which failures quote word for word:
+**Rules.** `story.with({ rules })` checks rules, each at the moment it names. A rule is a sentence
+for its name, which failures quote word for word, a generator that yields what it reads and returns
+whether it holds, and its settings last:
 
 ```ts
 import { Explore } from "@highalch/story";
 
-const listMatchesEditor = Explore.rule("the list matches the editor", {
-  at: "rest", // "step" (default) | "rest" | "end"
-  reads: { list: Db.rows(list), editor: Machine.snapshot() },
-  holds: ({ list, editor }) => list.get("n1")?.title === editor.context.draft,
-});
+const listMatchesEditor = Explore.rule(
+  "the list matches the editor",
+  function* () {
+    const rows = yield* Db.rows(list);
+    const editor = yield* Machine.snapshot();
 
-const rejectionLeavesNothingPending = Explore.rule("a rejection leaves nothing pending", {
-  reads: { list: Db.rows(list) },
-  holds: ({ step, list }) =>
-    step._tag !== "Rejected" || [...list.values()].every((row) => !row.$hasPendingWrites),
-});
+    return rows.get("n1")?.title === editor?.context.draft;
+  },
+  { at: "rest" }, // "step" (default) | "rest" | "end"
+);
+
+const rejectionLeavesNothingPending = Explore.rule(
+  "a rejection leaves nothing pending",
+  function* ({ step }) {
+    if (step._tag !== "Rejected") return true; // reads nothing on any other step
+
+    const rows = yield* Db.rows(list);
+
+    return [...rows.values()].every((row) => !row.$hasPendingWrites);
+  },
+);
+
+const titleOnlyChangesOnWrites = Explore.rule(
+  "a title changes only when something writes it",
+  function* ({ step }) {
+    const now = yield* Db.rows(list);
+    const was = yield* Explore.before(Db.rows(list)); // its value at the rule's previous check
+
+    return (
+      now.get("n1")?.title === was.get("n1")?.title ||
+      ["When", "Settled", "Remote"].includes(step._tag)
+    );
+  },
+);
 
 story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPending] });
 ```
@@ -281,13 +305,21 @@ story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPendi
 - `at`: `"step"` after every step (and at the end); `"rest"` whenever nothing is in flight (settled,
   every command ended, no feed held down), the end included; `"end"` once the story ran its course:
   what was in flight arrives and every timer on its clock fires before the rule is checked.
-- `reads` names the views `holds` destructures: `Db.rows(source, { as? })` (a source's rows by key,
-  with `$hasPendingWrites`), `Machine.snapshot({ machine? })`. `holds` also gets `step` (the step
-  that just ran: its `_tag`, the verb of its label, such as `When`, `Rejected`, `Remote`, `Send`;
-  its number and label) and `previous` (the reads and step at the rule's previous check), so a
-  transition rule is the same shape.
-- A rule that does not hold fails the story after the step it broke at, quoting its name and what it
-  read: `After step 3 (when …), "the title stays Ada" does not hold / it read {"list":{…}}`.
+- A rule reads what it yields, when it gets there: `yield* Db.rows(source, { as? })` (a source's
+  rows by key, with `$hasPendingWrites`), `yield* Db.commands()`, `yield* Machine.snapshot({
+  machine? })`, `yield* Form.state(form)`, `yield* Card.layout()`. A branch that returns first
+  reads nothing after it, so a costly read (a layout) happens only when the rule needs it.
+- It is given `step`, the step that just ran: its `_tag` (the verb of its label, such as `When`,
+  `Rejected`, `Remote`, `Send`), number and label. It may return a boolean without yielding:
+  `Explore.rule("…", ({ step }) => step._tag !== "Remote")`.
+- `yield* Explore.before(reader)` is the reader's value at the rule's previous check, for a rule
+  about a transition. From the first check that asks for it the reader is read at every check; at
+  that first one, before is now. Readers are told apart by their name.
+- The settings come last and are optional: `{ at }` (default `"step"`).
+- A rule that does not hold fails the story after the step it broke at, quoting its name and each
+  read it made, in order, by the reader's name:
+  `After step 3 (when …), "the title stays Ada" does not hold / it read rows NoteRows/…: {…}`.
+- An adapter's own reader is `reader(name, (stage) => …)` from `@highalch/story`.
 
 **Exploring.** `Explore.run` tries what can happen instead of one hand-written order: every
 sequence of up to `depth` moves of its sources (then seeded random walks), each a fresh story after
@@ -501,7 +533,7 @@ await story.with({ name: "editor is rejected" })(
 
 ### Layout: what spills out of its box
 
-A screen piped a layout engine lets a rule read its layout: every element's box, laid out
+A screen piped a layout engine lets a rule read (yield) its layout: every element's box, laid out
 by the engine once the world is quiet, the way a frame is painted. `Screen.overflowing(layout)`
 lists what spills out of its box: an element's text running past its padding box, or a child
 reaching past it, unless that element clips (`overflow: hidden`, `clip`, `auto` or `scroll`; a
@@ -518,10 +550,10 @@ const Card = Screen.make({ css, width: 360, height: 240 }).pipe(
   Takumi.layout(), // the same engine as the frames: a rule judges what they show
 );
 
-const fits = Explore.rule("nothing on screen spills out of its box", {
-  at: "step",
-  reads: { layout: Card.layout() }, // undefined until the screen renders
-  holds: ({ layout }) => Screen.overflowing(layout).length === 0,
+const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+  const layout = yield* Card.layout(); // undefined until the screen renders
+
+  return Screen.overflowing(layout).length === 0;
 });
 ```
 

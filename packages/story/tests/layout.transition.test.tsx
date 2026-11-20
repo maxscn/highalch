@@ -16,10 +16,10 @@ const Card = Screen.make({ css, width: 360, height: 240 }).pipe(Takumi.layout())
 const longest = "W".repeat(60);
 
 /** The rule the broken card breaks: judged on the screen's layout, not its pixels. */
-const fits = Explore.rule("nothing on screen spills out of its box", {
-  at: "step",
-  reads: { layout: Card.layout() },
-  holds: ({ layout }) => Screen.overflowing(layout).length === 0,
+const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+  const layout = yield* Card.layout();
+
+  return Screen.overflowing(layout).length === 0;
 });
 
 const typed = (name: string, view: React.JSX.Element) =>
@@ -40,14 +40,10 @@ const overflowOf = async (name: string, view: React.JSX.Element, sheet: string) 
   await story.with({
     name,
     rules: [
-      Explore.rule("keeps what overflows", {
-        at: "step",
-        reads: { layout: Static.layout() },
-        holds: ({ layout }) => {
-          seen = Screen.overflowing(layout);
+      Explore.rule("keeps what overflows", function* () {
+        seen = Screen.overflowing(yield* Static.layout());
 
-          return true;
-        },
+        return true;
       }),
     ],
   })(Static.render(view));
