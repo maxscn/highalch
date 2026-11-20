@@ -50,7 +50,7 @@
   "devDependencies": {
     "@alchemy.run/domain": "catalog:",
     "@effect/atom-react": "catalog:",
-    "@highalch/db": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
     "@tanstack/db": "catalog:",
     "@tanstack/react-db": "catalog:",
     "@types/node": "catalog:",
@@ -69,7 +69,7 @@
   "peerDependencies": {
     "@alchemy.run/domain": "2.0.0-beta.87",
     "@effect/atom-react": "^4.1.4",
-    "@highalch/db": "workspace:^",
+    "@highalch/tanstack-db": "workspace:^",
     "@tanstack/db": "1.0.0-rc.1.5",
     "@xstate/effect": "1.0.0-beta.2",
     "effect": "^4.1.4",

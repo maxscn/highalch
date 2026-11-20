@@ -8,7 +8,7 @@ import {
   type Transaction,
 } from "@tanstack/db";
 import { Cause, Data, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "effect";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import {
   createdKey,
   Defect,
@@ -16,7 +16,7 @@ import {
   type Settings,
   type Settled,
   type TaggedFailure,
-} from "@highalch/db";
+} from "@highalch/tanstack-db";
 import {
   connectionOf,
   fromLive,
@@ -26,7 +26,7 @@ import {
   type Input,
   type Row,
   type Rows,
-} from "@highalch/db/internal";
+} from "@highalch/tanstack-db/internal";
 import { Clock } from "./clock";
 import type { Host } from "./host";
 import { endpointsOf, isFeed, Wire, type Endpoints } from "./wire";

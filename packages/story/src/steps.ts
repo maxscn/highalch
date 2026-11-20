@@ -2,9 +2,9 @@ import type * as Aggregate from "@alchemy.run/domain/Aggregate";
 import type { Step as AlchemyStep } from "@alchemy.run/domain/Story";
 import type { DbClient, Transaction } from "@tanstack/db";
 import { Effect, Exit, Option, Predicate } from "effect";
-import * as HighAlch from "@highalch/db";
-import { activate, type Settled, type TaggedFailure } from "@highalch/db";
-import type { Answer, Input } from "@highalch/db/internal";
+import * as HighAlch from "@highalch/tanstack-db";
+import { activate, type Settled, type TaggedFailure } from "@highalch/tanstack-db";
+import type { Answer, Input } from "@highalch/tanstack-db/internal";
 import {
   json,
   macrotask,

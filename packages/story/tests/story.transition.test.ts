@@ -2,7 +2,7 @@ import { createOptimisticAction, createPacedMutations, debounceStrategy } from "
 import { Option } from "effect";
 import { Story as Alchemy } from "@alchemy.run/domain/Story";
 import { describe, expect, it } from "vite-plus/test";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import * as Story from "@highalch/story";
 import {
   entries,

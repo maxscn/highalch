@@ -6,10 +6,10 @@ TanStack DB transactions, and `match` renders each state. A story kit tests what
 and how its commands settle. It can also screenshot a mounted component after every step without
 a browser.
 
-| Package                                       | What                                                                                                                                                                                         |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@highalch/db`](packages/db/README.md)       | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
-| [`@highalch/story`](packages/story/README.md) | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
+| Package                                                   | What                                                                                                                                                                                         |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@highalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
+| [`@highalch/story`](packages/story/README.md)             | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
 
 Both packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
@@ -22,7 +22,7 @@ The example below follows a note list from the server to a screen story.
 ### Server: a feed, an entity and the feed's projection
 
 ```ts
-import * as HighAlch from "@highalch/db/server"; // alchemy Domain and Effect only
+import * as HighAlch from "@highalch/tanstack-db/server"; // alchemy Domain and Effect only
 
 export class NotebookChanges extends HighAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
 
@@ -52,8 +52,8 @@ export class NotebookWriter extends HighAlch.Projection("NotebookChanges", {
 ### Client: a collection, a provider, a read and a command
 
 ```tsx
-import * as HighAlch from "@highalch/db";
-import { Provider } from "@highalch/db/react";
+import * as HighAlch from "@highalch/tanstack-db";
+import { Provider } from "@highalch/tanstack-db/react";
 import { useLiveQuery } from "@tanstack/react-db";
 
 export const notes = HighAlch.collection(NoteRows, {
@@ -137,7 +137,7 @@ state only when that state lives where the story can reach it. The rules:
    `match`. Write it with declared commands.
 2. **State you want a frame of lives in an XState machine.** That is anything that changes what a
    reviewer would look at, or decides which command is sent: a draft, a step, an open dialog, the
-   last error. A machine sends commands through `invoke(command)` from `@highalch/db/xstate`.
+   last error. A machine sends commands through `invoke(command)` from `@highalch/tanstack-db/xstate`.
 3. **`useState` is for what nobody reviews.** Focus, hover, scroll position, a headless library's
    popover. A story cannot seed, read or enumerate it, so it has no frame. If you want a frame of
    it, move it into the machine.
@@ -182,7 +182,7 @@ that lead there.
 A Vite+ (`vp`) pnpm workspace:
 
 ```
-packages/db       @highalch/db
+packages/tanstack-db       @highalch/tanstack-db
 packages/story    @highalch/story
 fixtures/         example Domains and views shared by both packages' tests (not published)
 scripts/          check-patterns.ts: the packages' import boundaries
@@ -199,12 +199,12 @@ scripts/          check-patterns.ts: the packages' import boundaries
 
 Tests and type checks resolve `@highalch/*` to the packages' `src`: the aliases are in
 `vite.config.ts` and the matching `paths` are in `tsconfig.base.json`. Published packages resolve
-through their `exports`, which point at `dist`. `@highalch/story` builds against `@highalch/db`'s
+through their `exports`, which point at `dist`. `@highalch/story` builds against `@highalch/tanstack-db`'s
 `dist`, so `vp run build` builds `db` first.
 
 ## Releasing
 
-Releases use [Changesets](https://github.com/changesets/changesets). `@highalch/db` and
+Releases use [Changesets](https://github.com/changesets/changesets). `@highalch/tanstack-db` and
 `@highalch/story` always share a version.
 
 1. With a change that should reach npm, run `vp run changeset`, choose the bump and write one

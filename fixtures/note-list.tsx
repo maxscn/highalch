@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import { notes } from "./notes";
 
 /** A demo view for screen stories: one account's notes, read with stock `useLiveQuery`. */

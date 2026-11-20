@@ -1,4 +1,4 @@
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import {
   address,
   BookRows,

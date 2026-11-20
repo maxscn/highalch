@@ -16,7 +16,7 @@ export type Marked<Row, E> = Row & { readonly [Errors]?: E };
  * fail with when its selected fields no longer carry the row marker (a field projection):
  *
  * ```ts
- * declare module "@highalch/db" {
+ * declare module "@highalch/tanstack-db" {
  *   interface Register {
  *     readonly errors: HighAlch.ApiErrors<typeof MyApi>;
  *   }

@@ -11,7 +11,7 @@ them. Docs: `node_modules/vite-plus/docs` (when shipped) or https://viteplus.dev
 overwrite built-ins, so `vp test` and `vp run test` may differ. The root scripts are:
 
 - `vp run build`: `vp pack` in each package (tsdown; ESM `.mjs` and `.d.mts` in `dist`)
-- `vp run typecheck`: `tsc` (TypeScript 7) over `packages/db`, `packages/story` and the root project (`fixtures`, `scripts`)
+- `vp run typecheck`: `tsc` (TypeScript 7) over `packages/tanstack-db`, `packages/story` and the root project (`fixtures`, `scripts`)
 - `vp run check:patterns`: `scripts/check-patterns.ts`, the packages' import boundaries
 - `vp run test`: `vp test --maxWorkers=2`
 
@@ -28,23 +28,23 @@ parallel, and start no dev servers.
 
 # Conventions
 
-- **Packages.** `@highalch/db` is the core (`.`, `./server`, `./react`, `./xstate`,
+- **Packages.** `@highalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
   `./internal`). `@highalch/story` is the test kit (`.`, `./xstate`, `./screen`). Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy
   execution. JSX keeps ordinary conditional rendering.
 - **Terse names, namespaces for context.** Consumers write `import * as HighAlch from
-  "@highalch/db"` and call `HighAlch.collection`, `HighAlch.make`, `HighAlch.match`. Stories
+  "@highalch/tanstack-db"` and call `HighAlch.collection`, `HighAlch.make`, `HighAlch.match`. Stories
   use `import * as Story from "@highalch/story"`. Do not add self-namespace projections.
 - **No React `useEffect`** (nor `useLayoutEffect` or `useInsertionEffect`). Lifetimes are
   native external-store subscriptions (`useSyncExternalStore`) and callback refs.
 - **Boundaries** (`vp run check:patterns`):
-  - Only `@highalch/db/xstate` and `@highalch/story/xstate` import `xstate` and `@xstate/effect`.
+  - Only `@highalch/tanstack-db/xstate` and `@highalch/story/xstate` import `xstate` and `@xstate/effect`.
   - Only `@highalch/story/screen` imports `takumi-js`, `happy-dom`, `react-dom`,
     `@effect/atom-react` and `node:` files.
-  - `@highalch/db` never imports `@highalch/story`.
-- **Internals.** `@highalch/story` reaches core internals only through `@highalch/db/internal`.
+  - `@highalch/tanstack-db` never imports `@highalch/story`.
+- **Internals.** `@highalch/story` reaches core internals only through `@highalch/tanstack-db/internal`.
   That entry is unstable and outside semver. Never import another package's `src` by a relative
   path.
 - **Reads and writes.** Reads use TanStack DB's stock `useLiveQuery` over a declaration's subset

@@ -4,7 +4,7 @@ import { Schema } from "effect";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import {
   CreateNote,
   NoteAggregate,
@@ -25,7 +25,7 @@ import { EntryRows, NotYours } from "../../../fixtures/ledger";
  * The application registers its floor once: a live query whose projection drops the row marker
  * can fail with any read error of its Api.
  */
-declare module "@highalch/db" {
+declare module "@highalch/tanstack-db" {
   interface Register {
     readonly errors: HighAlch.ApiErrors<typeof NotesApi>;
   }

@@ -12,9 +12,9 @@ import {
   type MachineContext,
   type StateValue,
 } from "xstate";
-import type { TaggedFailure } from "@highalch/db";
-import type { Answer, Input } from "@highalch/db/internal";
-import { commandOf, Runner, type Invocable, type Marked } from "@highalch/db/xstate";
+import type { TaggedFailure } from "@highalch/tanstack-db";
+import type { Answer, Input } from "@highalch/tanstack-db/internal";
+import { commandOf, Runner, type Invocable, type Marked } from "@highalch/tanstack-db/xstate";
 import { registryOf, stageOf } from "../atoms";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Callable, type Step } from "../steps";

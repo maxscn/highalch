@@ -12,7 +12,7 @@ import {
 } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import * as InMemory from "@alchemy.run/domain/InMemory";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 
 /**
  * A small self-contained Domain for the HighAlch packages' tests: notes and books, per account, on one

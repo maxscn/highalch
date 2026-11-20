@@ -6,7 +6,7 @@ import {
   DbClient,
 } from "@tanstack/db";
 import { Effect, Layer, Option, Predicate } from "effect";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import { account, observe, seed, tick, titles, until, type Host } from "../../../fixtures/harness";
 import {
   address,

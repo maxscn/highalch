@@ -1,4 +1,4 @@
-import type { Timers, Wait } from "@highalch/db/internal";
+import type { Timers, Wait } from "@highalch/tanstack-db/internal";
 
 /** One timer a story's clients started, waiting for its time. */
 type Pending = {

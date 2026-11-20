@@ -44,7 +44,7 @@ export type Call<C extends Domain.Command.Any> = {
 };
 
 /** The `metadata` key under which a transaction holds the key of the row its call addresses. */
-export const createdKey = "@highalch/db/key";
+export const createdKey = "@highalch/tanstack-db/key";
 
 /** The transaction of an `inserts` command: its metadata holds the created row's key. */
 export type Created = Transaction & {

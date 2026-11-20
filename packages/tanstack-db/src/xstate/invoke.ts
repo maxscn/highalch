@@ -8,7 +8,7 @@ import type { Input } from "../values";
 export interface Marked {}
 
 /** Under this key, actor logic made from a `HighAlch` command holds that command. */
-const tag: unique symbol = Symbol.for("@highalch/db/xstate/command");
+const tag: unique symbol = Symbol.for("@highalch/tanstack-db/xstate/command");
 
 /** A `HighAlch` command as a machine invokes it: anything with `effect(input)`. */
 export type Invocable<I, A, E> = {
@@ -28,7 +28,7 @@ export class Runner extends Context.Service<
       input: I,
     ) => Effect.Effect<A, E>;
   }
->()("@highalch/db/xstate/Runner") {}
+>()("@highalch/tanstack-db/xstate/Runner") {}
 
 /** Marks actor logic as invoking `command`, so stories can see what a machine asked for. */
 export const mark = <L extends AnyActorLogic>(logic: L, command: Marked): L => {

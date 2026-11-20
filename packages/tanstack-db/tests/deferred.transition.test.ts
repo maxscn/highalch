@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createPacedMutations, debounceStrategy } from "@tanstack/db";
 import { Effect, Layer, Stream } from "effect";
 import * as Domain from "@alchemy.run/domain";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import { observe, quick, tick, until } from "../../../fixtures/harness";
 import {
   entries,

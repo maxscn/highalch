@@ -1,8 +1,8 @@
 import * as Domain from "@alchemy.run/domain";
 import { Deferred, Effect, Predicate, Stream } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
-import type { TaggedFailure } from "@highalch/db";
-import type { Answer, Input } from "@highalch/db/internal";
+import type { TaggedFailure } from "@highalch/tanstack-db";
+import type { Answer, Input } from "@highalch/tanstack-db/internal";
 
 /** A fresh transport failure, as the websocket protocol reports giving up. */
 export const transport = (message = "socket closed") =>

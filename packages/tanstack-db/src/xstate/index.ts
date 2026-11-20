@@ -6,7 +6,7 @@
  * `@xstate/effect` (optional peer dependencies of the package).
  *
  * ```ts
- * import { invoke } from "@highalch/db/xstate";
+ * import { invoke } from "@highalch/tanstack-db/xstate";
  * ```
  */
 export { commandOf, invoke, mark, rejection, Runner } from "./invoke";

@@ -1,5 +1,5 @@
 {
-  "name": "@highalch/db",
+  "name": "@highalch/tanstack-db",
   "version": "0.0.3",
   "description": "Alchemy Domains synced into TanStack DB collections, with typed errors from the Domain definitions.",
   "keywords": [
@@ -9,7 +9,7 @@
     "tanstack-db",
     "xstate"
   ],
-  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/db#readme",
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/tanstack-db#readme",
   "bugs": {
     "url": "https://github.com/maxscn/highalch/issues"
   },
@@ -17,7 +17,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/maxscn/highalch.git",
-    "directory": "packages/db"
+    "directory": "packages/tanstack-db"
   },
   "files": [
     "dist"

@@ -16,7 +16,7 @@ import type { Subset } from "./subset";
 import type { Answer, Input } from "./values";
 
 /** The DbClient dependency under which the Domain connection is kept. */
-export const dependency = "@highalch/db";
+export const dependency = "@highalch/tanstack-db";
 
 /**
  * Whether, and after how many milliseconds, to try a failed load or feed again: `attempt` is the

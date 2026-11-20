@@ -1,6 +1,6 @@
 /**
- * Unstable internals of `@highalch/db` for `@highalch/story` (and other test kits). Nothing here
- * is covered by semver: names and shapes change without notice. Applications use `@highalch/db`.
+ * Unstable internals of `@highalch/tanstack-db` for `@highalch/story` (and other test kits). Nothing here
+ * is covered by semver: names and shapes change without notice. Applications use `@highalch/tanstack-db`.
  *
  * - `Timers` / `Wait`: the seam where a client's retries, reload debounces and settle timeouts
  *   wait (`make({ timers })`); a story passes a clock it controls.

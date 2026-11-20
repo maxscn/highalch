@@ -1,4 +1,4 @@
-# @highalch/db
+# @highalch/tanstack-db
 
 Makes an [alchemy Domain](https://alchemy.run/domain) sync into TanStack DB 1.0 collections, with
 typed errors taken from the Domain definitions and no plumbing at call sites. Reads are stock
@@ -6,21 +6,21 @@ TanStack DB `useLiveQuery`; writes are native TanStack DB transactions; states a
 `match`. The package knows nothing about the application: the Api, its transport and the scope
 (an account, say) are supplied by the app.
 
-| Entry point             | What                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| `@highalch/db`          | The whole client-side API, React-free. Import it as `HighAlch`.                          |
-| `@highalch/db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect      |
-| `@highalch/db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                           |
-| `@highalch/db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`    |
-| `@highalch/db/internal` | Unstable seams for `@highalch/story` (timers, connection, state constructors); no semver |
+| Entry point                      | What                                                                                     |
+| -------------------------------- | ---------------------------------------------------------------------------------------- |
+| `@highalch/tanstack-db`          | The whole client-side API, React-free. Import it as `HighAlch`.                          |
+| `@highalch/tanstack-db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect      |
+| `@highalch/tanstack-db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                           |
+| `@highalch/tanstack-db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`    |
+| `@highalch/tanstack-db/internal` | Unstable seams for `@highalch/story` (timers, connection, state constructors); no semver |
 
 ```ts
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 ```
 
 Peer dependencies: `effect` 4.1.4, `@alchemy.run/domain` 2.0.0-beta.87, `@tanstack/db` and
 `@tanstack/react-db` 1.0.0-rc.1.5, `react` 19.2.7; optional `xstate` 6.0.0-beta.3 and
-`@xstate/effect` 1.0.0-beta.2 (only for `@highalch/db/xstate`).
+`@xstate/effect` 1.0.0-beta.2 (only for `@highalch/tanstack-db/xstate`).
 
 ## Server: one feed per scope, one entity per row type, one projection
 
@@ -29,7 +29,7 @@ account), a keyed, replayable, append-only log, written by exactly one **`Domain
 One feed carries the row changes of several entities.
 
 ```ts
-import * as HighAlch from "@highalch/db/server";
+import * as HighAlch from "@highalch/tanstack-db/server";
 
 // The feed: one stream per account. Its reads are guarded like any stream's.
 export class RecordChanges extends HighAlch.Feed("RecordChanges", {
@@ -101,7 +101,7 @@ App.layer(Layer.mergeAll(handlers, RecordChangesWriter.layer, RecordChangesLive)
   projection's (`batch`, `version`). Every entity of the projection must be on its feed (a type
   error otherwise). A feed has exactly one writer: list one `Projection` per feed.
 - Serve the stream in the Api like any stream (`streams: ["RecordChanges"]`). A model's server
-  code imports these from `@highalch/db/server`, which bundles no TanStack DB.
+  code imports these from `@highalch/tanstack-db/server`, which bundles no TanStack DB.
 
 **Delivery.** Like every projection, it runs at least once per input, in order per scope; alchemy
 drops a repeated append for the same input. Entries are whole rows (or removed keys), so a
@@ -302,7 +302,7 @@ A field projection (`select(({ c }) => ({ id: c.CustomerId }))`) drops the marke
 case the app declares a floor once, by module augmentation:
 
 ```ts
-declare module "@highalch/db" {
+declare module "@highalch/tanstack-db" {
   interface Register {
     readonly errors: HighAlch.ApiErrors<typeof AppApi>; // every read error of the Api
   }
@@ -395,7 +395,7 @@ id, serialisable call); it is not integrated.
 ## Configuration
 
 ```tsx
-import { Provider } from "@highalch/db/react";
+import { Provider } from "@highalch/tanstack-db/react";
 
 const db = HighAlch.make({
   api: AppApi,
@@ -458,10 +458,10 @@ server's query. Creates use client-chosen keys (`inserts` chooses one and the en
 addresses it): a create whose server row has another key (a per-command `target` that ignores the
 key) appears through the rule or the reload, not in place.
 
-## XState: `@highalch/db/xstate`
+## XState: `@highalch/tanstack-db/xstate`
 
 A machine invokes a command through `invoke(command)` from
-`@highalch/db/xstate` (production code imports it there, never from a testing entry;
+`@highalch/tanstack-db/xstate` (production code imports it there, never from a testing entry;
 `story/xstate` re-exports it), registered as an actor and run with `@xstate/effect`'s
 `createEffectActor`:
 
@@ -484,7 +484,7 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
 
 It is `createEffectLogic` over `command.effect(input)`: the invoked actor's output is the
 `Settled` value. Its error reaches `onError` as `@xstate/effect`'s `EffectFailure` around the
-Effect's cause; `rejection(event.error)` (from `@highalch/db/xstate`) answers the typed rejection
+Effect's cause; `rejection(event.error)` (from `@highalch/tanstack-db/xstate`) answers the typed rejection
 inside, the original instance. The logic is marked with its command,
 which is what makes "the command it asked for" observable: XState 6's pure `transition` returns,
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
@@ -494,14 +494,14 @@ is registered under in `setup({ actors })`. Plain XState logic works the same on
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 
-## Seams for test kits: `@highalch/db/internal`
+## Seams for test kits: `@highalch/tanstack-db/internal`
 
 `@highalch/story` needs a few behaviour-preserving seams of the core, published as
-`@highalch/db/internal` and **not covered by semver**: `Timers`/`Wait` (where retries, reload
+`@highalch/tanstack-db/internal` and **not covered by semver**: `Timers`/`Wait` (where retries, reload
 debounces and settle timeouts wait; `make({ timers })`, default `setTimeout`), `connectionOf` and
 `Connection` (a client's feeds, each with a read-only `current`: caught up and not failed, and its
 materialised subsets), the constructors of `match`'s live states (`Live`, `fromLive`) and of
-`Settled`, and `keyOf`. Applications import `@highalch/db`.
+`Settled`, and `keyOf`. Applications import `@highalch/tanstack-db`.
 
 ## Deliberately not done
 

@@ -3,7 +3,7 @@ import type { DecideContext } from "@alchemy.run/domain/Aggregate";
 import type * as Model from "@alchemy.run/domain/Model";
 import { Context, Deferred, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { RpcMiddleware } from "effect/rpc";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 
 /**
  * A Domain whose writes settle later, as writes through a policy do: a command records a decision

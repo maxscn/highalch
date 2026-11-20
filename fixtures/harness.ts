@@ -1,6 +1,6 @@
 import type { Collection, CollectionOptions, DbClient, NonSingleResult } from "@tanstack/db";
 import { Layer, Option, Predicate } from "effect";
-import * as HighAlch from "@highalch/db";
+import * as HighAlch from "@highalch/tanstack-db";
 import { address, host, NotesApi, type Note } from "./notebook";
 
 export type Host = Awaited<ReturnType<typeof host>>;

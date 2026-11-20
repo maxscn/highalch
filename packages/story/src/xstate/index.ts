@@ -4,16 +4,16 @@
  * step is XState's pure `transition`, nothing runs, hostless stories included) or running
  * (`Machine.start`: an actor against the story's client); `when`, `then` and `asked` read the same
  * in both. `explore` generates stories from a model. `invoke`, `mark` and `Runner` are
- * re-exported from `@highalch/db/xstate`, where production machines import them. This entry
+ * re-exported from `@highalch/tanstack-db/xstate`, where production machines import them. This entry
  * needs `xstate` and `@xstate/effect` (optional peer dependencies of the package).
  *
  * ```ts
  * import { explore, Machine } from "@highalch/story/xstate";
  * ```
  */
-export { commandOf, invoke, mark, rejection, Runner } from "@highalch/db/xstate";
+export { commandOf, invoke, mark, rejection, Runner } from "@highalch/tanstack-db/xstate";
 
-export type { Invocable, Marked } from "@highalch/db/xstate";
+export type { Invocable, Marked } from "@highalch/tanstack-db/xstate";
 
 export { Machine } from "./machine";
 

@@ -1,4 +1,6 @@
-# @highalch/db
+# @highalch/tanstack-db
+
+Published as `@highalch/db` up to 0.0.3.
 
 ## 0.0.3
 
