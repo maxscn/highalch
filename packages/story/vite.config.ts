@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: {
       index: "src/index.ts",
+      "tanstack-db": "src/tanstack-db/index.ts",
       xstate: "src/xstate/index.ts",
       screen: "src/screen/index.ts",
     },

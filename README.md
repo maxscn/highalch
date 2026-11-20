@@ -106,13 +106,14 @@ run `yield* LowAlch.close(db)` when its owner shuts down.
 
 ```tsx
 import * as Story from "@highalch/story";
-import * as Viewport from "@highalch/story/screen";
+import { Db } from "@highalch/story/tanstack-db";
+import { Screen } from "@highalch/story/screen";
 
 const story = Story.make(Story.memory({ api: NotesApi, layer: handlers, services: stores }), {
   scope: "acc-1",
 });
 
-const Screen = Viewport.make({
+const List = Screen.make({
   css,
   width: 360,
   height: 200,
@@ -122,14 +123,12 @@ const Screen = Viewport.make({
 });
 
 it("renames optimistically, then settles through the feed", () =>
-  story.with({ name: "rename settles", invariants: Story.invariants })(
+  story.with({ name: "rename settles", invariants: Db.invariants })(
     Story.given(NoteAggregate.ref(id), new NoteCreated({ note: ada })),
-    Screen.render(<NoteList account="acc-1" />), // a frame after this step and every later one
-    Story.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
-    Story.shows(notes.list({ account: "acc-1" }), [
-      { title: "Ada Lovelace", $hasPendingWrites: true },
-    ]),
-    Story.settled("Committed"),
+    List.render(<NoteList account="acc-1" />), // a frame after this step and every later one
+    Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
+    Db.then(notes.list({ account: "acc-1" }), [{ title: "Ada Lovelace", $hasPendingWrites: true }]),
+    Db.settled("Committed"),
   ));
 ```
 

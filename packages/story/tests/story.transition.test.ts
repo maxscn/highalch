@@ -4,6 +4,7 @@ import { Story as Alchemy } from "@alchemy.run/domain/Story";
 import { describe, expect, it } from "vite-plus/test";
 import * as LowAlch from "@lowalch/tanstack-db";
 import * as Story from "@highalch/story";
+import { Db } from "@highalch/story/tanstack-db";
 import {
   entries,
   entryStore,
@@ -86,14 +87,14 @@ describe("f(read declarations, feed burst) as stories", () => {
     const patched = [{ title: "Ada 2" }, { title: "Bob" }];
     const added = [...patched, { title: "Cyd" }];
 
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada, bob),
-      allSources.map((source) => Story.open(source)),
-      Story.shows(list, initial),
-      Story.shows(single, []),
-      Story.shows(book, [{ title: "Ada" }]),
-      Story.shows(wrapped, initial),
-      queryDecided.map((source) => Story.shows(source, initial)),
+      allSources.map((source) => Db.open(source)),
+      Db.then(list, initial),
+      Db.then(single, []),
+      Db.then(book, [{ title: "Ada" }]),
+      Db.then(wrapped, initial),
+      queryDecided.map((source) => Db.then(source, initial)),
       Story.check("each subset loads once", (world) => {
         expect(world.client().wire.asked.toSorted()).toEqual([
           "NoteById",
@@ -107,16 +108,16 @@ describe("f(read declarations, feed burst) as stories", () => {
       }),
       Story.remote(refOf(ada), new RenameNote({ NoteId: "n1", title: "Ada 2" })),
       Story.remote(refOf(cyd), new CreateNote({ ...input, BookId: cyd.BookId, title: cyd.title })),
-      Story.shows(list, added),
-      Story.shows(single, [{ title: "Cyd" }]),
-      Story.shows(book, [{ title: "Ada 2" }, { title: "Cyd" }]),
-      Story.shows(wrapped, added),
-      queryDecided.map((source) => Story.shows(source, patched)),
+      Db.then(list, added),
+      Db.then(single, [{ title: "Cyd" }]),
+      Db.then(book, [{ title: "Ada 2" }, { title: "Cyd" }]),
+      Db.then(wrapped, added),
+      queryDecided.map((source) => Db.then(source, patched)),
       Story.check("feed patches arrive before another query is sent", (world) => {
         expect(world.client().wire.asked).toHaveLength(allSources.length);
       }),
       Story.advance(10),
-      queryDecided.map((source) => Story.shows(source, added)),
+      queryDecided.map((source) => Db.then(source, added)),
       Story.advance(10),
       Story.check(
         "each query-decided subset re-asks once and rule-based subsets send no query",
@@ -134,64 +135,62 @@ describe("f(read declarations, feed burst) as stories", () => {
 
 describe("f(ready subsets, command) as stories", () => {
   it("f(ready, rename) → optimistic at once, then committed in every subset; never back", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada, bob),
-      Story.shows(list, [{ title: "Ada" }, { title: "Bob" }]),
-      Story.shows(one, [{ title: "Ada" }]),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-      Story.shows(list, [{ title: "Ada 2", $hasPendingWrites: true }, { title: "Bob" }]),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
-      Story.settled("Committed"),
-      Story.shows(list, [{ title: "Ada 2", $hasPendingWrites: false }, { title: "Bob" }]),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(list, [{ title: "Ada" }, { title: "Bob" }]),
+      Db.then(one, [{ title: "Ada" }]),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+      Db.then(list, [{ title: "Ada 2", $hasPendingWrites: true }, { title: "Bob" }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Db.settled("Committed"),
+      Db.then(list, [{ title: "Ada 2", $hasPendingWrites: false }, { title: "Bob" }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
     );
   });
 
   it("f(ready, rejected rename) → rolled back with the original NoteLocked", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada),
-      Story.shows(one, [{ title: "Ada" }]),
-      Story.when(notes.rename, { NoteId: "n1", title: "locked" }),
-      Story.shows(one, [{ title: "locked", $hasPendingWrites: true }]),
-      Story.rejected(new NoteLocked({ title: "locked" })),
-      Story.shows(one, [{ title: "Ada", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada" }]),
+      Db.when(notes.rename, { NoteId: "n1", title: "locked" }),
+      Db.then(one, [{ title: "locked", $hasPendingWrites: true }]),
+      Db.rejected(new NoteLocked({ title: "locked" })),
+      Db.then(one, [{ title: "Ada", $hasPendingWrites: false }]),
     );
   });
 
   it("f(insert, update, edit, delete) → each optimistic where its rule holds, then committed", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada, bob),
-      Story.open(list),
-      Story.open(book),
-      Story.when(notes.file, { account: "acc-1", BookId: "b2", title: "Cyd" }),
+      Db.open(list),
+      Db.open(book),
+      Db.when(notes.file, { account: "acc-1", BookId: "b2", title: "Cyd" }),
       // In the list (no rule), not in book b1 (its rule refuses b2).
-      Story.shows(list, (rows) =>
-        rows.some((row) => row.NoteId === "b2:Cyd" && row.$hasPendingWrites),
-      ),
-      Story.shows(book, [{ NoteId: "n1" }]),
-      Story.settled("Committed"),
-      Story.when(notes.pin, { NoteId: "n1", pinned: true }),
-      Story.shows(book, [{ NoteId: "n1", pinned: true, $hasPendingWrites: true }]),
-      Story.settled("Committed"),
-      Story.when(notes.remove, { NoteId: "n2" }),
-      Story.shows(list, [{ NoteId: "b2:Cyd" }, { NoteId: "n1", pinned: true }]),
-      Story.settled("Committed"),
-      Story.shows(list, [{ NoteId: "b2:Cyd", $hasPendingWrites: false }, { NoteId: "n1" }]),
+      Db.then(list, (rows) => rows.some((row) => row.NoteId === "b2:Cyd" && row.$hasPendingWrites)),
+      Db.then(book, [{ NoteId: "n1" }]),
+      Db.settled("Committed"),
+      Db.when(notes.pin, { NoteId: "n1", pinned: true }),
+      Db.then(book, [{ NoteId: "n1", pinned: true, $hasPendingWrites: true }]),
+      Db.settled("Committed"),
+      Db.when(notes.remove, { NoteId: "n2" }),
+      Db.then(list, [{ NoteId: "b2:Cyd" }, { NoteId: "n1", pinned: true }]),
+      Db.settled("Committed"),
+      Db.then(list, [{ NoteId: "b2:Cyd", $hasPendingWrites: false }, { NoteId: "n1" }]),
     );
   });
 
   it("f(.options and .paced) → the same steps run createOptimisticAction and paced mutations", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada),
-      Story.open(one),
-      Story.when("pin through createOptimisticAction", ({ activate }) => {
+      Db.open(one),
+      Db.when("pin through createOptimisticAction", ({ activate }) => {
         activate();
 
         return createOptimisticAction(notes.pin.options)({ NoteId: "n1", pinned: true });
       }),
-      Story.shows(one, [{ pinned: true, $hasPendingWrites: true }]),
-      Story.settled(),
-      Story.when("three paced renames", () => {
+      Db.then(one, [{ pinned: true, $hasPendingWrites: true }]),
+      Db.settled(),
+      Db.when("three paced renames", () => {
         const mutate = createPacedMutations({
           ...notes.rename.paced,
           strategy: debounceStrategy({ wait: 1 }),
@@ -201,9 +200,9 @@ describe("f(ready subsets, command) as stories", () => {
 
         return calls[0] ?? mutate({ NoteId: "n1", title: "Ada 3" });
       }),
-      Story.shows(one, [{ title: "Ada 3", pinned: true, $hasPendingWrites: true }]),
-      Story.settled(),
-      Story.shows(one, [{ title: "Ada 3", pinned: true, $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 3", pinned: true, $hasPendingWrites: true }]),
+      Db.settled(),
+      Db.then(one, [{ title: "Ada 3", pinned: true, $hasPendingWrites: false }]),
       Story.check("one RenameNote sent for three paced calls", (world) => {
         const sent = world.client().wire.sent.filter((each) => each.name === "RenameNote");
 
@@ -215,24 +214,24 @@ describe("f(ready subsets, command) as stories", () => {
   it("f(feed silent, rename) → Unconfirmed once the settle timeout passes; the subset reloads", async () => {
     await story(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       Story.mute(),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
       Story.advance(2_000),
-      Story.settled("Unconfirmed"),
+      Db.settled("Unconfirmed"),
       Story.advance(10),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
     );
   });
 });
 
 describe("f(subsets, load) as stories", () => {
   it("f(load in flight, writes race the query) → every write applied once, nothing missed", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada, bob),
       Story.hold(),
-      Story.open(list),
-      Story.state(list, "Loading"),
+      Db.open(list),
+      Db.then(list, { state: "Loading" }),
       // The query answered from the store as it was; these writes land after its cursor.
       Story.remote(refOf(ada), new RenameNote({ NoteId: "n1", title: "Ada 2" })),
       Story.remote(refOf(bob), new DeleteNote({ NoteId: "n2" })),
@@ -240,12 +239,12 @@ describe("f(subsets, load) as stories", () => {
         NoteAggregate.ref(address("acc-1", "n3")),
         new CreateNote({ account: "acc-1", BookId: "b1", title: "Cyd" }),
       ),
-      Story.state(list, "Loading"),
+      Db.then(list, { state: "Loading" }),
       Story.release(),
-      Story.state(list, "Ready"),
+      Db.then(list, { state: "Ready" }),
       // n3 has no rule to place it in the list: the list reloads after its debounce.
       Story.advance(10),
-      Story.shows(list, [
+      Db.then(list, [
         { NoteId: "n1", title: "Ada 2" },
         { NoteId: "n3", title: "Cyd" },
       ]),
@@ -256,55 +255,55 @@ describe("f(subsets, load) as stories", () => {
     await story(
       exist(ada),
       Story.fail("NotesByBook", new QueryRefused()),
-      Story.open(book),
-      Story.state(book, new QueryRefused()),
+      Db.open(book),
+      Db.then(book, { state: new QueryRefused() }),
       Story.recover("NotesByBook"),
-      Story.reload(book),
-      Story.state(book, "Ready"),
-      Story.shows(book, [{ NoteId: "n1" }]),
+      Db.reload(book),
+      Db.then(book, { state: "Ready" }),
+      Db.then(book, [{ NoteId: "n1" }]),
     );
   });
 });
 
 describe("f(ready subsets, another client's change) as stories", () => {
   it("f(three subsets, server rename then delete) → every subset that shows the row follows", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada, bob),
-      Story.open(list),
-      Story.open(one),
-      Story.open(book),
+      Db.open(list),
+      Db.open(one),
+      Db.open(book),
       Story.remote(refOf(ada), new RenameNote({ NoteId: "n1", title: "Ada 2" })),
-      Story.shows(list, [{ title: "Ada 2" }, { title: "Bob" }]),
-      Story.shows(one, [{ title: "Ada 2" }]),
-      Story.shows(book, [{ title: "Ada 2" }]),
+      Db.then(list, [{ title: "Ada 2" }, { title: "Bob" }]),
+      Db.then(one, [{ title: "Ada 2" }]),
+      Db.then(book, [{ title: "Ada 2" }]),
       Story.given(refOf(ada), new NoteChanged({ note: { ...ada, title: "Ada 3" } })),
-      Story.shows(one, [{ title: "Ada 3" }]),
+      Db.then(one, [{ title: "Ada 3" }]),
       Story.remote(refOf(ada), new DeleteNote({ NoteId: "n1" })),
-      Story.shows(list, [{ title: "Bob" }]),
-      Story.shows(one, []),
-      Story.shows(book, []),
+      Db.then(list, [{ title: "Bob" }]),
+      Db.then(one, []),
+      Db.then(book, []),
     );
   });
 
   it("f(ready, feed drops; a write meanwhile; feed resumes) → Retrying, then the write, from the last seq", async () => {
     let asked = 0;
 
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada),
-      Story.shows(book, [{ NoteId: "n1" }]),
+      Db.then(book, [{ NoteId: "n1" }]),
       Story.check("count the queries", (world) => {
         asked = world.client().wire.asked.length;
       }),
       Story.drop(),
-      Story.state(book, "Retrying", { attempt: 2 }),
+      Db.then(book, { state: "Retrying", fields: { attempt: 2 } }),
       Story.remote(
         NoteAggregate.ref(address("acc-1", "n4")),
         new CreateNote({ account: "acc-1", BookId: "b1", title: "Dee" }),
       ),
-      Story.shows(book, [{ NoteId: "n1" }]),
+      Db.then(book, [{ NoteId: "n1" }]),
       Story.resume(),
-      Story.state(book, "Ready"),
-      Story.shows(book, [{ NoteId: "n1" }, { NoteId: "n4", title: "Dee" }]),
+      Db.then(book, { state: "Ready" }),
+      Db.then(book, [{ NoteId: "n1" }, { NoteId: "n4", title: "Dee" }]),
       Story.check("resumed from its last seq: no reload, the rule placed n4", (world) => {
         expect(world.client().wire.asked).toHaveLength(asked);
       }),
@@ -312,44 +311,44 @@ describe("f(ready subsets, another client's change) as stories", () => {
   });
 
   it("f(two accounts, module-level declarations) → each client follows only its own scope", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada, eve),
-      Story.shows(book, [{ NoteId: "e1" }, { NoteId: "n1" }]),
-      Story.as("acc-2", Story.shows(book, [{ NoteId: "e1" }, { NoteId: "n1" }])),
-      Story.when(notes.rename, { NoteId: "n1", title: "Mine" }),
-      Story.settled("Committed"),
+      Db.then(book, [{ NoteId: "e1" }, { NoteId: "n1" }]),
+      Story.as("acc-2", Db.then(book, [{ NoteId: "e1" }, { NoteId: "n1" }])),
+      Db.when(notes.rename, { NoteId: "n1", title: "Mine" }),
+      Db.settled("Committed"),
       Story.as(
         "acc-2",
         Story.remote("rename e1", (api: Client) =>
           api.RenameNote(address("acc-2", "e1"), { NoteId: "e1", title: "Theirs" }),
         ),
-        Story.shows(book, [
+        Db.then(book, [
           { NoteId: "e1", title: "Theirs" },
           { NoteId: "n1", title: "Ada" },
         ]),
       ),
       // Each feed carries only its account's changes.
-      Story.shows(book, [
+      Db.then(book, [
         { NoteId: "e1", title: "Eve" },
         { NoteId: "n1", title: "Mine" },
       ]),
     );
   });
 
-  it("f(alchemy's Story.given and Story.when) → history and another client's write on the host", async () => {
-    await story.with({ invariants: Story.invariants })(
+  it("f(alchemy's Story.given and Db.when) → history and another client's write on the host", async () => {
+    await story.with({ invariants: Db.invariants })(
       Story.alchemy(Alchemy.given(refOf(ada), new NoteCreated({ note: ada }))),
-      Story.shows(one, [{ title: "Ada" }]),
+      Db.then(one, [{ title: "Ada" }]),
       Story.alchemy(Alchemy.when(refOf(ada), new RenameNote({ NoteId: "n1", title: "Ada 2" }))),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
     );
   });
 
   it("f(server store, check) → a check reads the host's services", async () => {
     await story(
       exist(ada),
-      Story.open(stats({ account: "acc-1" })),
-      Story.shows(stats({ account: "acc-1" }), [{ count: 1 }]),
+      Db.open(stats({ account: "acc-1" })),
+      Db.then(stats({ account: "acc-1" }), [{ count: 1 }]),
       Story.check("the index holds n1", async (world) => {
         const notesStore = await world.host.service?.(NoteStore);
 
@@ -363,8 +362,8 @@ describe("f(change outside the feed, client close) as stories", () => {
   it("f(list and one shown, store changed by another write path, reload(Rows)) → both show the stored row, never back", async () => {
     await story(
       exist(ada, bob),
-      Story.open(list),
-      Story.open(one),
+      Db.open(list),
+      Db.open(one),
       Story.check("another write path changes n1 (the feed does not carry it)", async (world) => {
         const notesStore = await world.host.service?.(NoteStore);
         const stored = notesStore?.notes.get("n1");
@@ -372,13 +371,13 @@ describe("f(change outside the feed, client close) as stories", () => {
         if (stored) notesStore?.notes.set("n1", { ...stored, title: "Ada (imported)" });
       }),
       Story.settle(),
-      Story.shows(list, [{ title: "Ada" }, { title: "Bob" }]),
-      Story.reload(NoteRows),
-      Story.shows(list, [{ title: "Ada (imported)" }, { title: "Bob" }]),
-      Story.shows(one, [{ title: "Ada (imported)", $hasPendingWrites: false }]),
+      Db.then(list, [{ title: "Ada" }, { title: "Bob" }]),
+      Db.reload(NoteRows),
+      Db.then(list, [{ title: "Ada (imported)" }, { title: "Bob" }]),
+      Db.then(one, [{ title: "Ada (imported)", $hasPendingWrites: false }]),
       Story.check("each subset showed n1 once more, in one transaction", (world) => {
         for (const observed of world.observed())
-          expect(Story.historyOf(observed, "n1", ["title"])).toBe(
+          expect(Db.historyOf(observed, "n1", ["title"])).toBe(
             '{"title":"Ada"} → {"title":"Ada (imported)"}',
           );
       }),
@@ -390,10 +389,10 @@ describe("f(change outside the feed, client close) as stories", () => {
     // clock's waits (here the settle timeout), so the failure surfaces instead of a hang.
     const failure = await story(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       Story.mute(),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-      Story.shows(one, [{ title: "Ada" }]),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+      Db.then(one, [{ title: "Ada" }]),
     ).then(
       () => undefined,
       (error: Story.StoryFailure) => error,
@@ -418,14 +417,14 @@ describe("f(deferred settlement, command) as stories", () => {
     );
 
   it("f(stored later, update) → settled by the row delivered under the command's id (cause)", async () => {
-    await ledgerStory.with({ invariants: Story.invariants })(
+    await ledgerStory.with({ invariants: Db.invariants })(
       saved("e1", "Ada"),
-      Story.shows(ledgerList, [{ EntryId: "e1", text: "Ada" }]),
-      Story.when(entries.save, { value: { EntryId: "e1", text: "Ada 2" } }),
-      Story.shows(ledgerList, [{ text: "Ada 2", $hasPendingWrites: true }]),
+      Db.then(ledgerList, [{ EntryId: "e1", text: "Ada" }]),
+      Db.when(entries.save, { value: { EntryId: "e1", text: "Ada 2" } }),
+      Db.then(ledgerList, [{ text: "Ada 2", $hasPendingWrites: true }]),
       // On the manual clock the settle timeout never passes: Committed is the feed's delivery.
-      Story.settled("Committed"),
-      Story.shows(ledgerList, [{ text: "Ada 2", $hasPendingWrites: false }]),
+      Db.settled("Committed"),
+      Db.then(ledgerList, [{ text: "Ada 2", $hasPendingWrites: false }]),
       Story.check("the entry names the command as its cause", async (world) => {
         const run = world.runs.at(-1);
         const feed = await world.entries();
@@ -438,25 +437,25 @@ describe("f(deferred settlement, command) as stories", () => {
   it("f(store refuses, update) → nothing delivered: Unconfirmed after the timeout, reloaded", async () => {
     await ledgerStory(
       saved("e1", "Ada"),
-      Story.open(ledgerList),
+      Db.open(ledgerList),
       Story.check("refuse e1", async (world) => {
         (await world.host.service?.(EntryStore))?.refuse.add("e1");
       }),
-      Story.when(entries.save, { value: { EntryId: "e1", text: "Ada 2" } }),
+      Db.when(entries.save, { value: { EntryId: "e1", text: "Ada 2" } }),
       Story.advance(2_000),
-      Story.settled("Unconfirmed"),
+      Db.settled("Unconfirmed"),
       Story.advance(10),
-      Story.shows(ledgerList, [{ text: "Ada", $hasPendingWrites: false }]),
+      Db.then(ledgerList, [{ text: "Ada", $hasPendingWrites: false }]),
     );
   });
 
   it("f(rejected decision, update) → rolls back with EntryEmpty", async () => {
-    await ledgerStory.with({ invariants: Story.invariants })(
+    await ledgerStory.with({ invariants: Db.invariants })(
       saved("e1", "Ada"),
-      Story.open(ledgerList),
-      Story.when(entries.save, { value: { EntryId: "e1", text: "" } }),
-      Story.rejected(new EntryEmpty()),
-      Story.shows(ledgerList, [{ text: "Ada", $hasPendingWrites: false }]),
+      Db.open(ledgerList),
+      Db.when(entries.save, { value: { EntryId: "e1", text: "" } }),
+      Db.rejected(new EntryEmpty()),
+      Db.then(ledgerList, [{ text: "Ada", $hasPendingWrites: false }]),
     );
   });
 });
@@ -506,14 +505,14 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
   it("f(rename) → the row is pending when result returns; the promise resolves Committed", async () => {
     const rename = held();
 
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       rename.call("Ada 2"),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
       Story.settle(),
       rename.read("resolved Committed", (outcome) => expect(outcome._tag).toBe("Committed")),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
     );
   });
 
@@ -522,9 +521,9 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
     await story(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       rename.call("Ada 2", false),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
       Story.settle(),
       rename.read("resolved Committed", (outcome) => expect(outcome._tag).toBe("Committed")),
     );
@@ -533,17 +532,17 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
   it("f(locked rename) → the promise resolves with the typed rejection; the row rolls back", async () => {
     const rename = held();
 
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       rename.call("locked"),
-      Story.shows(one, [{ title: "locked", $hasPendingWrites: true }]),
+      Db.then(one, [{ title: "locked", $hasPendingWrites: true }]),
       Story.settle(),
       rename.read("resolved NoteLocked", (outcome) => {
         expect(outcome).toBeInstanceOf(NoteLocked);
         expect(outcome).toMatchObject({ _tag: "NoteLocked", title: "locked" });
       }),
-      Story.shows(one, [{ title: "Ada", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada", $hasPendingWrites: false }]),
     );
   });
 
@@ -552,7 +551,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
     await story(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       Story.mute(),
       rename.call("Ada 2"),
       Story.advance(10_000),
@@ -565,7 +564,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
     await story(
       exist(ada),
-      Story.open(one),
+      Db.open(one),
       Story.check("close the client", async (world) => {
         const { db } = await world.connect();
 
@@ -602,7 +601,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
     try {
       await story(
         exist(ada),
-        Story.open(one),
+        Db.open(one),
         Story.check("result of a rename with a throwing reaction", async (world) => {
           const { db } = await world.connect();
 
@@ -639,19 +638,19 @@ describe("f(story failure) → a readable report", () => {
   it("names the step, expected vs observed, and each key's history", async () => {
     const failure = await story(
       exist(ada),
-      Story.open(one),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-      Story.settled("Committed"),
-      Story.shows(one, [{ title: "Ada" }]),
+      Db.open(one),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+      Db.settled("Committed"),
+      Db.then(one, [{ title: "Ada" }]),
     ).then(
       () => undefined,
       (error: Story.StoryFailure) => error,
     );
 
     expect(failure).toBeInstanceOf(Story.StoryFailure);
-    expect(failure?.message).toContain("Step 5 (shows");
+    expect(failure?.message).toContain("Step 5 (then");
     expect(failure?.message).toMatch(
-      /expected \[\{"title":"Ada"\}\][\s\S]*observed[\s\S]*n1: \{"title":"Ada"\} → \{"title":"Ada 2"\} \(pending\) → \{"title":"Ada 2"\}[\s\S]*✓ 4\. settled Committed[\s\S]*✗ 5\. shows/,
+      /expected \[\{"title":"Ada"\}\][\s\S]*observed[\s\S]*n1: \{"title":"Ada"\} → \{"title":"Ada 2"\} \(pending\) → \{"title":"Ada 2"\}[\s\S]*✓ 4\. settled Committed[\s\S]*✗ 5\. then/,
     );
   });
 });
@@ -662,11 +661,11 @@ describe("view helpers", () => {
     const retry = () => {};
 
     const shown = [
-      Story.view(list, Story.Live.Loading()),
-      Story.view(list, Story.Live.Retrying({ error: new QueryRefused(), attempt: 2, data })),
-      Story.view(list, Story.Live.Ready({ data, feed: Option.none(), retry })),
-      Story.view(list, Story.Live.Ready({ data, feed: Option.some(new QueryRefused()), retry })),
-      Story.view(list, new QueryRefused()),
+      Db.view(list, Db.Live.Loading()),
+      Db.view(list, Db.Live.Retrying({ error: new QueryRefused(), attempt: 2, data })),
+      Db.view(list, Db.Live.Ready({ data, feed: Option.none(), retry })),
+      Db.view(list, Db.Live.Ready({ data, feed: Option.some(new QueryRefused()), retry })),
+      Db.view(list, new QueryRefused()),
     ].map((result) =>
       LowAlch.match(result).on({
         Loading: () => "loading",
@@ -696,13 +695,13 @@ describe("view helpers", () => {
 
   it("f(Settled, Live) → the constructors of each outcome and state", () => {
     const outcome = (): LowAlch.Settled<undefined> =>
-      Story.Settled.Committed({ reply: undefined, stream: "Note/n1", version: 2 });
+      Db.Settled.Committed({ reply: undefined, stream: "Note/n1", version: 2 });
 
     const committed = outcome();
 
     expect(
       LowAlch.match(committed).on({ Committed: () => "saved", Unconfirmed: () => "unconfirmed" }),
     ).toBe("saved");
-    expect(Story.Live.Missing()._tag).toBe("Missing");
+    expect(Db.Live.Missing()._tag).toBe("Missing");
   });
 });

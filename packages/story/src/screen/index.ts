@@ -6,16 +6,18 @@
  * peer dependencies of the package); no other entry imports them.
  *
  * ```ts
- * import * as Viewport from "@highalch/story/screen";
+ * import { Screen } from "@highalch/story/screen";
  *
- * const Screen = Viewport.make({ css, width: 360, height: 200, baselines, output });
- * // in a story: Screen.render(<NoteList account="acc-1" />), …, Screen.shot("saved")
+ * const List = Screen.make({ css, width: 360, height: 200, baselines, output });
+ * // in a story: List.render(<NoteList account="acc-1" />), …, List.shot("saved")
  * ```
  */
-export { make } from "./screen";
+import { compare, decode, encode } from "./png";
+import { make } from "./screen";
 
-export type { Frame, Options, Place, Screen, Status } from "./screen";
+/** Screen steps (`Screen.make(options)` builds them for a component) and the PNG helpers. */
+export const Screen = { make, compare, decode, encode } as const;
 
-export { compare, decode, encode } from "./png";
+export type { Frame, Options, Place, Status, Viewport } from "./screen";
 
 export type { Difference, Pixels } from "./png";
