@@ -2,7 +2,7 @@ import type { AnyFormApi, AnyFormState } from "@tanstack/react-form";
 import { Effect, Option, Predicate, Schema } from "effect";
 import * as Arbitrary from "effect/Arbitrary";
 import type { AnySource } from "../explore";
-import type { Reader } from "../rules";
+import { reader, type Reader } from "../rules";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Step } from "../steps";
 import { json, macrotask } from "../world";
@@ -195,20 +195,18 @@ export const thenIs = <F extends Declared>(target: Target<F>, expected: Expected
   });
 
 /** The state of the one instance a target addresses, as a rule reads it (`undefined`: none). */
-export const state = <F extends Declared>(target: Target<F>): Reader<AnyFormState | undefined> => ({
-  read: async () => {
+export const state = <F extends Declared>(target: Target<F>): Reader<AnyFormState | undefined> =>
+  reader(`form ${nameOf(formOf(target))}`, async () => {
     const all = instancesOf(formOf(target));
 
     if (all.length === 0) return undefined;
 
     return instanceOf(target).state;
-  },
-});
+  });
 
 /** The states of every mounted instance of a form, in mount order, as a rule reads them. */
-export const all = <F extends Declared>(form: F): Reader<ReadonlyArray<AnyFormState>> => ({
-  read: async () => instancesOf(form).map((api) => api.state),
-});
+export const all = <F extends Declared>(form: F): Reader<ReadonlyArray<AnyFormState>> =>
+  reader(`forms ${nameOf(form)}`, async () => instancesOf(form).map((api) => api.state));
 
 /** The validator a declared form's values decode with, when it is an Effect Schema struct. */
 const schemaOf = (form: Declared) => {
@@ -223,7 +221,10 @@ const schemaOf = (form: Declared) => {
   );
 };
 
-/** Values for a field, sampled from its schema (seeded, so every run tries the same ones). */
+/**
+ * Values for a field: its schema's boundaries, then values sampled from it (seeded, so every run
+ * tries the same ones).
+ */
 const sampled = (
   form: Declared,
   field: string,
@@ -240,8 +241,31 @@ const sampled = (
     // SAFETY: a field of a struct schema is a schema; sampling it needs no services.
     const arbitrary = Arbitrary.schema(fieldSchema as Schema.Top & Schema.Constraint);
 
-    return Option.some(Effect.runSync(Arbitrary.sampleEffect(arbitrary, { count: 3, seed })));
+    return Option.some([
+      ...boundaries(fieldSchema),
+      ...Effect.runSync(Arbitrary.sampleEffect(arbitrary, { count: 3, seed })),
+    ]);
   });
+
+/**
+ * The values at a string field's declared edge, which random samples rarely reach (they stay
+ * short): the longest value its schema accepts (`Schema.isMaxLength(60)`), as one word of the
+ * widest letter, since an unbreakable word is what a layout fails on. Read from the schema's
+ * checks, so every run tries the same values.
+ */
+const boundaries = (schema: Schema.Top): ReadonlyArray<string> =>
+  (schema.ast.checks ?? []).flatMap((check) =>
+    Option.liftPredicate(
+      Reflect.get(check.annotations ?? {}, "arbitraryConstraint"),
+      Predicate.isObject,
+    ).pipe(
+      Option.map((constraint) => Reflect.get(constraint, "maxLength")),
+      Option.filter(Predicate.isNumber),
+      Option.filter((length) => length > 0),
+      Option.map((length) => "W".repeat(length)),
+      Option.toArray,
+    ),
+  );
 
 /** Whether a declared form's values can be generated: its validator is an Effect Schema struct. */
 type Generated<F> = F extends { readonly validators?: infer V }
@@ -284,8 +308,8 @@ const typeInto = (form: Declared, typed: Typed): Step =>
 
 /**
  * The user typing into a form, as an exploration's source: every field (or `fields`), every value
- * (its own `values`, or ones sampled from the form's Effect Schema), into the first mounted
- * instance (or the first `instances`). Forms no source names do not join the exploration.
+ * (its own `values`, or its Effect Schema's boundaries and values sampled from it), into the
+ * first mounted instance (or the first `instances`). Forms no source names do not join the exploration.
  */
 export const typing = <F extends Declared>(form: F, options: Typing<F>): AnySource => {
   const defaults: unknown = Reflect.get(form, "defaultValues");

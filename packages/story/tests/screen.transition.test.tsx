@@ -30,26 +30,17 @@ const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, serv
   scope: "acc-1",
 });
 
-const List = Screen.make({
-  css,
-  width: 360,
-  height: 200,
+/** Where the screens' frames go: reviewed baselines, and the run's filmstrips. */
+const frames = Takumi.frames({
   baselines: new URL("./baselines/", import.meta.url),
   output: new URL("../artifacts/stories/", import.meta.url),
   update: process.env.UPDATE_SCREENS === "1",
-  painter: Takumi.layer(),
 });
 
+const List = Screen.make({ css, width: 360, height: 200 }).pipe(frames);
+
 /** The editor's screen: the same places, its own stylesheet. */
-const Editor = Screen.make({
-  css: editorCss,
-  width: 360,
-  height: 200,
-  baselines: new URL("./baselines/", import.meta.url),
-  output: new URL("../artifacts/stories/", import.meta.url),
-  update: process.env.UPDATE_SCREENS === "1",
-  painter: Takumi.layer(),
-});
+const Editor = Screen.make({ css: editorCss, width: 360, height: 200 }).pipe(frames);
 
 const ada: Note = { NoteId: "n1", account: "acc-1", BookId: "b1", title: "Ada", pinned: false };
 

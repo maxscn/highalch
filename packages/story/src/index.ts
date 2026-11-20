@@ -56,15 +56,18 @@ export { Explore, ExploreFailure } from "./explore";
 
 export type { Exploration, Explored, Source as ExploreSource } from "./explore";
 
+export { reader } from "./rules";
+
 export type {
+  Ask,
   At,
-  Declaration,
+  Holds,
   Moment,
-  Read,
   Reader,
   Rule,
+  Settings as RuleSettings,
   StepOf,
-  World as RuleWorld,
+  Yieldable,
 } from "./rules";
 
 export { transport, Wire } from "./wire";
