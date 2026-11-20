@@ -71,6 +71,9 @@ parallel, and start no dev servers.
   memory with real clients. Domain steps (`Story.given`, `Story.remote`, the transport's faults), data steps
   (`Db.when`, `Db.then`, `Db.settled`, `Db.rejected`, ...) and machine steps (`Machine.given` stepped purely, `Machine.start` running) compose in one
   story. `explore` generates interleavings checked against `Db.invariants`.
+- `examples/` holds bugs a story catches: each a broken and an approved variant of a view or
+  machine, one story run against both, both variants' frames as reviewed baselines
+  (`examples/baselines/takumi/`). Its components and machines are fixtures too.
 - Shared example Domains and views live in `fixtures/` (`notebook.ts`, `ledger.ts`, `notes.ts`,
   `editor.ts`, `note-list.tsx`). They import `@lowalch/*` and `@highalch/*` like a consumer does.
 - Tests run from source. The aliases in `vite.config.ts` and the `paths` in

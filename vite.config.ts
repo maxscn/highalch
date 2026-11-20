@@ -65,7 +65,7 @@ export default defineConfig({
     dedupe: ["effect", "react", "react-dom"],
   },
   test: {
-    include: ["packages/*/tests/**/*.test.{ts,tsx}"],
+    include: ["packages/*/tests/**/*.test.{ts,tsx}", "examples/**/*.test.{ts,tsx}"],
   },
   run: {
     cache: true,
