@@ -1,8 +1,7 @@
 import * as Domain from "@alchemy.run/domain";
 import { Deferred, Effect, Predicate, Stream } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
-import type { TaggedFailure } from "@lowalch/tanstack-db";
-import type { Answer, Input } from "@lowalch/tanstack-db/internal";
+import type { Answer, Input, Tagged } from "./values";
 
 /** A fresh transport failure, as the websocket protocol reports giving up. */
 export const transport = (message = "socket closed") =>
@@ -12,7 +11,7 @@ export const transport = (message = "socket closed") =>
 export type Sent = { readonly name: string; readonly target: string; readonly input: Input };
 
 /** A command or query of an Api client. */
-type Call = (...args: ReadonlyArray<never>) => Effect.Effect<Answer | null, TaggedFailure>;
+type Call = (...args: ReadonlyArray<never>) => Effect.Effect<Answer | null, Tagged>;
 
 /** A stream's latest entry, as `peek` answers it. */
 type Latest = { readonly envelope: { readonly seq: number } };
@@ -22,11 +21,11 @@ export type Feed = {
   readonly peek: (
     key: string,
     ...rest: ReadonlyArray<never>
-  ) => Effect.Effect<Latest | null, TaggedFailure>;
+  ) => Effect.Effect<Latest | null, Tagged>;
   readonly events: (
     key: string,
     options: { readonly after: number },
-  ) => Stream.Stream<Answer, TaggedFailure>;
+  ) => Stream.Stream<Answer, Tagged>;
 };
 
 /** An Api client's endpoints by name: methods (commands, queries) and served streams. */
@@ -66,7 +65,7 @@ export class Wire {
   /** Closed while the story is not letting time pass: command replies wait at it. */
   private network: Deferred.Deferred<void> | undefined = Effect.runSync(Deferred.make<void>());
   private readonly cuts = new Set<Deferred.Deferred<never, RpcClientError>>();
-  private readonly failing = new Map<string, { error: TaggedFailure; times: number }>();
+  private readonly failing = new Map<string, { error: Tagged; times: number }>();
   private gate: Deferred.Deferred<void> | undefined;
 
   /** Whether the feed is held down (`drop` without `resume`). */
@@ -92,7 +91,7 @@ export class Wire {
   };
 
   /** The endpoint `name` fails with `error`, `times` times (or until `recover`). */
-  fail = (name: string, error: TaggedFailure, times = Number.POSITIVE_INFINITY) => {
+  fail = (name: string, error: Tagged, times = Number.POSITIVE_INFINITY) => {
     this.failing.set(name, { error, times });
   };
 
@@ -151,7 +150,7 @@ export class Wire {
    */
   private counted = <A>(
     name: string,
-    effect: Effect.Effect<A, TaggedFailure>,
+    effect: Effect.Effect<A, Tagged>,
     held: boolean,
     reply: boolean,
   ) =>

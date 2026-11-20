@@ -1,9 +1,8 @@
 import type * as Domain from "@alchemy.run/domain";
 import { Cause, Option, Predicate } from "effect";
-import { Defect, type Settings } from "@lowalch/tanstack-db";
-import type { Answer } from "@lowalch/tanstack-db/internal";
 import { Clock } from "./clock";
 import type { Host } from "./host";
+import type { Answer } from "./values";
 import { endpointsOf, Wire, type Endpoints } from "./wire";
 
 /** A row as a story compares it: its fields, without TanStack DB's virtual `$` fields. */
@@ -21,9 +20,9 @@ export const json = <V>(value: V): string =>
     return field;
   });
 
-/** What a story's clients are, besides how they reach the Api. */
-export type Options = Partial<Omit<Settings, "scope" | "clock">> & {
-  /** The clock retries, reload debounces and settle timeouts wait on (default `manual`). */
+/** How a story's world runs. */
+export type Options = {
+  /** The clock the clients' timers wait on (default `manual`: only `advance` fires them). */
   readonly clock?: "manual" | "real";
 };
 
@@ -109,9 +108,6 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   busy = async (): Promise<Option.Option<string>> => {
     if (this.host.idle && !(await this.host.idle())) return Option.some("the server is busy");
 
-    if (this.clock.mode === "real" && this.clock.waiting("retry", "reload"))
-      return Option.some("a retry or reload is about to run");
-
     for (const [scope, wire] of this.wires)
       if (wire.inflight > 0) return Option.some(`${scope}: ${wire.inflight} request(s) in flight`);
 
@@ -126,8 +122,8 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
 
   /**
    * Waits until nothing more happens by itself: the server is idle, no request is in flight,
-   * nothing an adapter added waits (every live feed delivered the server's latest entry), and
-   * (with the real clock) no retry or reload is due. Waits on the story's manual clock never fire
+   * and nothing an adapter added waits (every live feed delivered the server's latest entry, no
+   * retry is due on the real clock). Waits on the story's manual clock never fire
    * here: `advance` fires them. Command replies reach the clients only while the world settles;
    * `flow: false` waits without letting them through (the clients and their machines catch up,
    * the commands stay in flight).
@@ -180,9 +176,14 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   };
 }
 
-/** A defect as a readable line. */
+/** A defect as a readable line: an error carrying an Effect `Cause` shows the cause. */
 export const describeDefect = <D>(defect: D) => {
-  if (defect instanceof Defect) return `${defect.name}: ${Cause.pretty(defect.cause)}`;
+  if (
+    defect instanceof Error &&
+    Predicate.hasProperty(defect, "cause") &&
+    Cause.isCause(defect.cause)
+  )
+    return `${defect.name}: ${Cause.pretty(defect.cause)}`;
 
   return String(defect);
 };

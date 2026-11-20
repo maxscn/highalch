@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as LowAlch from "@lowalch/tanstack-db";
 import * as Story from "@highalch/story";
 import { Db } from "@highalch/story/tanstack-db";
+import { LowAlchDb } from "@highalch/story/lowalch";
 import {
   entries,
   entryStore,
@@ -40,7 +41,7 @@ import { notes, stats } from "../../../fixtures/notes";
  * The package's transitions as stories: the Notebook model hosted in memory, a real `LowAlch`
  * client per account behind the story's wire, on the story's manual clock.
  */
-const story = Story.make(Story.memory({ api: NotesApi, layer: notebook, services: store }), {
+const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, services: store }), {
   scope: "acc-1",
 });
 
@@ -372,7 +373,7 @@ describe("f(change outside the feed, client close) as stories", () => {
       }),
       Story.settle(),
       Db.then(list, [{ title: "Ada" }, { title: "Bob" }]),
-      Db.reload(NoteRows),
+      LowAlchDb.reload(NoteRows),
       Db.then(list, [{ title: "Ada (imported)" }, { title: "Bob" }]),
       Db.then(one, [{ title: "Ada (imported)", $hasPendingWrites: false }]),
       Db.check("each subset showed n1 once more, in one transaction", (db) => {
@@ -404,7 +405,7 @@ describe("f(change outside the feed, client close) as stories", () => {
 });
 
 const ledgerStory = Story.make(
-  Story.memory({ api: LedgerApi, layer: ledger, services: entryStore, session }),
+  LowAlchDb.memory({ api: LedgerApi, layer: ledger, services: entryStore, session }),
   { scope: "acc-1" },
 );
 
@@ -427,7 +428,7 @@ describe("f(deferred settlement, command) as stories", () => {
       Db.then(ledgerList, [{ text: "Ada 2", $hasPendingWrites: false }]),
       Db.check("the entry names the command as its cause", async (db) => {
         const run = db.runs.at(-1);
-        const feed = await db.entries();
+        const feed = await LowAlchDb.entries(db);
 
         expect(feed.at(-1)?.commandId).toBe(run?.transaction.id);
       }),
@@ -661,11 +662,17 @@ describe("view helpers", () => {
     const retry = () => {};
 
     const shown = [
-      Db.view(list, Db.Live.Loading()),
-      Db.view(list, Db.Live.Retrying({ error: new QueryRefused(), attempt: 2, data })),
-      Db.view(list, Db.Live.Ready({ data, feed: Option.none(), retry })),
-      Db.view(list, Db.Live.Ready({ data, feed: Option.some(new QueryRefused()), retry })),
-      Db.view(list, new QueryRefused()),
+      LowAlchDb.view(list, LowAlchDb.Live.Loading()),
+      LowAlchDb.view(
+        list,
+        LowAlchDb.Live.Retrying({ error: new QueryRefused(), attempt: 2, data }),
+      ),
+      LowAlchDb.view(list, LowAlchDb.Live.Ready({ data, feed: Option.none(), retry })),
+      LowAlchDb.view(
+        list,
+        LowAlchDb.Live.Ready({ data, feed: Option.some(new QueryRefused()), retry }),
+      ),
+      LowAlchDb.view(list, new QueryRefused()),
     ].map((result) =>
       LowAlch.match(result).on({
         Loading: () => "loading",
@@ -695,13 +702,13 @@ describe("view helpers", () => {
 
   it("f(Settled, Live) → the constructors of each outcome and state", () => {
     const outcome = (): LowAlch.Settled<undefined> =>
-      Db.Settled.Committed({ reply: undefined, stream: "Note/n1", version: 2 });
+      LowAlchDb.Settled.Committed({ reply: undefined, stream: "Note/n1", version: 2 });
 
     const committed = outcome();
 
     expect(
       LowAlch.match(committed).on({ Committed: () => "saved", Unconfirmed: () => "unconfirmed" }),
     ).toBe("saved");
-    expect(Db.Live.Missing()._tag).toBe("Missing");
+    expect(LowAlchDb.Live.Missing()._tag).toBe("Missing");
   });
 });

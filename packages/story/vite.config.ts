@@ -5,6 +5,7 @@ export default defineConfig({
     entry: {
       index: "src/index.ts",
       "tanstack-db": "src/tanstack-db/index.ts",
+      lowalch: "src/lowalch/index.ts",
       xstate: "src/xstate/index.ts",
       screen: "src/screen/index.ts",
       takumi: "src/takumi/index.ts",

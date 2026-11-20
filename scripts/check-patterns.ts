@@ -3,7 +3,10 @@
  *
  * - `@lowalch/tanstack-db` imports only effect, alchemy Domain, TanStack DB and React; XState only in its
  *   `xstate` entry.
- * - `@highalch/story` additionally imports `@lowalch/tanstack-db`; XState only in its `xstate` entry;
+ * - `@highalch/story`'s root (the runner and the Domain's steps) imports neither TanStack DB nor
+ *   LowAlch, nor an adapter's entry: only effect, alchemy Domain and React. Its `tanstack-db` entry
+ *   adds TanStack DB, never LowAlch; LowAlch only in its `lowalch` and `xstate` entries.
+ * - `@highalch/story`: XState only in its `xstate` entry;
  *   happy-dom, react-dom, `@effect/atom-react` and node files only in its `screen` entry; takumi
  *   (and the node file reading its WASM) only in its `takumi` entry.
  * - Neither reaches an XState, screen or takumi entry from outside it (type-only imports are
@@ -67,6 +70,10 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
     const xstateEntry = inside(file, join(db, "xstate")) || inside(file, join(story, "xstate"));
     const screenEntry = inside(file, join(story, "screen"));
     const takumiEntry = inside(file, join(story, "takumi"));
+    const storyRoot = dirname(file) === story;
+    const dbEntry = inside(file, join(story, "tanstack-db"));
+    const lowalchAllowed =
+      inside(file, join(story, "lowalch")) || inside(file, join(story, "xstate"));
 
     // SAFETY: oxc's program body; only the fields of `Declaration` are read.
     for (const node of program.body as unknown as ReadonlyArray<Declaration>) {
@@ -90,7 +97,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
       if (
         !module.startsWith(".") &&
         !core.test(module) &&
-        !(!inDb && /^@lowalch\/tanstack-db(?:\/|$)/.test(module)) &&
+        !(!inDb && lowalchAllowed && /^@lowalch\/tanstack-db(?:\/|$)/.test(module)) &&
         !(xstateEntry && xstate.test(module)) &&
         !(screenEntry && screen.test(module)) &&
         !(takumiEntry && takumi.test(module))
@@ -129,6 +136,24 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         (module === "@highalch/story/takumi" || inside(resolved, join(story, "takumi")))
       )
         report(node, "Only @highalch/story/takumi imports takumi: other entries do not");
+
+      if (
+        storyRoot &&
+        (/^@(?:tanstack|lowalch)\//.test(module) ||
+          ["tanstack-db", "lowalch", "xstate", "screen", "takumi"].some((entry) =>
+            inside(resolved, join(story, entry)),
+          ))
+      )
+        report(
+          node,
+          `${module}: the story runner knows no adapter: TanStack DB, LowAlch and the adapters' entries are imported only by those entries`,
+        );
+
+      if (dbEntry && (module.startsWith("@lowalch/") || inside(resolved, join(story, "lowalch"))))
+        report(
+          node,
+          `${module}: @highalch/story/tanstack-db works on plain TanStack DB; LowAlch lives in @highalch/story/lowalch`,
+        );
 
       if (inDb && (/^@highalch\/story(?:\/|$)/.test(module) || inside(resolved, story)))
         report(node, "@lowalch/tanstack-db never imports the story kit");

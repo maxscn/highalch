@@ -3,7 +3,7 @@ import * as InMemory from "@alchemy.run/domain/InMemory";
 import type * as Aggregate from "@alchemy.run/domain/Aggregate";
 import * as Model from "@alchemy.run/domain/Model";
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Option, Predicate } from "effect";
-import type { TaggedFailure } from "@lowalch/tanstack-db";
+import type { Tagged } from "./values";
 
 /** The Api client of an Api, as its `Client` service yields it. */
 export type ClientOf<A extends Domain.Api.Any> =
@@ -14,19 +14,25 @@ export type ClientOf<A extends Domain.Api.Any> =
  * story wraps it for its own clients, and uses it unwrapped as "another client"). The rest is
  * optional: `idle` (the server has nothing queued), `seed` (history for `given`), `send` (a
  * command as another writer, for `remote(ref, command)`: its failure, if any) and `service` (a
- * service of the host, for `check`).
+ * service of the host, for `check`) and `adapters` (services the story's adapters are built with:
+ * how its clients connect, for example).
  */
 export type Host<A extends Domain.Api.Any> = {
   readonly api: A;
   readonly client: (scope: string) => Promise<ClientOf<A>>;
   readonly idle?: () => Promise<boolean>;
-  readonly seed?: (ref: Aggregate.Ref, events: ReadonlyArray<TaggedFailure>) => Promise<void>;
+  readonly seed?: (ref: Aggregate.Ref, events: ReadonlyArray<Tagged>) => Promise<void>;
   readonly send?: (
     ref: Aggregate.Ref,
-    command: TaggedFailure,
+    command: Tagged,
     commandId: string,
   ) => Promise<Option.Option<string>>;
   readonly service?: <I, S>(key: Context.Key<I, S>) => Promise<S>;
+  /**
+   * Layers the story's adapters are built with: services an adapter reads if present (the
+   * connector `@highalch/story/lowalch` provides to the TanStack DB clients).
+   */
+  readonly adapters?: ReadonlyArray<Layer.Layer<never>>;
   readonly dispose: () => Promise<void>;
 };
 

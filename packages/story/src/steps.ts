@@ -1,8 +1,7 @@
 import type * as Aggregate from "@alchemy.run/domain/Aggregate";
 import type { Step as AlchemyStep } from "@alchemy.run/domain/Story";
 import { Effect, Exit, Option, Predicate } from "effect";
-import type { TaggedFailure } from "@lowalch/tanstack-db";
-import type { Answer } from "@lowalch/tanstack-db/internal";
+import type { Answer, Tagged } from "./values";
 import { json, type World } from "./world";
 import { Mismatch, type Stage } from "./stage";
 import { transport } from "./wire";
@@ -67,7 +66,7 @@ export const given = <A extends Aggregate.Any>(
   ...events: ReadonlyArray<Aggregate.EventOf<A>>
 ): Step => {
   // SAFETY: an aggregate's events are tagged instances (alchemy's `Story.given` reads them so).
-  const tagged = events as ReadonlyArray<TaggedFailure>;
+  const tagged = events as ReadonlyArray<Tagged>;
 
   return step(
     `given ${ref.aggregate}/${String(ref.id)}: ${tagged.map((event) => event._tag).join(", ")}`,
@@ -88,7 +87,7 @@ export const given = <A extends Aggregate.Any>(
  */
 export function remote<A extends Aggregate.Any>(
   ref: Aggregate.Ref<A>,
-  command: Aggregate.CommandOf<A> & TaggedFailure,
+  command: Aggregate.CommandOf<A> & Tagged,
 ): Step;
 export function remote<C, E>(
   label: string,
@@ -96,7 +95,7 @@ export function remote<C, E>(
 ): Step;
 export function remote(
   target: Aggregate.Ref | string,
-  command: TaggedFailure | ((api: never) => Effect.Effect<Answer | void, Answer>),
+  command: Tagged | ((api: never) => Effect.Effect<Answer | void, Answer>),
 ): Step {
   if (Predicate.isString(target) && Predicate.isFunction(command))
     return step(`remote ${target}`, async (world) => {
@@ -155,7 +154,7 @@ export const mute = (on = true) =>
  * An endpoint (a query or command, by name) fails with a typed error for the step's client,
  * `times` times or until `recover`.
  */
-export const fail = (name: string, error: TaggedFailure, times?: number) =>
+export const fail = (name: string, error: Tagged, times?: number) =>
   step(`fail ${name} with ${error._tag}`, async (world) => {
     world.wire().fail(name, error, times);
   });

@@ -1,21 +1,24 @@
 # @highalch/story
 
-Stories for data synced with [`@lowalch/tanstack-db`](../tanstack-db/README.md) and the XState machines over it:
+Stories for TanStack DB clients (plain, or synced with an alchemy Domain by
+[`@lowalch/tanstack-db`](../tanstack-db/README.md)) and the XState machines over them:
 given server history, when a client, another client or the world acts, then what each source
 shows, its read state and how each command settled. Optional screen steps paint a filmstrip of a
 mounted React component without a browser.
 
-| Entry point                   | What                                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------- |
-| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time) |
-| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, invariants and view helpers   |
-| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`   |
-| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom     |
-| `@highalch/story/takumi`      | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`     |
+| Entry point                   | What                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time)               |
+| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling and invariants (plain TanStack DB)           |
+| `@highalch/story/lowalch`     | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, invariants, view helpers |
+| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                 |
+| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom                   |
+| `@highalch/story/takumi`      | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`                   |
 
-Peer dependencies: `@lowalch/tanstack-db` and its peers; optional `xstate` and `@xstate/effect` (for
-`/xstate`), `react-dom`, `happy-dom` and `@effect/atom-react` (for `/screen`) and `takumi-js` 2.14.0
-(for `/takumi`).
+Peer dependencies: `effect`, `@alchemy.run/domain`, `@tanstack/db` and `react`; optional
+`@lowalch/tanstack-db` (for `/lowalch` and `/xstate`), `xstate` and `@xstate/effect` (for
+`/xstate`), `react-dom`, `happy-dom`, `@tanstack/react-db` and `@effect/atom-react` (for
+`/screen`) and `takumi-js` 2.14.0 (for `/takumi`).
 
 A story tells a frontend's behaviour like Foldkit's: given a state, when something happens, then
 the next state and what was asked for. There is **one runner** and one vocabulary: data steps (a
@@ -30,13 +33,16 @@ commands it asked for), and lists the steps (✓ passed, ✗ failed, blank not r
 ```ts
 import * as Story from "@highalch/story"; // the runner and the Domain's steps; never imports XState
 import { Db } from "@highalch/story/tanstack-db"; // data steps: what a client shows and its commands
+import { LowAlchDb } from "@highalch/story/lowalch"; // LowAlch clients for the data steps
 import { explore, Machine } from "@highalch/story/xstate"; // machine steps and generated stories
 import { invoke } from "@lowalch/tanstack-db/xstate"; // production: how a machine invokes a command
 ```
 
 `@lowalch/tanstack-db` never imports the story kit. Only `@lowalch/tanstack-db/xstate` and
-`@highalch/story/xstate` import `xstate` and `@xstate/effect`, optional peer dependencies;
-the repository's `vp run check:patterns` enforces both.
+`@highalch/story/xstate` import `xstate` and `@xstate/effect`, optional peer dependencies. The
+story runner imports neither TanStack DB nor LowAlch: `Db` works on plain TanStack DB, and only
+`@highalch/story/lowalch` (and the machine steps, which run LowAlch commands) import LowAlch. The
+repository's `vp run check:patterns` enforces all of it.
 
 ## Making a story
 
@@ -46,8 +52,11 @@ In this example, the whole-list declaration for `notes.list` is `LowAlch.read(No
 // Hosted: the consumer's Domain in memory, real LowAlch clients (one per scope) behind a wire the
 // story controls, on a clock it controls. Data steps and machine steps.
 const story = Story.make(
-  Story.memory({ api: NotesApi, layer: handlers, services: stores, session: readerOf }),
-  { scope: "acc-1" }, // and any client settings: settleTimeout, reloadDelay, retry, clock
+  LowAlchDb.memory(
+    { api: NotesApi, layer: handlers, services: stores, session: readerOf },
+    { settleTimeout: 2_000 }, // the clients' settings: settleTimeout, reloadDelay, retry, live
+  ),
+  { scope: "acc-1" }, // and the clock: `clock: "real"`
 );
 
 // Hostless: no Domain, no client, nothing started. Machines stepped purely.
@@ -65,7 +74,10 @@ it("renames optimistically, then settles through the feed", () =>
 ```
 
 Each call of a hosted runner builds a fresh host and fresh clients and disposes them; nothing is
-global. `Story.memory` hosts the Api's model on alchemy's in-memory platform: `layer` (a function,
+global. `LowAlchDb.memory` is `Story.memory` with LowAlch clients: `Story.memory` alone hosts the
+Domain and leaves `Db`'s clients plain TanStack DB (a bare `DbClient` per scope, the sources as
+they are); `LowAlchDb.connect(settings)` adds LowAlch clients to any other host's `adapters`.
+`Story.memory` hosts the Api's model on alchemy's in-memory platform: `layer` (a function,
 so each story gets fresh state) is what the model's `layer` takes, `services` the stores those
 handlers share with `check` steps (`world.host.service(Tag)`), and `session(scope)` the reader's
 middleware when the Api's reads are guarded. Any other host is a `Hosting`: a function returning
@@ -109,7 +121,7 @@ commands it runs:
 | `settled("Committed" \| "Unconfirmed"?)`             | the last command (a `when`'s or a running machine's) settled so                                                       |
 | `rejected(error)`                                    | the last command was rejected with this typed error (same class, same fields)                                         |
 | `check(label, (db) => ...)`                          | anything else of the clients: their runs, observed sources, a `DbClient`, the feed's entries                          |
-| `reload(source)` / `reload(Rows)`                    | what a `match` handler's `retry` does (`collection.reload()`) / `LowAlch.reload(db, Rows)`, its debounce passed       |
+| `reload(source)`                                     | what a `match` handler's `retry` does (`collection.reload()`); `LowAlchDb.reload(Rows)` reloads an entity's subsets   |
 
 Machine steps (`Machine.*`). Each addressing step takes a last `{ machine?: name }` (default: the
 machine introduced last), as data steps take `{ as?: scope }`:
@@ -244,12 +256,14 @@ in flight, closing its clients (`LowAlch.close` waits for sent commands) lets th
 and runs the clock's waits, so a failure is reported instead of hanging.
 
 **Invariants.** `story.with({ invariants })` checks invariants after every step and at the end.
-`Db.invariants` are a collection's defaults:
+`Db.invariants` are the clients' defaults: `nothingPending`, and the invariants their connector
+adds (`Db.connected`). With LowAlch clients those are `LowAlchDb.invariants`:
 
 - `noFlickerBack`: a source never shows a row of the feed older than one it already showed for that
   key, and once a command's optimistic row showed, never one older than the command's own change
   (no new → old → new when it settles).
-- `nothingPending`: at rest (settled, every command ended, every feed live) no row is pending.
+- `nothingPending` (any client): at rest (settled, every command ended, every feed live) no row is
+  pending.
 - `subsetsAgree`: at rest, every ready subset of an entity in one client agrees on a shared row.
 - `rejectedRestores`: right after a rejection, each source shows the row it showed before the
   command (or a newer row of the feed), not pending.
@@ -394,7 +408,8 @@ its world, `after`, `end`, its name) and use other adapters by providing their L
 `stage.use(adapter)` builds it once per run, on first use, shares the Layers adapters build on,
 and runs their finalizers when the story ends, before the host is disposed. The data steps keep
 their clients in `Db.clients` (its service, `Db.Clients`, is what `Db.check(label, (db) => …)`
-reads: `db.runs`, `db.observed()`, `db.entries()`, `db.connect()`), the machine steps their
+reads: `db.runs`, `db.observed()`, `db.connect()`; `LowAlchDb.entries(db)` the feed), the
+machine steps their
 machines, a screen its mounted component and its painter (`PainterOf`, provided by a painter
 entry's Layer). The runner knows nothing about TanStack DB, XState or React.
 
@@ -424,10 +439,10 @@ process, or whatever transport your `Hosting` uses), or orders the story does no
 A presentational component takes plain props; its composition component renders
 `match(useLiveQuery(...)).on(...)`. To render each branch without a server:
 
-- `Db.Live` constructs every state `match` gives a live query (`Loading()`, `Retrying({ error,
+- `LowAlchDb.Live` constructs every state `match` gives a live query (`Loading()`, `Retrying({ error,
   attempt, data })`, `Ready({ data, feed, retry })`, `Missing()`, `Disabled()`), and
-  `Db.Settled` a command's settled value (`Committed(...)`, `Unconfirmed(...)`).
-- `Db.view(source, state)` is a value shaped like a stock `useLiveQuery` result over `source` in
+  `LowAlchDb.Settled` a command's settled value (`Committed(...)`, `Unconfirmed(...)`).
+- `LowAlchDb.view(source, state)` is a value shaped like a stock `useLiveQuery` result over `source` in
   that state (a `Live` state or one of the source's typed errors), which `match` accepts without
   casts and reads exactly as the real one, with the source's errors; `retried()` counts `retry`
   calls. It is for view tests only: it holds no collection.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { createAsyncLogic, setup, types } from "xstate";
 import * as Story from "@highalch/story";
 import { Db } from "@highalch/story/tanstack-db";
+import { LowAlchDb } from "@highalch/story/lowalch";
 import { explore, Machine, pathsOf } from "@highalch/story/xstate";
 import { mark } from "@lowalch/tanstack-db/xstate";
 import { editor } from "../../../fixtures/editor";
@@ -21,7 +22,7 @@ import {
 import { notes } from "../../../fixtures/notes";
 
 /** The hosted runner: the Notebook model in memory, data and machine steps in any order. */
-const story = Story.make(Story.memory({ api: NotesApi, layer: notebook, services: store }), {
+const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, services: store }), {
   scope: "acc-1",
 });
 
@@ -74,7 +75,7 @@ describe("f(editor snapshot, event) → next snapshot and the commands it asked 
       saving,
       Machine.done(
         notes.rename,
-        Db.Settled.Committed({ reply: undefined, stream: "", version: 2 }),
+        LowAlchDb.Settled.Committed({ reply: undefined, stream: "", version: 2 }),
       ),
       Machine.then({ state: "Saved", context: { problem: undefined } }),
     );
@@ -258,7 +259,7 @@ describe("f(machines and data in one story) → what only the combination shows"
       Db.then(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
       Machine.done(
         notes.rename,
-        Db.Settled.Committed({ reply: undefined, stream: "", version: 3 }),
+        LowAlchDb.Settled.Committed({ reply: undefined, stream: "", version: 3 }),
       ),
       Machine.then({ state: "Saved" }),
       Story.check("nothing was sent", (world) => {

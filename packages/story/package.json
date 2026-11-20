@@ -34,6 +34,10 @@
       "types": "./dist/tanstack-db.d.mts",
       "default": "./dist/tanstack-db.mjs"
     },
+    "./lowalch": {
+      "types": "./dist/lowalch.d.mts",
+      "default": "./dist/lowalch.mjs"
+    },
     "./xstate": {
       "types": "./dist/xstate.d.mts",
       "default": "./dist/xstate.mjs"
@@ -79,6 +83,7 @@
     "@effect/atom-react": "^4.1.4",
     "@lowalch/tanstack-db": "workspace:^",
     "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/react-db": "1.0.0-rc.1.5",
     "@xstate/effect": "1.0.0-beta.2",
     "effect": "^4.1.4",
     "happy-dom": "^20.11.1",
@@ -89,6 +94,12 @@
   },
   "peerDependenciesMeta": {
     "@effect/atom-react": {
+      "optional": true
+    },
+    "@lowalch/tanstack-db": {
+      "optional": true
+    },
+    "@tanstack/react-db": {
       "optional": true
     },
     "@xstate/effect": {
