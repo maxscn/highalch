@@ -6,12 +6,17 @@ import { useLiveQuery } from "@tanstack/react-db";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 import * as HighAlch from "@highalch/tanstack-db";
 import {
+  type Book,
   CreateNote,
   NoteAggregate,
   NoteById,
   NotebookChanges,
   NoteRows,
   Note,
+  Notes,
+  NotesByBook,
+  NotesByTitle,
+  NotesByCursor,
   NoteStats,
   type NotesApi,
   PinNote,
@@ -27,7 +32,7 @@ import { EntryRows, NotYours } from "../../../fixtures/ledger";
  */
 declare module "@highalch/tanstack-db" {
   interface Register {
-    readonly errors: HighAlch.ApiErrors<typeof NotesApi>;
+    readonly errors: HighAlch.ApiErrors<typeof NotesApi> | NotYours;
   }
 }
 
@@ -90,9 +95,17 @@ export function Recovered() {
     q.from({ note: notes.list({ account: "a" }) }).select(({ note }) => ({ id: note.NoteId })),
   );
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof fields.data>>().toEqualTypeOf<
-    HighAlch.ApiErrors<typeof NotesApi>
-  >();
+  expectTypeOf<HighAlch.Floor>().toEqualTypeOf<Read | NotYours>();
+  expectTypeOf<HighAlch.ErrorsOf<typeof fields.data>>().toEqualTypeOf<Read | NotYours>();
+
+  // @ts-expect-error dropping the marker means the extra floor rejection, NotYours, is required
+  HighAlch.match(fields).on({
+    Loading: () => null,
+    Retrying: () => null,
+    Ready: () => null,
+    QueryRefused: () => null,
+    RpcClientError: () => null,
+  });
 
   // Exhaustive without `orElse`, with each error as its own state.
   HighAlch.match(from).on({
@@ -172,6 +185,227 @@ export function Recovered() {
   });
 
   return null;
+}
+
+class OptionalNotes extends Domain.Query("OptionalNotes", {
+  input: { account: Schema.String },
+  success: Schema.NullOr(Schema.Struct({ Items: Schema.Array(Note) })),
+  rejects: [QueryRefused],
+}) {}
+
+class MaybeNotes extends Domain.Query("MaybeNotes", {
+  input: { account: Schema.String },
+  success: Schema.NullOr(Schema.Array(Note)),
+  rejects: [QueryRefused],
+}) {}
+
+type ReadMethods<T> = Extract<keyof T, string>;
+
+type SourceErrors<Accessor> = Accessor extends (...args: never) => HighAlch.Source<infer Row>
+  ? HighAlch.ErrorsOf<Row>
+  : never;
+
+/** Every read step keeps the query's input and errors and uses the current entry type. */
+export function ReadBuilder(otherRow: Book) {
+  const start = HighAlch.read(Notes);
+  const selected = HighAlch.read(NotesByTitle).rows((answer) => answer.Items);
+  const all = start.all();
+  const where = HighAlch.read(NotesByBook).where((row, input) => {
+    expectTypeOf(row).toEqualTypeOf<Note>();
+    expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByBook>>();
+
+    return row.BookId === input.BookId;
+  });
+  const one = HighAlch.read(NoteById).one((row, input) => row.NoteId === input.NoteId);
+
+  expectTypeOf<ReadMethods<typeof start>>().toEqualTypeOf<"rows" | "where" | "one" | "all">();
+  expectTypeOf<ReadMethods<typeof selected>>().toEqualTypeOf<"where" | "one" | "all">();
+  expectTypeOf<ReadMethods<typeof all>>().toBeNever();
+  expectTypeOf<ReadMethods<typeof where>>().toBeNever();
+  expectTypeOf<ReadMethods<typeof one>>().toBeNever();
+
+  const subsets = HighAlch.collection(NoteRows, {
+    queries: {
+      read: start,
+      bare: Notes,
+      page: selected,
+      list: all,
+      where,
+      one,
+      selectedAll: selected.all(),
+      selectedWhere: selected.where((row, input) => {
+        expectTypeOf(row).toEqualTypeOf<Note>();
+        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+
+        return row.account === input.account;
+      }),
+      selectedOne: selected.one((row, input) => {
+        expectTypeOf(row).toEqualTypeOf<Note>();
+        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+
+        return row.account === input.account;
+      }),
+      optional: HighAlch.read(OptionalNotes).rows((answer) => {
+        expectTypeOf(answer).toEqualTypeOf<{ readonly Items: ReadonlyArray<Note> }>();
+
+        return answer.Items;
+      }),
+    },
+  });
+
+  expectTypeOf(subsets.list).toEqualTypeOf<HighAlch.Subsets<typeof NoteRows, typeof Notes>>();
+  expectTypeOf(subsets.read).toEqualTypeOf<typeof subsets.bare>();
+  expectTypeOf(subsets.page).toEqualTypeOf<
+    HighAlch.Subsets<typeof NoteRows, typeof NotesByTitle>
+  >();
+  expectTypeOf(subsets.selectedAll).toEqualTypeOf<typeof subsets.page>();
+  expectTypeOf(subsets.selectedWhere).toEqualTypeOf<typeof subsets.page>();
+  expectTypeOf(subsets.selectedOne).toEqualTypeOf<typeof subsets.page>();
+
+  type Subsets = typeof subsets;
+  expectTypeOf<{ -readonly [K in keyof Subsets]: SourceErrors<Subsets[K]> }>().toEqualTypeOf<
+    Record<keyof Subsets, Read>
+  >();
+
+  const combined = useLiveQuery((q) =>
+    q.from({ note: subsets.selectedWhere({ account: "a", Offset: 0, Limit: 10 }) }),
+  );
+
+  HighAlch.match(combined).on({
+    Loading: () => null,
+    Retrying: () => null,
+    Ready: ({ data }) => data.map((row) => row.NoteId),
+    QueryRefused: (error) => expectTypeOf(error).toEqualTypeOf<QueryRefused>(),
+    RpcClientError: (error) => expectTypeOf(error).toEqualTypeOf<RpcClientError>(),
+  });
+
+  // @ts-expect-error the selected and filtered read still requires its typed rejection
+  HighAlch.match(combined).on({
+    Loading: () => null,
+    Retrying: () => null,
+    Ready: () => null,
+    RpcClientError: () => null,
+  });
+
+  // @ts-expect-error rows can be selected only once
+  selected.rows(() => []);
+
+  // @ts-expect-error all completes the declaration
+  all.where(() => true);
+
+  // @ts-expect-error where completes the declaration
+  where.one(() => true);
+
+  // @ts-expect-error one completes the declaration
+  one.all();
+
+  const cursor = HighAlch.read(NotesByCursor);
+  const paged = cursor.rows((answer) => answer.entries);
+
+  expectTypeOf<ReadMethods<typeof cursor>>().toEqualTypeOf<"rows" | "where" | "one">();
+  expectTypeOf<ReadMethods<typeof paged>>().toEqualTypeOf<"where" | "one">();
+
+  const pages = HighAlch.collection(NoteRows, {
+    queries: { byCursor: paged.where((row, input) => row.account === input.account) },
+  });
+
+  expectTypeOf(pages.byCursor).toEqualTypeOf<
+    HighAlch.Subsets<typeof NoteRows, typeof NotesByCursor>
+  >();
+  expectTypeOf<SourceErrors<typeof pages.byCursor>>().toEqualTypeOf<Read>();
+  pages.byCursor({ account: "a" }, { after: "2", take: 10 });
+
+  // @ts-expect-error a page cannot be the whole list
+  cursor.all();
+
+  // @ts-expect-error wrapping a page does not make it the whole list
+  paged.all();
+
+  // @ts-expect-error a note row has no Items field
+  start.where((row) => row.Items.length > 0);
+
+  // @ts-expect-error the input of Notes has no NoteId
+  start.where((row, input) => row.NoteId === input.NoteId);
+
+  // @ts-expect-error a rule must return a boolean
+  start.one((row) => row.NoteId);
+
+  // @ts-expect-error the rule reads the selected note, not the answer containing Items
+  selected.where((row) => row.Items.length > 0);
+
+  // @ts-expect-error the selector receives the wrapped answer, not a note
+  HighAlch.read(OptionalNotes).rows((answer) => answer.title);
+
+  // @ts-expect-error the selector only receives non-null answers
+  HighAlch.read(OptionalNotes).rows((_answer: null) => []);
+
+  // @ts-expect-error the selector must return an array of rows
+  HighAlch.read(OptionalNotes).rows((answer) => answer.Items[0]);
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error the selected book does not belong to NoteRows
+      wrongEntity: HighAlch.read(Notes).rows(() => [otherRow]),
+    },
+  });
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      good: Notes,
+      // @ts-expect-error the valid sibling does not mask selecting strings and adding a rule
+      bad: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => row.title))
+        .where((row) => row.length > 0),
+    },
+  });
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error the default entry is still checked when using all
+      bad: HighAlch.read(NoteStats).all(),
+    },
+  });
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error the feed delivers notes, which have no `extra` for the rule to read
+      widened: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
+        .where((row) => row.extra.startsWith("x")),
+    },
+  });
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error a rule over another entity's row is not saved by selecting no rows
+      empty: HighAlch.read(NotesByTitle)
+        .rows(() => [])
+        .where((row: Book) => row.name.length > 0),
+    },
+  });
+
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error the same holds for a single row
+      widenedOne: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
+        .one((row) => row.extra === "x"),
+    },
+  });
+
+  // Rows with extra fields are fine while the query decides: no rule reads them.
+  HighAlch.collection(NoteRows, {
+    queries: {
+      widened: HighAlch.read(NotesByTitle).rows((answer) =>
+        answer.Items.map((row) => ({ ...row, extra: "x" })),
+      ),
+      widenedAll: HighAlch.read(NotesByTitle)
+        .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
+        .all(),
+      // An answer that may be `null` holds the same rows as one that may not.
+      maybe: MaybeNotes,
+      maybeAll: HighAlch.read(MaybeNotes).all(),
+    },
+  });
 }
 
 /** Commands: input-only calls typed from the Domain definitions, `onRejected` checked. */
@@ -254,8 +488,12 @@ class RefreshAll extends Domain.Command("RefreshAll", {
 
 /** Declarations: rows, queries, keys and targets are checked against the entity. */
 export const Declarations = () => {
-  // @ts-expect-error NoteStats answers `{ count }`, not notes
-  HighAlch.collection(NoteRows, { queries: { stats: NoteStats } });
+  HighAlch.collection(NoteRows, {
+    queries: {
+      // @ts-expect-error NoteStats answers `{ count }`, not notes
+      stats: NoteStats,
+    },
+  });
 
   HighAlch.collection(NoteRows, {
     queries: { get: NoteById },
@@ -351,5 +589,5 @@ export const Declarations = () => {
 };
 
 it("type-level transitions compile", () => {
-  expect([Recovered, Commands, Declarations]).toHaveLength(3);
+  expect([Recovered, ReadBuilder, Commands, Declarations]).toHaveLength(4);
 });

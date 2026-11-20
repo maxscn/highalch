@@ -39,7 +39,7 @@ const client = (server: Ledger, settleTimeout = 2_000, api = server.api) => {
     retry: quick,
   });
 
-  cleanup.push(() => HighAlch.close(db));
+  cleanup.push(() => Effect.runPromise(HighAlch.close(db)));
 
   return db;
 };

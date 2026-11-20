@@ -1,6 +1,48 @@
 # @highalch/tanstack-db
 
-Published as `@highalch/db` up to 0.0.3.
+Versions up to 0.0.5 were named `@highalch/db`.
+
+## 0.0.5
+
+### Patch Changes
+
+- 4f06048: Declare entity reads with the typed `read(Query)` builder. A bare Domain query remains valid.
+
+  Breaking: Replace the standalone declaration helpers with these chains:
+
+  - `all(Q)` → `read(Q).all()`
+  - `where(Q, rule)` → `read(Q).where(rule)`
+  - `one(Q, rule)` → `read(Q).one(rule)`
+  - `entries(Q, select)` → `read(Q).rows(select)`
+  - `where(entries(Q, select), rule)` → `read(Q).rows(select).where(rule)`
+
+  The exported `Membership` and `Entries` classes are removed. Use the builder to create
+  declarations and `QuerySpec` to type a declaration value.
+
+- c5fd50a: Fix client shutdown so unanswered commands roll back at the deadline even if the endpoint
+  keeps running, paced transactions roll back immediately, and new reads on a closing client
+  fail with a `HighAlch.Defect`. A subscriber that throws during a rollback no longer stops the shutdown. Await the last feed's finalizer on subset cleanup. Run all
+  endpoints in the configured runtime context and honor explicit reloads on non-live clients.
+
+## 0.0.4
+
+### Patch Changes
+
+- 46a873d: Let bare and `entries` queries decide subset membership and re-ask after a burst of feed changes.
+  Use `all(Query)` for a whole list that follows the feed directly. Use `where(entries(Query, select), rule)`
+  in place of `entries(Query, select, rule)`. Give each query one declaration per entity and use a
+  bare query or `entries` for a cursor page. Conflicting declarations and `all` on a paged query
+  now fail at declaration. The exported `Entries` class no longer takes or holds a rule.
+
+  Subset loads, feed reconnects and command settlement run on Effect. Replace retry callbacks
+  with Effect schedules filtered by typed errors. Replace custom timers with an Effect `Clock`.
+  Run `HighAlch.close(db)` and `command.result(input)` as Effects. `HighAlch.layer(config)` provides
+  a scoped client under `HighAlch.Client`, and `HighAlch.make(config)` still returns the client
+  synchronously. The story kit's `retryTransport` is now a schedule.
+
+  Closing a client rejects new commands immediately. Commands with a server reply settle as usual.
+  If a reply is still outstanding after `settleTimeout` from the start of close, HighAlch interrupts
+  the call and rolls back the transaction with a HighAlch error.
 
 ## 0.0.3
 

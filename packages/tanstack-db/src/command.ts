@@ -7,10 +7,20 @@ import {
   type PacedMutationsConfig,
   type Transaction,
 } from "@tanstack/db";
-import { Cause, Data, Effect, Exit, Option, Predicate, type Schema } from "effect";
+import { Cause, Data, Deferred, Effect, Exit, Option, Predicate, type Schema } from "effect";
 import { handle, type Checked, type Handlers } from "./match";
 import { Defect, type TaggedFailure } from "./state";
-import { connectionOf, current, cursorOf, failureOf, type Connection } from "./client";
+import {
+  Client,
+  closedClientError,
+  connectionOf,
+  current,
+  cursorOf,
+  read,
+  waitKind,
+  withEndpointFiber,
+  type Connection,
+} from "./client";
 import type * as Rows from "./rows";
 import type { Subset } from "./subset";
 import type { Input, Row as Entity } from "./values";
@@ -123,57 +133,74 @@ const typed = (error: unknown): error is TaggedFailure =>
  * Sends one call with `commandId` and settles once the feed delivered its change, the feed
  * passed the stream's cursor after it (a change the feed does not carry), or the timeout.
  */
-const persist = async <A>(
+const persist = <A>(
   connection: Connection,
   command: Domain.Command.Any,
   edit: Edit,
   call: CallOf,
   commandId: string,
-): Promise<Settled<A>> => {
-  const entity = Option.getOrUndefined(edit.entity);
-  const feed = entity && connection.feeds.get(entity.feed.streamName);
-  const waiter = feed?.active ? feed.settle(commandId) : undefined;
-  const send = await connection.command(command.tag);
-  const exit = await connection.run(send(call.target, call.input, { commandId }));
+) =>
+  read(
+    command.tag,
+    Effect.gen(function* () {
+      const entity = Option.getOrUndefined(edit.entity);
+      const feed = entity && connection.feeds.get(entity.feed.streamName);
+      const waiter = feed?.active && feed.settle(commandId);
 
-  if (Exit.isFailure(exit)) {
-    waiter?.cancel();
+      return yield* Effect.gen(function* () {
+        const answer = yield* connection.awaitReply(
+          connection.command(command.tag, call.target, call.input, { commandId }),
+        );
 
-    throw failureOf(command.tag, exit.cause);
-  }
+        if (Option.isNone(answer)) return Option.none<Settled<A>>();
 
-  // SAFETY: the command's reply schema decoded the reply.
-  const receipt = { ...exit.value, reply: exit.value.reply as A };
+        const written = answer.value;
+        // SAFETY: the command's reply schema decoded the reply.
+        const receipt = { ...written, reply: written.reply as A };
 
-  if (!waiter || !entity) return settled.Committed(receipt);
+        if (!waiter || !entity) return Option.some(settled.Committed(receipt));
 
-  const cancel = connection.after(connection.settleTimeout, "settle", waiter.cancel);
+        // A deferred change can only be confirmed by its delivery.
+        if (!entity.rows.deferred) {
+          const peek = withEndpointFiber(
+            connection.peek(entity.feed.streamName, {
+              atLeast: { stream: receipt.stream, version: receipt.version },
+            }),
+            (latest) => Effect.map(latest, (entry) => waiter.passed(cursorOf(entry))),
+          );
 
-  // A change that arrives after the receipt (a deferred settlement) settles only on delivery.
-  if (!entity.rows.deferred)
-    void connection
-      .stream(entity.feed.streamName)
-      .then((stream) =>
-        connection.run(
-          stream.peek(connection.scope, {
-            atLeast: { stream: receipt.stream, version: receipt.version },
+          // The live feed can still confirm the command if this optional cursor check fails.
+          yield* Effect.forkScoped(Effect.ignoreCause(peek));
+        }
+
+        const confirmed = yield* waiter.confirmed.pipe(
+          Effect.timeoutOption(connection.settleTimeout),
+          Effect.provideService(waitKind, "settle"),
+        );
+
+        if (Option.getOrElse(confirmed, () => false))
+          return Option.some(settled.Committed(receipt));
+
+        for (const subset of connection.ready(entity.entityName)) subset.schedule();
+
+        return Option.some(settled.Unconfirmed(receipt));
+      }).pipe(
+        Effect.scoped,
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (waiter) waiter.cancel();
           }),
         ),
-      )
-      .then((latest) => {
-        if (Exit.isSuccess(latest)) waiter.passed(cursorOf(latest.value));
-      }, none);
+      );
+    }),
+  ).pipe(
+    Effect.flatMap((answer) => {
+      if (Option.isNone(answer))
+        return Effect.die(new Error("HighAlch client closed before the server replied"));
 
-  const confirmed = await waiter.promise;
-
-  cancel();
-
-  if (confirmed) return settled.Committed(receipt);
-
-  for (const subset of connection.ready(entity.entityName)) subset.schedule();
-
-  return settled.Unconfirmed(receipt);
-};
+      return Effect.succeed(answer.value);
+    }),
+  );
 
 /** Runs the reactions of a settled call. */
 const react = <A, E extends TaggedFailure>(
@@ -204,19 +231,20 @@ const start = <A, E extends TaggedFailure>(
   options: Options<A, E> & { readonly id?: string },
 ) => {
   const connection = connectionOf(db);
-  const call = edit.resolve(input, connection.scope, Option.none());
+  const call = Option.liftPredicate(connection, (client) => !client.closingOrClosed).pipe(
+    Option.map(({ scope }) => edit.resolve(input, scope, Option.none())),
+    Option.getOrUndefined,
+  );
   let value: Option.Option<Settled<A>> = Option.none();
 
-  const run = (commandId: string) =>
-    persist<A>(connection, command, edit, call, commandId).then((result) => {
-      value = Option.some(result);
-    });
+  const persisted = Deferred.makeUnsafe<Settled<A>, TaggedFailure | Defect>();
+  const outcome = Deferred.makeUnsafe<Settled<A>, E>();
 
   const transaction = db.createTransaction({
     id: options.id,
     autoCommit: false,
-    metadata: { [createdKey]: call.key },
-    mutationFn: ({ transaction: running }) => run(running.id),
+    metadata: { [createdKey]: call?.key ?? "" },
+    mutationFn: () => Effect.runPromise(Deferred.await(persisted)),
   });
 
   const subsets = Option.match(edit.entity, {
@@ -225,54 +253,83 @@ const start = <A, E extends TaggedFailure>(
   });
 
   try {
-    transaction.mutate(() => edit.apply(subsets, call));
+    if (call) transaction.mutate(() => edit.apply(subsets, call));
   } catch (cause) {
     transaction.rollback();
 
     throw cause;
   }
 
-  const fail = (cause: Error) => transaction.rollback({ error: cause });
+  const finish = (exit: Exit.Exit<Settled<A>, E>) => {
+    Deferred.doneUnsafe(outcome, exit);
 
-  if (transaction.mutations.length > 0) void transaction.commit().catch(none);
-  else void run(transaction.id).then(() => transaction.commit(), fail);
+    // A reaction that throws is the consumer's bug: log it, and leave the settlement as it is.
+    try {
+      react(exit, options);
+    } catch (cause) {
+      Effect.runFork(Effect.logError("HighAlch: a command's reaction threw", Cause.die(cause)));
+    }
+  };
 
-  const outcome = transaction.when("settled").then(
-    (): Exit.Exit<Settled<A>, E> =>
-      Option.match(value, {
-        onNone: () => Exit.die(new Error(`${command.tag} settled without a result`)),
-        onSome: Exit.succeed,
-      }),
-    (cause): Exit.Exit<Settled<A>, E> => {
-      if (!typed(cause)) return Exit.die(cause);
+  // TanStack publishes its settlement through this promise, including conflicting rollbacks.
+  void transaction.when("settled").then(
+    () =>
+      finish(
+        Option.match(value, {
+          onNone: () => Exit.die(new Error(`${command.tag} settled without a result`)),
+          onSome: Exit.succeed,
+        }),
+      ),
+    (cause) => {
+      if (!typed(cause)) return finish(Exit.die(cause));
 
       // SAFETY: a typed failure of the call is one of the command's declared errors.
-      const error = cause as E;
-
-      return Exit.fail(error);
+      finish(Exit.fail(cause as E));
     },
   );
 
-  void outcome.then((exit) => react(exit, options));
+  const result = { transaction, outcome: Deferred.await(outcome) };
 
-  // Closing the client waits until this call settled, its rows edited or rolled back.
-  void connection.track(outcome);
+  if (!call || connection.closingOrClosed) {
+    transaction.rollback({ error: closedClientError() });
 
-  return { transaction, outcome };
+    return result;
+  }
+
+  const hasEdits = transaction.mutations.length > 0;
+
+  connection.forkCommand(
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(persist<A>(connection, command, edit, call, transaction.id));
+
+      if (Exit.isSuccess(exit)) value = Option.some(exit.value);
+
+      if (hasEdits) Deferred.doneUnsafe(persisted, exit);
+      else if (Exit.isSuccess(exit)) void transaction.commit().catch(none);
+      // SAFETY: Domain errors and HighAlch defects are Error instances.
+      else transaction.rollback({ error: Cause.squash(exit.cause) as Error });
+
+      yield* Effect.exit(Deferred.await(outcome));
+    }),
+  );
+
+  if (hasEdits) void transaction.commit().catch(none);
+
+  return result;
 };
 
-/** Reads a settled call's exit: its value, its typed error, or its defect thrown as itself. */
-const unwrap = <A, E>(exit: Exit.Exit<A, E>): A | E =>
-  Exit.match(exit, {
-    onSuccess: (result): A | E => result,
-    onFailure: (cause): A | E => {
-      const error = Cause.findErrorOption(cause);
+/** Rejects before running an optimistic action on a closing client. */
+const rejectClosed = (connection: Connection, transaction: Transaction | undefined) => {
+  if (!connection.closingOrClosed) return false;
 
-      if (Option.isSome(error)) return error.value;
+  const error = closedClientError();
 
-      throw Cause.squash(cause);
-    },
-  });
+  if (!transaction) throw error;
+
+  transaction.rollback({ error });
+
+  return true;
+};
 
 /**
  * A command's calls, as a callable that returns TanStack DB's native transaction. Calls take only
@@ -302,7 +359,12 @@ export type Command<
   }) => Command<C, Extra, T>;
   /** The call as an Effect with the command's typed error channel. */
   readonly effect: (input: InputOf<C>) => Effect.Effect<Settled<ReplyOf<C>>, ErrorOf<C>>;
-  /** The call's outcome as a value for `match`; it never rejects for a typed error. */
+  /**
+   * The call's outcome as a promise of a value for `match`, to await in code that is not an
+   * Effect (a React transition, a form's submit). It never rejects for a typed error; a defect
+   * rejects, as does a call on a closing or closed client. The optimistic edit is applied before
+   * it returns.
+   */
   readonly result: (input: InputOf<C>) => Promise<Settled<ReplyOf<C>> | ErrorOf<C>>;
   /**
    * `onMutate` and `mutationFn` for TanStack DB's `createOptimisticAction`. The transaction's
@@ -348,14 +410,22 @@ export const make = <C extends Domain.Command.Any>(
       onRejected: callbacks.onRejected ?? bound.onRejected,
     }).transaction;
 
-  const outcome = (input: InputOf<C>) =>
-    start<A, E>(clientOf(), command, edit, input, bound).outcome;
+  const effect = (input: InputOf<C>) =>
+    Effect.gen(function* () {
+      const provided = yield* Effect.serviceOption(Client);
+      const db = bound.client ?? Option.getOrElse(provided, current);
+
+      return yield* start<A, E>(db, command, edit, input, bound).outcome;
+    }).pipe(Effect.withSpan(`HighAlch.command ${command.tag}`));
 
   const options: CreateOptimisticActionsOptions<InputOf<C>> = {
     onMutate: (input) => {
       const db = clientOf();
       const connection = connectionOf(db);
       const active = getActiveTransaction();
+
+      if (rejectClosed(connection, active)) return;
+
       const call = edit.resolve(input, connection.scope, Option.none());
 
       // `mutationFn` replays the call with the same key (a create's key is chosen here).
@@ -367,20 +437,25 @@ export const make = <C extends Domain.Command.Any>(
       });
 
       if (edit.apply(subsets, call) > 0) return;
+      if (rejectClosed(connection, active)) return;
 
       // An empty transaction never runs its `mutationFn`: the command runs beside it.
       const id = active?.id ?? crypto.randomUUID();
 
-      void connection.track(persist<A>(connection, command, edit, call, id)).then(
-        (value) => react<A, E>(Exit.succeed(value), bound),
-        (cause) => {
-          if (!typed(cause)) return;
+      connection.forkCommand(
+        persist<A>(connection, command, edit, call, id).pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              if (Exit.isSuccess(exit)) react<A, E>(Exit.succeed(exit.value), bound);
+              else {
+                const error = Cause.findErrorOption(exit.cause);
 
-          // SAFETY: a typed failure of the call is one of the command's declared errors.
-          const error = cause as E;
-
-          react<A, E>(Exit.fail(error), bound);
-        },
+                if (Option.isSome(error) && typed(error.value))
+                  react<A, E>(Exit.fail(error.value as E), bound);
+              }
+            }),
+          ),
+        ),
       );
     },
     mutationFn: (input, params: MutationFnParams) => {
@@ -389,7 +464,10 @@ export const make = <C extends Domain.Command.Any>(
       const known = Option.liftPredicate(key, Predicate.isString);
       const call = edit.resolve(input, connection.scope, known);
 
-      return connection.track(persist<A>(connection, command, edit, call, params.transaction.id));
+      return connection.runMutation(
+        persist<A>(connection, command, edit, call, params.transaction.id),
+        params.transaction,
+      );
     },
   };
 
@@ -397,12 +475,21 @@ export const make = <C extends Domain.Command.Any>(
 
   const callable = Object.assign(call, {
     with: rebind,
-    effect: (input: InputOf<C>) =>
-      Effect.promise(() => outcome(input)).pipe(
-        Effect.flatMap((exit) => exit),
-        Effect.withSpan(`HighAlch.command ${command.tag}`),
-      ),
-    result: (input: InputOf<C>) => outcome(input).then(unwrap),
+    effect,
+    // The executor runs now: the edit shows before `result` returns, and a throw rejects.
+    result: (input: InputOf<C>) => {
+      const settled = new Promise<Settled<A> | E>((resolve, reject) => {
+        const { outcome } = start<A, E>(clientOf(), command, edit, input, bound);
+
+        Effect.runPromise(Effect.catch(outcome, Effect.succeed)).then(resolve, reject);
+      });
+
+      // A caller that never awaits it must not get an unhandled rejection; one that does still
+      // receives the defect.
+      settled.catch(none);
+
+      return settled;
+    },
     options,
     paced: Option.getOrUndefined(
       Option.map(edit.paced, (inputOf) => pace(command, edit, inputOf, clientOf)),
@@ -424,19 +511,35 @@ const pace = <C extends Domain.Command.Any>(
   inputOf: (row: Entity) => Input,
   clientOf: () => DbClient,
 ): Omit<PacedMutationsConfig<InputOf<C>>, "strategy"> => {
-  const targets = new Map<string, string>();
+  const targets = new WeakMap<Transaction, Map<string, string>>();
 
   return {
     onMutate: (input) => {
       const connection = connectionOf(clientOf());
+
+      const transaction = getActiveTransaction();
+
+      if (rejectClosed(connection, transaction)) return;
+
       const call = edit.resolve(input, connection.scope, Option.none());
 
-      targets.set(call.key, call.target);
+      if (transaction) {
+        const addressed = targets.get(transaction) ?? new Map<string, string>();
+
+        addressed.set(call.key, call.target);
+        targets.set(transaction, addressed);
+      }
+
       Option.map(edit.entity, (entity) => edit.apply(connection.ready(entity.entityName), call));
+
+      if (!rejectClosed(connection, transaction) && transaction) connection.trackPaced(transaction);
     },
-    mutationFn: async ({ transaction }) => {
+    mutationFn: ({ transaction }) => {
       const connection = connectionOf(clientOf());
       const rows = new Map<string, Row>();
+      const addressed = targets.get(transaction);
+
+      targets.delete(transaction);
 
       // Only the fields the merged calls changed are sent, with the row's key.
       const field = Option.match(edit.entity, {
@@ -451,24 +554,26 @@ const pace = <C extends Domain.Command.Any>(
           [field]: mutation.key,
         });
 
-      await connection.track(
-        Promise.all(
+      return connection.runMutation(
+        Effect.all(
           [...rows].map(([key, row]) => {
             const input = inputOf(row);
             const resolved = edit.resolve(input, connection.scope, Option.some(key));
-            const target = targets.get(key) ?? resolved.target;
+            const target = addressed?.get(key) ?? resolved.target;
 
-            targets.delete(key);
-
-            return persist(
-              connection,
-              command,
-              edit,
-              { ...resolved, target },
-              `${transaction.id}:${key}`,
+            return Effect.exit(
+              persist(
+                connection,
+                command,
+                edit,
+                { ...resolved, target },
+                `${transaction.id}:${key}`,
+              ),
             );
           }),
-        ),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.flatMap((exits) => Effect.all(exits))),
+        transaction,
       );
     },
   };

@@ -6,10 +6,10 @@ import {
   type NonSingleResult,
   type SyncConfig,
 } from "@tanstack/db";
-import { Exit, Option, Predicate } from "effect";
+import { Cause, Effect, Exit, Option, Predicate, Scope } from "effect";
 import type { Marked } from "./live";
-import type { TaggedFailure } from "./state";
-import { connectionOf, failureOf } from "./client";
+import { Defect, type TaggedFailure } from "./state";
+import { closedClientError, connectionOf, failureOf, read } from "./client";
 import {
   make,
   type Command,
@@ -27,12 +27,15 @@ import { Subset, type Spec } from "./subset";
 export type QueryInput<Q extends Domain.Query.Any> = Domain.Query.InputOf<Q>;
 
 /** One entry of a query's answer: a page's entry, an array's element, or the one result. */
-export type EntryOf<Q extends Domain.Query.Any> =
-  Domain.Query.ResultOf<Q> extends Domain.Query.Page<infer Entry>
+export type EntryOf<Q extends Domain.Query.Any> = EntryIn<NonNullable<Domain.Query.ResultOf<Q>>>;
+
+/** The entry of a non-null answer: an answer that may be `null` holds the same entries. */
+type EntryIn<A> =
+  A extends Domain.Query.Page<infer Entry>
     ? Entry
-    : Domain.Query.ResultOf<Q> extends ReadonlyArray<infer Entry>
+    : A extends ReadonlyArray<infer Entry>
       ? Entry
-      : NonNullable<Domain.Query.ResultOf<Q>>;
+      : A;
 
 /** A page of a paged query; part of a subset's identity. */
 export type Page = { readonly after?: string; readonly take?: number };
@@ -49,49 +52,102 @@ export type Args<Q extends Domain.Query.Any> =
 /** A subset collection's descriptor: usable directly as a source of `useLiveQuery`. */
 export type Source<Row extends object> = CollectionOptions<Row, string> & NonSingleResult;
 
-/** A query with a membership rule: `one` (one row) or `where` (rows). */
-export class Membership<Q extends Domain.Query.Any> {
-  constructor(
-    readonly query: Q,
-    readonly rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-    readonly single: boolean,
-  ) {}
-}
+type Select<Q extends Domain.Query.Any, Entry> = (
+  answer: NonNullable<Domain.Query.ResultOf<Q>>,
+) => ReadonlyArray<Entry>;
+
+type Rule<Q extends Domain.Query.Any, Entry> = (row: Entry, input: QueryInput<Q>) => boolean;
+
+const ReadOptions = Symbol("HighAlch.read");
+
+/** The callbacks' parameter types are checked by the builder and erased here for storage. */
+type ReadOptions<Q extends Domain.Query.Any, Entry> = {
+  readonly query: Q;
+  readonly select?: (answer: never) => ReadonlyArray<Entry>;
+  readonly rule?: (row: never, input: never) => boolean;
+  /** A distinct declaration for duplicate checking, with the same subset descriptor. */
+  readonly single?: boolean;
+};
+
+type ReadDeclaration<Q extends Domain.Query.Any, Entry> = {
+  readonly [ReadOptions]: ReadOptions<Q, Entry>;
+};
+
+/** Marks a declaration whose rule reads rows, so `collection` checks what the rule may read. */
+const Ruled: unique symbol = Symbol("@highalch/tanstack-db/read/ruled");
 
 /**
- * A single-row query (`get`) with its membership rule: a feed row for which the rule holds is
- * inserted into the subset; read it with `.findOne()` for `Missing`.
+ * A declaration with a rule that reads rows (`where`, `one`). The feed gives the rule the
+ * entity's own rows, so the rule may read only what those rows have.
  */
-export const one = <Q extends Domain.Query.Any>(
-  query: Q,
-  rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-) => new Membership(query, rule, true);
+type RuledDeclaration<Q extends Domain.Query.Any, Entry> = ReadDeclaration<Q, Entry> & {
+  readonly [Ruled]: true;
+};
 
-/** A many-row query with its membership rule: feed rows for which it holds are inserted. */
-export const where = <Q extends Domain.Query.Any>(
-  query: Q,
-  rule: (row: EntryOf<Q>, input: QueryInput<Q>) => boolean,
-) => new Membership(query, rule, false);
+/** Which optional facets have already been applied while the query decides membership. */
+type ReadFacets = { readonly rows?: true };
 
-/** A query whose answer wraps its rows, with the reader of its rows and an optional rule. */
-export class Entries<Q extends Domain.Query.Any, Entry> {
-  constructor(
-    readonly query: Q,
-    readonly select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-    readonly rule: Option.Option<(row: Entry, input: QueryInput<Q>) => boolean>,
-  ) {}
-}
+type ReadBuilder<Q extends Domain.Query.Any, Entry, Used extends ReadFacets> = ReadDeclaration<
+  Q,
+  Entry
+> & {
+  /** Gives a many-row subset a membership rule that places feed rows. */
+  where(rule: Rule<Q, Entry>): RuledDeclaration<Q, Entry>;
+  /** Gives a single-row subset a membership rule. Use `.findOne()` to read `Missing`. */
+  one(rule: Rule<Q, Entry>): RuledDeclaration<Q, Entry>;
+} & (Used["rows"] extends true
+    ? unknown
+    : {
+        /** Selects the rows from a wrapped answer, such as `{ Items, Count }`. */
+        rows<Selected>(
+          select: Select<Q, Selected>,
+        ): ReadBuilder<Q, Selected, Used & { readonly rows: true }>;
+      }) &
+  (true extends NonNullable<Q["definition"]["paged"]>
+    ? unknown
+    : {
+        /** Includes every row in the client's scope. */
+        all(): ReadDeclaration<Q, Entry>;
+      });
 
-/**
- * A query whose answer holds its rows inside a wrapper that is not a `paged` page (for example
- * `{ Items, Count, LastEvaluatedKey }`): `select` reads the rows from one answer. With `rule`, feed
- * rows for which it holds are inserted, as for `where`; without one, an unknown row reloads it.
- */
-export const entries = <Q extends Domain.Query.Any, Entry>(
-  query: Q,
-  select: (answer: NonNullable<Domain.Query.ResultOf<Q>>) => ReadonlyArray<Entry>,
-  rule?: (row: Entry, input: QueryInput<Q>) => boolean,
-) => new Entries(query, select, Option.fromUndefinedOr(rule));
+const includesAll = () => true;
+
+const buildRead = <Q extends Domain.Query.Any, Entry, const Used extends ReadFacets>(
+  options: ReadOptions<Q, Entry>,
+  used: Used,
+): ReadBuilder<Q, Entry, Used> => {
+  const { query } = options;
+  const withRule = (rule: Rule<Q, Entry>, single: boolean): RuledDeclaration<Q, Entry> => ({
+    [ReadOptions]: { ...options, rule, single },
+    [Ruled]: true,
+  });
+
+  const builder = {
+    [ReadOptions]: options,
+    where: (rule: Rule<Q, Entry>) => withRule(rule, false),
+    one: (rule: Rule<Q, Entry>) => withRule(rule, true),
+    all: () => {
+      if (query.definition.paged)
+        throw new Error(`HighAlch.all cannot declare paged query ${query.queryName}`);
+
+      return withRule(includesAll, false);
+    },
+    ...(!used.rows && {
+      rows: <Selected>(select: Select<Q, Selected>) =>
+        buildRead({ ...options, select }, { ...used, rows: true }),
+    }),
+  };
+
+  // SAFETY: `used` controls which methods are attached. The type hides `all` for paged queries;
+  // its runtime guard also catches calls from JavaScript or through casts.
+  return builder as ReadBuilder<Q, Entry, Used>;
+};
+
+/** Declares an entity read. Until a membership rule is supplied, the query decides membership. */
+const readBuilder = <Q extends Domain.Query.Any>(query: Q): ReadBuilder<Q, EntryOf<Q>, {}> =>
+  buildRead({ query }, {});
+
+export { readBuilder as read };
 
 /** Reads the key of the row a call addresses from its input. */
 export type KeyFn<C extends Domain.Command.Any> = (input: CommandInput<C>) => string;
@@ -296,13 +352,8 @@ export const sends = <C extends Domain.Command.Any, const O extends Addressing<C
   options?: O & Addressing<C>,
 ): Sends<C, Has<O, "key">, Has<O, "target">> => new Sends(command, addressing(options ?? {}));
 
-/** What `queries` may hold: a bare query, one with a membership rule, or one with `entries`. */
-export type QuerySpec =
-  | Domain.Query.Any
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Membership<any>
-  // oxlint-disable-next-line typescript/no-explicit-any
-  | Entries<any, any>;
+/** What `queries` may hold: a bare query or a declaration from `read`. */
+export type QuerySpec = Domain.Query.Any | ReadDeclaration<Domain.Query.Any, unknown>;
 
 /** A row being edited: its fields writable. */
 export type Draft<P> = { -readonly [K in keyof P]: P[K] };
@@ -324,16 +375,14 @@ export type CommandSpec<Row extends object> =
   | Sends<any, boolean, boolean>;
 
 type QueryOf<S> =
-  S extends Membership<infer Q>
-    ? Q
-    : S extends Entries<infer Q, infer _Entry>
-      ? Q
-      : S extends Domain.Query.Any
-        ? S
-        : never;
+  S extends ReadDeclaration<infer Q, unknown> ? Q : S extends Domain.Query.Any ? S : never;
 
-/** The rows a query spec answers: its `entries`, else its query's entries. */
-type SpecEntryOf<S> = S extends Entries<infer _Q, infer Entry> ? Entry : EntryOf<QueryOf<S>>;
+type SpecEntryOf<S> =
+  S extends ReadDeclaration<Domain.Query.Any, infer Entry>
+    ? Entry
+    : S extends Domain.Query.Any
+      ? EntryOf<S>
+      : never;
 
 type CommandOf<S> = S extends { readonly command: infer C extends Domain.Command.Any }
   ? C
@@ -398,12 +447,20 @@ export type Subsets<R extends Rows.Any, Q extends Domain.Query.Any> = (
   ...args: Args<Q>
 ) => Source<SubsetRow<R, Q>>;
 
-/** Each query's entries must be the entity's rows. */
+/**
+ * Each query's entries must be the entity's rows, and a rule may read only what the entity's rows
+ * have, since the feed gives it those rows and not the query's entries. Report a mismatch on that
+ * query.
+ */
 type Checks<R extends Rows.Any, Queries> = {
   readonly [K in keyof Queries]: [SpecEntryOf<Queries[K]>] extends [Rows.RowOf<R>]
-    ? unknown
-    : { readonly "query entries are not this entity's rows": K };
-}[keyof Queries];
+    ? Queries[K] extends { readonly [Ruled]: true }
+      ? [Rows.RowOf<R>] extends [SpecEntryOf<Queries[K]>]
+        ? unknown
+        : { readonly "the rule reads rows the feed does not deliver": Rows.RowOf<R> }
+      : unknown
+    : { readonly "query entries are not this entity's rows": Rows.RowOf<R> };
+};
 
 /** A declared entity: one subset accessor per query, one command per command. */
 export type Collection<R extends Rows.Any, Queries, Commands> = {
@@ -427,27 +484,30 @@ export const stable = (value: Input | Page): string =>
 /** The key of a row of an entity. */
 const keyOf = (entity: Rows.Any) => (row: Row) => keyIn(entity.rows.key, row);
 
-/** A query spec's query, membership rule and row reader. */
-const readerOf = (spec: QuerySpec): Pick<Spec, "query" | "rule" | "select"> => {
-  if (spec instanceof Membership)
-    return {
-      query: spec.query,
-      // SAFETY: the rule reads this query's rows and input.
-      rule: Option.some(spec.rule as (row: Row, input: Input) => boolean),
-      select: Option.none(),
-    };
+type DeclaredRead = ReadOptions<Domain.Query.Any, unknown>;
 
-  if (spec instanceof Entries)
-    return {
-      query: spec.query,
-      // SAFETY: as above.
-      rule: spec.rule as Option.Option<(row: Row, input: Input) => boolean>,
-      // SAFETY: `select` reads this query's answers, decoded by its schema.
-      select: Option.some(spec.select as (answer: Answer) => ReadonlyArray<Row>),
-    };
+/** Bare queries and `read(query)` have the same options. */
+const optionsOf = (spec: QuerySpec): DeclaredRead => {
+  if (ReadOptions in spec) return spec[ReadOptions];
 
-  return { query: spec, rule: Option.none(), select: Option.none() };
+  return { query: spec };
 };
+
+/** The defect a read started on a closing or closed HighAlch client fails with. */
+const closedRead = (name: string) => new Defect({ name, cause: Cause.die(closedClientError()) });
+
+/** A subset runs the query, its optional membership rule and its optional row selector. */
+const readerOf = ({
+  query,
+  rule,
+  select,
+}: DeclaredRead): Pick<Spec, "query" | "rule" | "select"> => ({
+  query,
+  // SAFETY: the rule reads this query's rows and input.
+  rule: Option.fromUndefinedOr(rule as ((row: Row, input: Input) => boolean) | undefined),
+  // SAFETY: `select` reads this query's decoded answers and `collection` checked its rows.
+  select: Option.fromUndefinedOr(select as ((answer: Answer) => ReadonlyArray<Row>) | undefined),
+});
 
 /** A subset's descriptor: materialised per client, synced by a `Subset` run. */
 const subset = (spec: Spec, id: string) =>
@@ -455,7 +515,12 @@ const subset = (spec: Spec, id: string) =>
     const connection = connectionOf(db);
 
     const sync: SyncConfig<Row, string> = {
-      sync: (params) => new Subset(connection, spec, params).start(),
+      sync: (params) => {
+        // A read from a closing or closed client is a bug in the caller: a defect, not a state.
+        if (connection.closingOrClosed) return params.fail(closedRead(id));
+
+        return new Subset(connection, spec, params).start();
+      },
       rowUpdateMode: "full",
     };
 
@@ -604,6 +669,14 @@ const editOf = (entity: Rows.Any, spec: CommandSpec<Row>): Edit => {
   return { ...base, apply: () => 0 };
 };
 
+const declarations = new WeakMap<Rows.Any, Map<string, DeclaredRead>>();
+
+const sameDeclaration = (first: DeclaredRead, second: DeclaredRead): boolean =>
+  first.query === second.query &&
+  first.select === second.select &&
+  first.rule === second.rule &&
+  first.single === second.single;
+
 /**
  * Declares an entity: a subset accessor per query and a command per command, at module level.
  * `customers.list(input)` is a collection descriptor for stock `useLiveQuery`; every subset of the
@@ -616,16 +689,28 @@ export const collection = <
 >(
   rows: R,
   declaration: {
-    readonly queries: Queries;
+    readonly queries: Queries & Checks<NoInfer<R>, NoInfer<Queries>>;
     readonly commands?: Commands & CommandChecks<R, Commands>;
-  } & Checks<R, Queries>,
+  },
 ): Collection<R, Queries, Commands> => {
+  const known = new Map(declarations.get(rows));
   const queries = Object.entries(declaration.queries).map(([name, spec]) => {
-    const { query, rule, select } = readerOf(spec);
+    const options = optionsOf(spec);
+    const { query } = options;
+    const previous = known.get(query.queryName);
+
+    if (previous && !sameDeclaration(previous, options))
+      throw new Error(
+        `HighAlch.collection: conflicting declarations of query ${query.queryName} for ${rows.entityName}`,
+      );
+
+    known.set(query.queryName, options);
+
+    const reader = readerOf(options);
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
-        { entity: rows, query, input, page, rule, select },
+        { ...reader, entity: rows, input, page },
         `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
       );
 
@@ -635,6 +720,8 @@ export const collection = <
   const commands = Object.entries(declaration.commands ?? {}).map(([name, spec]) => {
     return [name, make(declaredOf(spec).command, editOf(rows, spec))] as const;
   });
+
+  declarations.set(rows, known);
 
   // SAFETY: one accessor per query and one command per command, under their declared names.
   return Object.fromEntries([...queries, ...commands]) as Collection<R, Queries, Commands>;
@@ -660,41 +747,45 @@ export const query =
     return collectionOptions(id, (db: DbClient) => {
       const connection = connectionOf(db);
 
-      const load = async (
-        params: Parameters<SyncConfig<ResultRow<Q>, string>["sync"]>[0],
-        attempt: number,
-      ): Promise<void> => {
-        const ask = await connection.query(source.queryName);
-        const exit = await connection.run(ask(input, page));
-
-        if (Exit.isSuccess(exit)) {
-          params.begin({ snapshot: true });
-
-          if (exit.value !== null) {
-            // SAFETY: the query's schema decoded its one result.
-            const value = exit.value as ResultRow<Q>;
-
-            params.write({ type: "insert", value });
-          }
-
-          void params.commit();
-
-          return params.markReady();
-        }
-
-        const error = failureOf(source.queryName, exit.cause);
-        const delay = connection.retry(error, attempt);
-
-        if (Option.isNone(delay)) return params.fail(error);
-
-        await connection.sleep(delay.value, "retry");
-
-        return load(params, attempt + 1);
-      };
-
       const sync: SyncConfig<ResultRow<Q>, string> = {
         sync: (params) => {
-          void load(params, 1);
+          if (connection.closingOrClosed) return params.fail(closedRead(source.queryName));
+
+          const scope = connection.openScope();
+          let stopping = false;
+          const ask = connection.query(source.queryName, input, page);
+
+          connection.fork(
+            Effect.yieldNow.pipe(
+              Effect.andThen(read(source.queryName, ask)),
+              Effect.retry(connection.retry),
+              Effect.tap((answer) =>
+                Effect.sync(() => {
+                  params.begin({ snapshot: true });
+
+                  if (answer !== null) {
+                    // SAFETY: the query's schema decoded its one result.
+                    params.write({ type: "insert", value: answer as ResultRow<Q> });
+                  }
+
+                  void params.commit();
+                  params.markReady();
+                }),
+              ),
+              Effect.catchCause((cause) => {
+                if (stopping && Cause.hasInterruptsOnly(cause)) return Effect.void;
+
+                return Effect.sync(() => params.fail(failureOf(source.queryName, cause)));
+              }),
+            ),
+            scope,
+          );
+
+          return () => {
+            stopping = true;
+
+            return Effect.runPromise(Scope.close(scope, Exit.void));
+          };
         },
       };
 

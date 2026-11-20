@@ -1,4 +1,7 @@
-import type { Timers, Wait } from "@highalch/tanstack-db/internal";
+import { Clock as EffectClock, Duration, Effect } from "effect";
+import { waitKind, type Wait } from "@highalch/tanstack-db/internal";
+
+const live = Effect.runSync(EffectClock.Clock);
 
 /** One timer a story's clients started, waiting for its time. */
 type Pending = {
@@ -21,32 +24,58 @@ export class Clock {
 
   constructor(readonly mode: "manual" | "real") {}
 
-  /** The `timers` a client is given. */
-  readonly timers: Timers = {
-    set: (run, ms, wait) => {
-      const id = (this.sequence += 1);
+  private timeMillis = () => {
+    if (this.mode === "real") return live.currentTimeMillisUnsafe();
 
-      if (this.mode === "real") {
-        const timer = setTimeout(() => {
-          this.pending.delete(id);
-          run();
-        }, ms);
+    return this.now;
+  };
 
-        this.pending.set(id, { id, at: this.now + ms, wait, run });
+  private timeNanos = () => BigInt(this.timeMillis()) * 1_000_000n;
 
-        return () => {
-          clearTimeout(timer);
-          this.pending.delete(id);
-        };
-      }
+  readonly service: EffectClock.Clock = {
+    currentTimeMillisUnsafe: this.timeMillis,
+    currentTimeMillis: Effect.sync(this.timeMillis),
+    currentTimeNanosUnsafe: this.timeNanos,
+    currentTimeNanos: Effect.sync(this.timeNanos),
+    monotonicTimeNanosUnsafe: () => {
+      if (this.mode === "real") return live.monotonicTimeNanosUnsafe();
 
-      this.pending.set(id, { id, at: this.now + ms, wait, run });
+      return this.timeNanos();
+    },
+    monotonicTimeNanos: Effect.suspend(() => {
+      if (this.mode === "real") return live.monotonicTimeNanos;
+
+      return Effect.sync(this.timeNanos);
+    }),
+    sleep: (duration) =>
+      Effect.flatMap(waitKind, (wait) =>
+        Effect.callback<void>((resume) =>
+          Effect.sync(this.set(() => resume(Effect.void), Duration.toMillis(duration), wait)),
+        ),
+      ),
+  };
+
+  private set(run: () => void, ms: number, wait: Wait) {
+    const id = (this.sequence += 1);
+
+    this.pending.set(id, { id, at: this.now + ms, wait, run });
+
+    if (this.mode === "real") {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        run();
+      }, ms);
 
       return () => {
+        clearTimeout(timer);
         this.pending.delete(id);
       };
-    },
-  };
+    }
+
+    return () => {
+      this.pending.delete(id);
+    };
+  }
 
   /** Whether a wait of one of these kinds is scheduled. */
   waiting = (...waits: ReadonlyArray<Wait>) =>

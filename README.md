@@ -57,7 +57,7 @@ import { Provider } from "@highalch/tanstack-db/react";
 import { useLiveQuery } from "@tanstack/react-db";
 
 export const notes = HighAlch.collection(NoteRows, {
-  queries: { list: Notes },
+  queries: { list: HighAlch.read(Notes).all() },
   commands: { rename: HighAlch.updates(RenameNote) },
 });
 
@@ -93,6 +93,10 @@ export function NoteList({ account }: { readonly account: string }) {
 // feed delivers its change.
 await notes.rename({ NoteId: "n1", title: "Ada Lovelace" }).when("settled");
 ```
+
+Effect applications can use `HighAlch.layer(config)` to provide the client as
+`HighAlch.Client` and close it with the scope. For a client created with `HighAlch.make`,
+run `yield* HighAlch.close(db)` when its owner shuts down.
 
 ### A story with a screen
 

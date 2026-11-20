@@ -1,6 +1,6 @@
 {
   "name": "@highalch/tanstack-db",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Alchemy Domains synced into TanStack DB collections, with typed errors from the Domain definitions.",
   "keywords": [
     "alchemy",

@@ -1,6 +1,6 @@
 {
   "name": "@highalch/story",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "Stories for HighAlch data and the XState machines over it: given, when, then, with screenshots painted without a browser.",
   "keywords": [
     "alchemy",

@@ -11,6 +11,8 @@ import {
   NoteRows,
   Notes,
   NotesByBook,
+  NotesByCursor,
+  NotesByTitle,
   NoteStats,
   PinNote,
   RenameBook,
@@ -24,9 +26,11 @@ import {
  */
 export const notes = HighAlch.collection(NoteRows, {
   queries: {
-    list: Notes,
-    get: HighAlch.one(NoteById, (row, input) => row.NoteId === input.NoteId),
-    byBook: HighAlch.where(NotesByBook, (row, input) => row.BookId === input.BookId),
+    list: HighAlch.read(Notes).all(),
+    get: HighAlch.read(NoteById).one((row, input) => row.NoteId === input.NoteId),
+    byBook: HighAlch.read(NotesByBook).where((row, input) => row.BookId === input.BookId),
+    cursor: NotesByCursor,
+    page: HighAlch.read(NotesByTitle).rows((answer) => answer.Items),
   },
   commands: {
     // The key is a fresh client-generated id.
@@ -64,7 +68,7 @@ export const notes = HighAlch.collection(NoteRows, {
 
 /** The second entity: its view declares no target, so its commands address the row key. */
 export const books = HighAlch.collection(BookRows, {
-  queries: { list: Books },
+  queries: { list: HighAlch.read(Books).all() },
   commands: {
     create: HighAlch.inserts(CreateBook, {
       row: (input, key) => ({ BookId: key, account: input.account, name: input.name }),
