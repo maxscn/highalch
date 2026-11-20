@@ -16,6 +16,7 @@ import type { TaggedFailure } from "@lowalch/tanstack-db";
 import type { Answer, Input } from "@lowalch/tanstack-db/internal";
 import { commandOf, Runner, type Invocable, type Marked } from "@lowalch/tanstack-db/xstate";
 import { registryOf, stageOf } from "../atoms";
+import type { Reader } from "../rules";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Step } from "../steps";
 import { clients, type Clients, type Run, type Source } from "../tanstack-db/state";
@@ -714,6 +715,14 @@ const failed = (command: Marked, error: TaggedFailure, options: Addressed = {}):
   });
 
 /**
+ * The machine's snapshot now, as a rule reads it (the named machine, or the one introduced
+ * last): `snapshot.matches("Saving")`, `snapshot.context`.
+ */
+const snapshot = (options: Addressed = {}): Reader<AnyMachineSnapshot> => ({
+  read: async (stage) => snapshotOf(await find(stage, options)),
+});
+
+/**
  * Machine steps, run by the one story runner beside data steps, in any order. A machine enters a
  * story one of three ways, chosen once: `given` (stepped purely, works hostless), `start`
  * (running against the story's client, needs a host) or `mounted` (running, the actor a mounted
@@ -733,4 +742,5 @@ export const Machine = {
   askedNothing,
   done,
   failed,
+  snapshot,
 } as const;

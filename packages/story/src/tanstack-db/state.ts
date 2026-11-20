@@ -152,7 +152,7 @@ export type Client = {
 /**
  * The TanStack DB clients of one story run (one per scope, made by the run's connector), the
  * sources they observe, and the commands they ran. Data steps, machines and screens act on it;
- * `Db.check` steps and invariants read it.
+ * `Db.check` steps and rules read it.
  */
 export class Clients {
   readonly runs: Array<Run> = [];
@@ -362,6 +362,7 @@ export const clients = {
       const made = new Clients(world, connector);
 
       world.waits.push(made.busy);
+      world.rests.push(() => made.runs.every((run) => !pending(run)));
       world.idles.push(async () => {
         for (const run of made.runs) await ended(world, run);
       });

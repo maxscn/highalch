@@ -1,7 +1,7 @@
 import { Option } from "effect";
 import type { AnyStateMachine, EventFromLogic } from "xstate";
 import { getShortestPaths, getSimplePaths } from "xstate/graph";
-import type { Invariant } from "../invariants";
+import type { Rule } from "../rules";
 import { StoryFailure, type Story } from "../run";
 import { flatten, type Step, type Steps } from "../steps";
 
@@ -22,8 +22,8 @@ export type Exploration<M extends AnyStateMachine> = {
   readonly after?: Steps;
   /** The story runner each path runs on (a fresh world per path). */
   readonly story: Story;
-  /** Checked after every step and at the end of each path. */
-  readonly invariants: ReadonlyArray<Invariant>;
+  /** Checked at their moments (`at`) on every path. */
+  readonly rules: ReadonlyArray<Rule>;
   /** Paths longer than this many events are not run (default 4). */
   readonly maxLength?: number;
   /** At most this many paths run, in their deterministic order (default 200). */
@@ -114,7 +114,7 @@ const attempt = async <M extends AnyStateMachine>(
   const { list, owners } = stepsOf(exploration, path);
 
   try {
-    await exploration.story.with({ invariants: exploration.invariants })(list);
+    await exploration.story.with({ rules: exploration.rules })(list);
 
     return Option.none();
   } catch (error) {
@@ -157,7 +157,7 @@ const shrunk = async <M extends AnyStateMachine>(
 
 /**
  * Model-based stories: enumerates the model's paths (XState's graph utilities) and runs each as a
- * story (`before`, each event's steps, `after`), checking the invariants after every step. Fails
+ * story (`before`, each event's steps, `after`), checking the rules at their moments. Fails
  * with the shortest failing path it found (shrunk), as a readable event sequence, and the story's
  * own report. Deterministic: the same model and options run the same paths in the same order.
  */

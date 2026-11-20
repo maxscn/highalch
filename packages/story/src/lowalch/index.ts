@@ -3,9 +3,9 @@
  * sync the story's hosted Domain through its wires, on its clock. `LowAlchDb.memory` hosts the
  * Domain in memory with them (or provide `LowAlchDb.connect(settings)` to another host's
  * `adapters`); then `Db.then` reads `match`'s states, `Db.settled` tells `Committed` from
- * `Unconfirmed`, `Db.invariants` judge rows against the feed, and screens mount under LowAlch's
+ * `Unconfirmed`, `Db.rules` judge rows against the feed, and screens mount under LowAlch's
  * `Provider`. This entry adds what only LowAlch has: `reload(Rows)`, the feed's `entries`, the
- * view helpers and the feed invariants by name.
+ * view helpers and the feed rules by name.
  *
  * ```ts
  * import * as Story from "@highalch/story";
@@ -20,7 +20,7 @@ import * as LowAlch from "@lowalch/tanstack-db";
 import { memory as hosted, type Hosting, type Memory } from "../host";
 import { dbStep, type Scoped } from "../tanstack-db/steps";
 import { connect as connectWith, entries, retryTransport, type ClientSettings } from "./connector";
-import { fed, noFlickerBack, rejectedRestores, subsetsAgree } from "./invariants";
+import { fed, noFlickerBack, rejectedRestores, subsetsAgree } from "./rules";
 import { Live, Settled, view } from "./view";
 
 /** The connector of LowAlch clients, as a Layer for a host's `adapters`. */
@@ -64,7 +64,7 @@ export const LowAlchDb = {
   connect,
   reload,
   entries,
-  invariants: fed,
+  rules: fed,
   noFlickerBack,
   subsetsAgree,
   rejectedRestores,

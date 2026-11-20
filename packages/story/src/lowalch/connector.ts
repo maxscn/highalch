@@ -13,7 +13,7 @@ import {
   type Rows,
 } from "@lowalch/tanstack-db/internal";
 import { Provider } from "@lowalch/tanstack-db/react";
-import type { Invariant } from "../invariants";
+import type { Rule } from "../rules";
 import { Connect, type Connector } from "../tanstack-db/connector";
 import { plain, type Clients, type Observed } from "../tanstack-db/state";
 import { isFeed } from "../wire";
@@ -144,7 +144,7 @@ const cursor = async (world: World, scope: string, stream: string) => {
  * flight through.
  */
 export const lowalch =
-  (settings: ClientSettings, invariants: () => ReadonlyArray<Invariant>) =>
+  (settings: ClientSettings, rules: () => ReadonlyArray<Rule>) =>
   (world: World): Connector => ({
     connect: async (scope) => {
       const wire = world.wire(scope);
@@ -258,9 +258,9 @@ export const lowalch =
 
     provide: (db, element) => createElement(Provider, { client: db }, element),
 
-    invariants: invariants(),
+    rules: rules(),
   });
 
 /** The connector as a Layer: what a host's `adapters` (or `story.with`) provide. */
-export const connect = (settings: ClientSettings, invariants: () => ReadonlyArray<Invariant>) =>
-  Layer.succeed(Connect, lowalch(settings, invariants));
+export const connect = (settings: ClientSettings, rules: () => ReadonlyArray<Rule>) =>
+  Layer.succeed(Connect, lowalch(settings, rules));

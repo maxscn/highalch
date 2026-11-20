@@ -1,6 +1,7 @@
 import type { DbClient, Transaction } from "@tanstack/db";
 import { Option, Predicate } from "effect";
 import { Mismatch } from "../stage";
+import type { Reader } from "../rules";
 import { partial, staged, type Step } from "../steps";
 import type { Input, Tagged } from "../values";
 import { json, type Plain, type World } from "../world";
@@ -353,3 +354,22 @@ export const reload = <Row extends object>(source: Source<Row>, options: Scoped 
     void collection.reload().catch(() => undefined);
     await world.settle();
   });
+
+/**
+ * What a source shows in the step's client (or `as`'s), as a rule reads it: its rows by key, each
+ * with `$hasPendingWrites`. A source not observed yet is opened (without settling the world).
+ */
+export const rows = <Row extends object>(
+  source: Source<Row>,
+  options: Scoped = {},
+): Reader<ReadonlyMap<string, ShownRow<Row>>> => ({
+  read: async (stage) => {
+    stage.hosted(`rows of ${source.id ?? "source"}`);
+
+    const db = await stage.use(clients);
+    const { observed } = await db.observe(source, options.as);
+
+    // SAFETY: an observed source's rows are its `Row`s, without TanStack DB's virtual fields.
+    return new Map(observed.sorted().map(([key, shown]) => [key, asRow(shown) as ShownRow<Row>]));
+  },
+});

@@ -187,14 +187,14 @@ describe("f(hostless story, step that needs a host) → a clear error naming the
     expect(failure?.message).toContain('"start editor running" needs a host');
   });
 
-  it("f(hostless.with(options)) → refused: it has no clients or invariants", () => {
-    expect(() => pure.with({ invariants: Db.invariants })).toThrow(/hostless story/);
+  it("f(hostless.with(options)) → refused: it has no clients or rules", () => {
+    expect(() => pure.with({ rules: Db.rules })).toThrow(/hostless story/);
   });
 });
 
 describe("f(server history, running editor, data) → one story", () => {
   it("f(n1, edit + save) → Saving with the row pending, then Saved with the committed row", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Db.then(one, [{ title: "Ada" }]),
       Machine.start(editor, { input: { NoteId: "n1" } }),
@@ -210,7 +210,7 @@ describe("f(server history, running editor, data) → one story", () => {
   });
 
   it("f(n1, save a locked title) → NoteLocked: the row rolls back, the editor Failed", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Db.open(one),
       Machine.start(editor, { input: { NoteId: "n1" } }),
@@ -224,7 +224,7 @@ describe("f(server history, running editor, data) → one story", () => {
   });
 
   it("f(n1 deleted by another client while editing, save) → NoteMissing: the editor is Stale", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Db.open(list),
       Machine.start(editor, { input: { NoteId: "n1" } }),
@@ -241,7 +241,7 @@ describe("f(server history, running editor, data) → one story", () => {
 
 describe("f(machines and data in one story) → what only the combination shows", () => {
   it("f(row changed by another client, editor stepped purely) → asks to save what the collection shows; nothing runs", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Db.open(one),
       Story.remote(n1, new RenameNote({ NoteId: "n1", title: "Ada (theirs)" })),
@@ -269,7 +269,7 @@ describe("f(machines and data in one story) → what only the combination shows"
   });
 
   it("f(running editor, another client's write, feed drop/resume, typed rejection) → machine, rows and outcomes agree at every step", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Db.open(one),
       Machine.start(editor, { input: { NoteId: "n1" } }),
@@ -299,7 +299,7 @@ describe("f(machines and data in one story) → what only the combination shows"
   });
 
   it("f(two running editors) → each addressed by name (else the latest); asks, rows and outcomes stay apart", async () => {
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Story.given(n2, new NoteCreated({ note: bob })),
       Db.open(list),
@@ -453,7 +453,7 @@ const exploration = {
   ],
   after: [Story.resume(), Story.idle()],
   story,
-  invariants: Db.invariants,
+  rules: Db.rules,
   maxLength: 3,
 };
 
@@ -481,7 +481,7 @@ const machineExploration = {
   maxLength: 2,
 };
 
-describe("f(model of what happens to a note) → generated stories keep the invariants", () => {
+describe("f(model of what happens to a note) → generated stories keep the rules", () => {
   it("enumerates the same paths every time (xstate/graph), longest first per prefix", () => {
     const paths = pathsOf(happenings, happeningEvents, 3).map((path) =>
       path.map((event) => event.type).join(" "),

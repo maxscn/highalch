@@ -64,7 +64,7 @@ const list = notes.list({ account: "acc-1" });
 
 describe("f(story steps) → a frame of the mounted note list after each", () => {
   it("f(query held, released) → Loading, then the notes", async () => {
-    await story.with({ name: "list loads", invariants: Db.invariants })(
+    await story.with({ name: "list loads", rules: Db.rules })(
       exist(ada, bob),
       Story.hold(),
       List.render(<NoteList account="acc-1" />),
@@ -74,7 +74,7 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
   });
 
   it("f(query held behind Suspense, released) → the fallback, then the notes", async () => {
-    await story.with({ name: "list suspends", invariants: Db.invariants })(
+    await story.with({ name: "list suspends", rules: Db.rules })(
       exist(ada, bob),
       Story.hold(),
       // Frames only where they do not depend on the wall clock: React keeps a fallback it just
@@ -89,7 +89,7 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
   });
 
   it("f(rename) → pending, then committed", async () => {
-    await story.with({ name: "rename settles", invariants: Db.invariants })(
+    await story.with({ name: "rename settles", rules: Db.rules })(
       exist(ada, bob),
       List.render(<NoteList account="acc-1" />),
       Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
@@ -98,7 +98,7 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
   });
 
   it("f(locked rename) → pending, then rolled back", async () => {
-    await story.with({ name: "rename is rejected", invariants: Db.invariants })(
+    await story.with({ name: "rename is rejected", rules: Db.rules })(
       exist(ada, bob),
       List.render(<NoteList account="acc-1" />),
       Db.when(notes.rename, { NoteId: "n1", title: "locked" }),
@@ -148,7 +148,7 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
 
 describe("f(a component reading its machine through atoms, machine steps) → a frame of each state", () => {
   it("f(edit, save) → Idle, Editing, Saving, Saved; the rename is the mounted machine's", async () => {
-    await story.with({ name: "mounted editor saves", invariants: Db.invariants })(
+    await story.with({ name: "mounted editor saves", rules: Db.rules })(
       exist(ada),
       Db.open(list),
       Machine.mounted(editing("n1")),
@@ -170,7 +170,7 @@ describe("f(a component reading its machine through atoms, machine steps) → a 
   });
 
   it("f(save a locked title) → Failed with the typed rejection, the row rolled back", async () => {
-    await story.with({ name: "mounted editor is rejected", invariants: Db.invariants })(
+    await story.with({ name: "mounted editor is rejected", rules: Db.rules })(
       exist(ada),
       Db.open(list),
       Machine.mounted(editing("n1")),
@@ -290,7 +290,7 @@ describe("f(screen misuse) → clear errors", () => {
   });
 
   it("f(story ends) → the DOM globals are removed again", async () => {
-    await story.with({ name: "rename settles", invariants: Db.invariants })(
+    await story.with({ name: "rename settles", rules: Db.rules })(
       exist(ada, bob),
       List.render(<NoteList account="acc-1" />),
       Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),

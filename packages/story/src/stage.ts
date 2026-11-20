@@ -1,4 +1,5 @@
 import { Cause, Context, Effect, Exit, Layer, Option, Scope } from "effect";
+import type { StepOf } from "./rules";
 import type { World } from "./world";
 
 /** A failed expectation inside a step: what it was about, what it expected and what it saw. */
@@ -43,6 +44,8 @@ export type Adapter<I, S> = {
 export class Stage {
   /** The step running now (from 1). */
   step = 0;
+  /** The step running now, as a rule sees it (`Start` before the first). */
+  current: StepOf = { _tag: "Start", number: 0, label: "start" };
   private readonly afters: Array<(done: Done) => Promise<void>> = [];
   private readonly ends: Array<() => Promise<void>> = [];
   private readonly scope = Effect.runSync(Scope.make());
@@ -57,7 +60,7 @@ export class Stage {
 
   /**
    * Runs `run` after every later step that passed, the registering step included, before the
-   * invariants (a screen captures a frame). A failure in it is that step's failure.
+   * rules (a screen captures a frame). A failure in it is that step's failure.
    */
   after = (run: (done: Done) => Promise<void>) => {
     this.afters.push(run);

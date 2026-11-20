@@ -32,7 +32,7 @@ describe("f(plain TanStack DB, no connector) → the same Db steps", () => {
   it("f(local-only collection, toggle) → shown pending, settled, nothing pending at rest", async () => {
     const source = todos();
 
-    await story.with({ invariants: Db.invariants })(
+    await story.with({ rules: Db.rules })(
       Db.then(source, {
         rows: [{ title: "Write the story" }, { title: "Review the frames" }],
         state: "Ready",

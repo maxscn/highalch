@@ -14,6 +14,8 @@ import { transport } from "./wire";
  * `staged`. One runner runs them all, in any order.
  */
 export type Step = {
+  /** The kind of step (`When`, `Rejected`, `Remote`, …), as a rule's `step._tag` reads it. */
+  readonly _tag?: string;
   readonly label: string;
   readonly run: (stage: Stage) => Promise<void>;
 };
@@ -22,10 +24,27 @@ export type Step = {
 export type Steps = Step | ReadonlyArray<Steps>;
 
 /**
+ * A step's kind, from its label's verb: `when …` is `When`, `rejected NoteLocked` is `Rejected`,
+ * `editor: send Save` is `Send`, `[acc-2] remote …` is `Remote`.
+ */
+export const tagOf = (label: string) => {
+  const verb = label
+    .replace(/^\[[^\]]*\]\s*/, "")
+    .replace(/^[^\s:]+:\s+/, "")
+    .split(/\s/)[0];
+
+  return Option.match(Option.fromUndefinedOr(verb).pipe(Option.filter((word) => word !== "")), {
+    onNone: () => "Step",
+    onSome: (word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`,
+  });
+};
+
+/**
  * Builds a step of the Domain: it acts on (or checks) the hosted world. In a hostless story it
  * fails at once, naming the step.
  */
 export const step = (label: string, run: (world: World) => Promise<void>): Step => ({
+  _tag: tagOf(label),
   label,
   run: (stage) => run(stage.hosted(label)),
 });
@@ -37,6 +56,7 @@ export const step = (label: string, run: (world: World) => Promise<void>): Step 
  * from its Layer). The data, machine and screen steps are built so.
  */
 export const staged = (label: string, run: (stage: Stage) => Promise<void>): Step => ({
+  _tag: tagOf(label),
   label,
   run,
 });
