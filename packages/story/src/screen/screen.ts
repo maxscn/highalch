@@ -191,14 +191,14 @@ const index = async (output: string) => {
 };
 
 /**
- * A viewport for stories: `const Screen = Viewport.make(options)` gives a screen of that size,
- * whose `Screen.render(element)` is a step that mounts a React
+ * A viewport for stories: `const List = Screen.make(options)` gives a screen of that size,
+ * whose `List.render(element)` is a step that mounts a React
  * element under the package's `Provider` with the story's client (stock `useLiveQuery` reads the
  * story's data) in a happy-dom document, and captures a frame after it and after every later
  * step: once the world is quiet (command replies still held) and React has flushed, the DOM is
  * serialised (current control values) and painted by takumi's WASM renderer with `css`, then
- * compared pixel by pixel with its baseline. `Screen.shot(label?)` captures a frame on demand (with
- * `Screen.render(element, { every: false })`, only there). `Screen.check(label, run)` asserts on
+ * compared pixel by pixel with its baseline. `List.shot(label?)` captures a frame on demand (with
+ * `List.render(element, { every: false })`, only there). `List.check(label, run)` asserts on
  * the mounted DOM.
  */
 export const make = (options: Options) => {
@@ -347,7 +347,7 @@ export const make = (options: Options) => {
     staged(`shot ${label}`, async (stage) => {
       const mounted = Option.getOrThrowWith(
         stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
-        () => new Mismatch("nothing is rendered yet: Screen.render(element) first"),
+        () => new Mismatch("nothing is rendered yet: render(element) first"),
       );
 
       if (!mounted.every) await capture(stage, mounted, { step: stage.step, label }, label);
@@ -363,7 +363,7 @@ export const make = (options: Options) => {
     staged(`check ${label}`, async (stage) => {
       const mounted = Option.getOrThrowWith(
         stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
-        () => new Mismatch("nothing is rendered yet: Screen.render(element) first"),
+        () => new Mismatch("nothing is rendered yet: render(element) first"),
       );
 
       await quiet(stage.hosted(label));
@@ -373,5 +373,5 @@ export const make = (options: Options) => {
   return { render, shot, check };
 };
 
-/** A screen of a viewport: its `render`, `shot` and `check` steps (`const Screen = Viewport.make(…)`). */
-export type Screen = ReturnType<typeof make>;
+/** A screen of a viewport: its `render`, `shot` and `check` steps (`const List = Screen.make(…)`). */
+export type Viewport = ReturnType<typeof make>;

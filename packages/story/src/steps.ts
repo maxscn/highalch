@@ -102,10 +102,10 @@ export const partial = <E, A>(expected: E, actual: A): boolean => {
 
 const asRow = (shown: Shown): Plain => ({ ...shown.row, $hasPendingWrites: shown.pending });
 
-/** The rows a source shows, as `shows` compares them: by key, with `$hasPendingWrites`. */
+/** The rows a source shows, as `then` compares them: by key, with `$hasPendingWrites`. */
 export type ShownRow<Row> = Row & { readonly $hasPendingWrites: boolean };
 
-/** What a `shows` step expects: rows by key order (each compared partially), or a predicate. */
+/** What a `then` step expects of rows: by key order (each compared partially), or a predicate. */
 export type Expected<Row> =
   | ReadonlyArray<Partial<Row> & { readonly $hasPendingWrites?: boolean }>
   | ((rows: ReadonlyArray<ShownRow<Row>>) => boolean);
@@ -204,57 +204,50 @@ export const open = <Row extends object>(
     if (options.settle !== false) await world.settle();
   });
 
-/**
- * What a source shows now in the step's client, as `useLiveQuery` over it would: its rows by key
- * (each compared partially; `$hasPendingWrites` names a pending row), or a predicate over them.
- * A source not yet observed is opened and settled first.
- */
-export const shows = <Row extends object>(
-  source: Source<Row>,
+/** The rows a source shows now, checked against what a `then` step expects of them. */
+const rowsHold = <Row extends object>(
+  observed: Observed,
   expected: Expected<Row>,
-  options: Scoped = {},
-) =>
-  step(`shows ${source.id ?? "source"}`, async (world) => {
-    const observed = await opened(world, source, options.as);
-    const rows = observed.sorted();
-    const actual = rows.map(([, shown]) => asRow(shown));
+) => {
+  const rows = observed.sorted();
+  const actual = rows.map(([, shown]) => asRow(shown));
 
-    const list = Option.liftPredicate(expected, Array.isArray);
+  const list = Option.liftPredicate(expected, Array.isArray);
 
-    const fields = Option.match(list, {
-      onNone: () => [],
-      onSome: (rows: ReadonlyArray<Plain>) => [...new Set(rows.flatMap(Object.keys))],
-    });
-
-    const holds = Option.match(list, {
-      onSome: (rows: ReadonlyArray<Plain>) =>
-        rows.length === actual.length && rows.every((row, index) => partial(row, actual[index])),
-      onNone: () => {
-        // SAFETY: not an array, so the predicate form; the rows are the source's rows.
-        const predicate = expected as (rows: ReadonlyArray<Plain>) => boolean;
-
-        return predicate(actual);
-      },
-    });
-
-    if (holds) return;
-
-    const keys = new Set(observed.history.map((each) => each.key));
-
-    throw new Mismatch(`${observed.label} does not show what was expected`, [
-      Option.match(list, {
-        onSome: (rows: ReadonlyArray<Plain>) => `expected ${clip(json(rows), 400)}`,
-        onNone: () => "expected rows for which the predicate holds",
-      }),
-      `observed ${clip(json(rows.map(([, shown]) => asRow(shown))), 400)}`,
-      ...[...keys].map((key) => `${key}: ${historyOf(observed, key, fields)}`),
-    ]);
+  const fields = Option.match(list, {
+    onNone: () => [],
+    onSome: (rows: ReadonlyArray<Plain>) => [...new Set(rows.flatMap(Object.keys))],
   });
 
-/** A read state as a `state` step names it: one of `match`'s own tags, or a typed error. */
+  const holds = Option.match(list, {
+    onSome: (rows: ReadonlyArray<Plain>) =>
+      rows.length === actual.length && rows.every((row, index) => partial(row, actual[index])),
+    onNone: () => {
+      // SAFETY: not an array, so the predicate form; the rows are the source's rows.
+      const predicate = expected as (rows: ReadonlyArray<Plain>) => boolean;
+
+      return predicate(actual);
+    },
+  });
+
+  if (holds) return;
+
+  const keys = new Set(observed.history.map((each) => each.key));
+
+  throw new Mismatch(`${observed.label} does not show what was expected`, [
+    Option.match(list, {
+      onSome: (rows: ReadonlyArray<Plain>) => `expected ${clip(json(rows), 400)}`,
+      onNone: () => "expected rows for which the predicate holds",
+    }),
+    `observed ${clip(json(rows.map(([, shown]) => asRow(shown))), 400)}`,
+    ...[...keys].map((key) => `${key}: ${historyOf(observed, key, fields)}`),
+  ]);
+};
+
+/** A read state as a `then` step names it: one of `match`'s own tags, or a typed error. */
 export type ReadState = "Loading" | "Retrying" | "Ready" | "Missing" | TaggedFailure;
 
-/** Whether a state is what a `state` step expects: the tag (and fields), or the error's fields. */
+/** Whether a state is what a `then` step expects: the tag (and fields), or the error's fields. */
 const matches = (expected: ReadState, fields: Plain, actual: TaggedFailure) => {
   if (Predicate.isString(expected))
     return Predicate.isTagged(actual, expected) && partial(fields, actual);
@@ -262,32 +255,68 @@ const matches = (expected: ReadState, fields: Plain, actual: TaggedFailure) => {
   return actual.constructor === expected.constructor && json(actual) === json(expected);
 };
 
+/** The source's read state now, checked against what a `then` step expects of it. */
+const stateHolds = (observed: Observed, expected: ReadState, fields: Plain, single: boolean) => {
+  const actual = observed.state(single);
+
+  if (matches(expected, fields, actual)) return;
+
+  const shown = Object.fromEntries(
+    Object.entries(actual).filter(([field]) => !["data", "retry", "feed"].includes(field)),
+  );
+
+  throw new Mismatch(`${observed.label} is not in the expected state`, [
+    `expected ${clip(json(expected))} ${clip(json(fields))}`,
+    `observed ${clip(json(shown))}`,
+  ]);
+};
+
 /**
- * The source's read state now, as `match` reads a `useLiveQuery` result over it (the same
- * conversion): `Loading`, `Retrying`, `Ready`, `Missing` (with `single`, for a `findOne`),
- * optionally with some of the state's fields (`state(list, "Retrying", { attempt: 2 })`), or the
- * typed error, which compares by class and fields.
+ * What a `then` step expects of a source: its rows (by key, each compared partially, or a
+ * predicate), or an object naming its rows and its read state, as `match` reads it (`Loading`,
+ * `Retrying`, `Ready`, `Missing` with `single` for a `findOne`, or the typed error, compared by
+ * class and fields); `fields` are fields of that state (`{ state: "Retrying", fields: { attempt: 2 } }`).
  */
-export const state = <Row extends object>(
+export type Then<Row> =
+  | Expected<Row>
+  | {
+      readonly rows?: Expected<Row>;
+      readonly state?: ReadState;
+      readonly fields?: Plain;
+      readonly single?: boolean;
+    };
+
+type Parts<Row> = Exclude<Then<Row>, Expected<Row>>;
+
+/** A `then` expectation as its parts: rows alone are the rows. */
+const partsOf = <Row>(expected: Then<Row>): Parts<Row> => {
+  if (Array.isArray(expected) || Predicate.isFunction(expected)) return { rows: expected };
+
+  // SAFETY: neither a list of rows nor a predicate, so the object form.
+  return expected as Parts<Row>;
+};
+
+/**
+ * Then a source shows what was expected in the step's client, as `useLiveQuery` over it would.
+ * With rows to check, a source not yet observed is opened and settled first; a state alone is
+ * read as the source is now.
+ */
+export const then = <Row extends object>(
   source: Source<Row>,
-  expected: ReadState,
-  fields: Plain = {},
-  options: Scoped & { readonly single?: boolean } = {},
+  expected: Then<Row>,
+  options: Scoped = {},
 ) =>
-  step(`state ${source.id ?? "source"}`, async (world) => {
-    const { observed } = await world.observe(source, options.as);
-    const actual = observed.state(options.single);
+  step(`then ${source.id ?? "source"}`, async (world) => {
+    const { rows, state, fields, single } = partsOf(expected);
 
-    if (matches(expected, fields, actual)) return;
+    const observed = await Option.match(Option.fromUndefinedOr(rows), {
+      onNone: async () => (await world.observe(source, options.as)).observed,
+      onSome: () => opened(world, source, options.as),
+    });
 
-    const shown = Object.fromEntries(
-      Object.entries(actual).filter(([field]) => !["data", "retry", "feed"].includes(field)),
-    );
+    if (state !== undefined) stateHolds(observed, state, fields ?? {}, single ?? false);
 
-    throw new Mismatch(`${observed.label} is not in the expected state`, [
-      `expected ${clip(json(expected))} ${clip(json(fields))}`,
-      `observed ${clip(json(shown))}`,
-    ]);
+    if (rows !== undefined) rowsHold(observed, rows);
   });
 
 /** A command a `when` step can call: a `LowAlch` command, bound to the story's client. */

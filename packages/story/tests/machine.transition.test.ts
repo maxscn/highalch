@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createAsyncLogic, setup, types } from "xstate";
 import * as Story from "@highalch/story";
+import { Db } from "@highalch/story/tanstack-db";
 import { explore, Machine, pathsOf } from "@highalch/story/xstate";
 import { mark } from "@lowalch/tanstack-db/xstate";
 import { editor } from "../../../fixtures/editor";
@@ -73,7 +74,7 @@ describe("f(editor snapshot, event) → next snapshot and the commands it asked 
       saving,
       Machine.done(
         notes.rename,
-        Story.Settled.Committed({ reply: undefined, stream: "", version: 2 }),
+        Db.Settled.Committed({ reply: undefined, stream: "", version: 2 }),
       ),
       Machine.then({ state: "Saved", context: { problem: undefined } }),
     );
@@ -163,7 +164,7 @@ describe("f(hostless story, step that needs a host) → a clear error naming the
   it("f(stepped editor, shows) → step 2 fails: a data step needs a host", async () => {
     const failure = await pure(
       Machine.given(editor, { input: { NoteId: "n1" } }),
-      Story.shows(one, [{ title: "Ada" }]),
+      Db.then(one, [{ title: "Ada" }]),
       Machine.then({ state: "Idle" }),
     ).then(
       () => undefined,
@@ -186,64 +187,64 @@ describe("f(hostless story, step that needs a host) → a clear error naming the
   });
 
   it("f(hostless.with(options)) → refused: it has no clients or invariants", () => {
-    expect(() => pure.with({ invariants: Story.invariants })).toThrow(/hostless story/);
+    expect(() => pure.with({ invariants: Db.invariants })).toThrow(/hostless story/);
   });
 });
 
 describe("f(server history, running editor, data) → one story", () => {
   it("f(n1, edit + save) → Saving with the row pending, then Saved with the committed row", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       Story.given(n1, new NoteCreated({ note: ada })),
-      Story.shows(one, [{ title: "Ada" }]),
+      Db.then(one, [{ title: "Ada" }]),
       Machine.start(editor, { input: { NoteId: "n1" } }),
       Machine.when({ type: "Edit", title: "Ada 2" }),
       Machine.when({ type: "Save" }),
       Machine.then({ state: "Saving" }),
       Machine.asked(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
-      Story.settled("Committed"),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Db.settled("Committed"),
       Machine.then({ state: "Saved" }),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
     );
   });
 
   it("f(n1, save a locked title) → NoteLocked: the row rolls back, the editor Failed", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       Story.given(n1, new NoteCreated({ note: ada })),
-      Story.open(one),
+      Db.open(one),
       Machine.start(editor, { input: { NoteId: "n1" } }),
       Machine.when({ type: "Edit", title: "locked" }),
       Machine.when({ type: "Save" }),
-      Story.shows(one, [{ title: "locked", $hasPendingWrites: true }]),
-      Story.rejected(new NoteLocked({ title: "locked" })),
+      Db.then(one, [{ title: "locked", $hasPendingWrites: true }]),
+      Db.rejected(new NoteLocked({ title: "locked" })),
       Machine.then({ state: "Failed", context: { problem: "NoteLocked" } }),
-      Story.shows(one, [{ title: "Ada", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada", $hasPendingWrites: false }]),
     );
   });
 
   it("f(n1 deleted by another client while editing, save) → NoteMissing: the editor is Stale", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       Story.given(n1, new NoteCreated({ note: ada })),
-      Story.open(list),
+      Db.open(list),
       Machine.start(editor, { input: { NoteId: "n1" } }),
       Machine.when({ type: "Edit", title: "Ada 2" }),
       Story.remote(n1, new DeleteNote({ NoteId: "n1" })),
-      Story.shows(list, []),
+      Db.then(list, []),
       Machine.when({ type: "Save" }),
-      Story.rejected(new NoteMissing()),
+      Db.rejected(new NoteMissing()),
       Machine.then({ state: "Stale", context: { problem: "NoteMissing" } }),
-      Story.shows(list, []),
+      Db.then(list, []),
     );
   });
 });
 
 describe("f(machines and data in one story) → what only the combination shows", () => {
   it("f(row changed by another client, editor stepped purely) → asks to save what the collection shows; nothing runs", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       Story.given(n1, new NoteCreated({ note: ada })),
-      Story.open(one),
+      Db.open(one),
       Story.remote(n1, new RenameNote({ NoteId: "n1", title: "Ada (theirs)" })),
-      Story.shows(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
       Machine.given(editor, { input: { NoteId: "n1" } }),
       // The user appends to the title the list shows now.
       Machine.when(async (read) => ({
@@ -254,10 +255,10 @@ describe("f(machines and data in one story) → what only the combination shows"
       Machine.then({ state: "Saving", context: { draft: "Ada (theirs), edited" } }),
       Machine.asked(notes.rename, { NoteId: "n1", title: "Ada (theirs), edited" }),
       // Stepped purely: the command was not sent, the row is untouched.
-      Story.shows(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
       Machine.done(
         notes.rename,
-        Story.Settled.Committed({ reply: undefined, stream: "", version: 3 }),
+        Db.Settled.Committed({ reply: undefined, stream: "", version: 3 }),
       ),
       Machine.then({ state: "Saved" }),
       Story.check("nothing was sent", (world) => {
@@ -267,40 +268,40 @@ describe("f(machines and data in one story) → what only the combination shows"
   });
 
   it("f(running editor, another client's write, feed drop/resume, typed rejection) → machine, rows and outcomes agree at every step", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       Story.given(n1, new NoteCreated({ note: ada })),
-      Story.open(one),
+      Db.open(one),
       Machine.start(editor, { input: { NoteId: "n1" } }),
       Machine.when({ type: "Edit", title: "Ada 2" }),
       Story.remote(n1, new RenameNote({ NoteId: "n1", title: "Ada (theirs)" })),
-      Story.shows(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]),
       Machine.then({ state: "Editing", context: { draft: "Ada 2" } }),
       Story.drop(),
-      Story.state(one, "Retrying"),
+      Db.then(one, { state: "Retrying" }),
       Machine.when({ type: "Save" }),
       Machine.then({ state: "Saving" }),
       Machine.asked(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: true }]),
       // The feed is down: the rename is accepted but not confirmed until it resumes.
       Story.resume(),
-      Story.settled("Committed"),
+      Db.settled("Committed"),
       Machine.then({ state: "Saved" }),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
       Machine.when({ type: "Edit", title: "locked" }),
       Machine.when({ type: "Save" }),
       Machine.asked(notes.rename, { title: "locked" }),
-      Story.shows(one, [{ title: "locked", $hasPendingWrites: true }]),
-      Story.rejected(new NoteLocked({ title: "locked" })),
+      Db.then(one, [{ title: "locked", $hasPendingWrites: true }]),
+      Db.rejected(new NoteLocked({ title: "locked" })),
       Machine.then({ state: "Failed", context: { problem: "NoteLocked" } }),
-      Story.shows(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(one, [{ title: "Ada 2", $hasPendingWrites: false }]),
     );
   });
 
   it("f(two running editors) → each addressed by name (else the latest); asks, rows and outcomes stay apart", async () => {
-    await story.with({ invariants: Story.invariants })(
+    await story.with({ invariants: Db.invariants })(
       Story.given(n1, new NoteCreated({ note: ada })),
       Story.given(n2, new NoteCreated({ note: bob })),
-      Story.open(list),
+      Db.open(list),
       Machine.start(editor, { input: { NoteId: "n1" }, name: "ada" }),
       Machine.start(editor, { input: { NoteId: "n2" }, name: "bob" }),
       Machine.when({ type: "Edit", title: "Ada 2" }, { machine: "ada" }),
@@ -310,18 +311,18 @@ describe("f(machines and data in one story) → what only the combination shows"
       Machine.asked(notes.rename, { NoteId: "n1", title: "Ada 2" }, { machine: "ada" }),
       Machine.askedNothing({ machine: "bob" }),
       Machine.then({ state: "Editing", context: { NoteId: "n2", draft: "locked" } }),
-      Story.settled("Committed"),
+      Db.settled("Committed"),
       Machine.then({ state: "Saved" }, { machine: "ada" }),
       Machine.when({ type: "Save" }, { machine: "bob" }),
       Machine.asked(notes.rename, { NoteId: "n2", title: "locked" }, { machine: "bob" }),
-      Story.shows(list, [
+      Db.then(list, [
         { NoteId: "n1", title: "Ada 2", $hasPendingWrites: false },
         { NoteId: "n2", title: "locked", $hasPendingWrites: true },
       ]),
-      Story.rejected(new NoteLocked({ title: "locked" })),
+      Db.rejected(new NoteLocked({ title: "locked" })),
       Machine.then({ state: "Failed", context: { problem: "NoteLocked" } }, { machine: "bob" }),
       Machine.then({ state: "Saved" }, { machine: "ada" }),
-      Story.shows(list, [
+      Db.then(list, [
         { NoteId: "n1", title: "Ada 2", $hasPendingWrites: false },
         { NoteId: "n2", title: "Bob", $hasPendingWrites: false },
       ]),
@@ -427,7 +428,7 @@ const happeningEvents = [
 /** The story steps of each modelled event. */
 const happen = (event: (typeof happeningEvents)[number], index: number): Story.Steps => {
   if (event.type === "EDIT")
-    return Story.when(notes.rename, { NoteId: "n1", title: `local ${index}` });
+    return Db.when(notes.rename, { NoteId: "n1", title: `local ${index}` });
 
   if (event.type === "REMOTE")
     return Story.remote(n1, new RenameNote({ NoteId: "n1", title: `remote ${index}` }));
@@ -436,7 +437,7 @@ const happen = (event: (typeof happeningEvents)[number], index: number): Story.S
 
   if (event.type === "RESUME") return Story.resume();
 
-  return Story.when(notes.rename, { NoteId: "n1", title: "locked" });
+  return Db.when(notes.rename, { NoteId: "n1", title: "locked" });
 };
 
 const exploration = {
@@ -445,13 +446,13 @@ const exploration = {
   steps: happen,
   before: [
     Story.given(n1, new NoteCreated({ note: ada })),
-    Story.open(list),
-    Story.open(one),
-    Story.open(book),
+    Db.open(list),
+    Db.open(one),
+    Db.open(book),
   ],
   after: [Story.resume(), Story.idle()],
   story,
-  invariants: Story.invariants,
+  invariants: Db.invariants,
   maxLength: 3,
 };
 

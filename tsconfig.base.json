@@ -20,6 +20,7 @@
       "@lowalch/tanstack-db/xstate": ["./packages/tanstack-db/src/xstate/index.ts"],
       "@lowalch/tanstack-db/internal": ["./packages/tanstack-db/src/internal.ts"],
       "@highalch/story": ["./packages/story/src/index.ts"],
+      "@highalch/story/tanstack-db": ["./packages/story/src/tanstack-db/index.ts"],
       "@highalch/story/xstate": ["./packages/story/src/xstate/index.ts"],
       "@highalch/story/screen": ["./packages/story/src/screen/index.ts"]
     }

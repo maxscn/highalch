@@ -5,11 +5,12 @@ given server history, when a client, another client or the world acts, then what
 shows, its read state and how each command settled. Optional screen steps paint a filmstrip of a
 mounted React component without a browser.
 
-| Entry point              | What                                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------- |
-| `@highalch/story`        | The story runner, data steps, invariants, view helpers; never imports XState             |
-| `@highalch/story/xstate` | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`      |
-| `@highalch/story/screen` | Screen steps: a mounted component's frames vs reviewed baselines; needs takumi/happy-dom |
+| Entry point                   | What                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time)    |
+| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, invariants and view helpers      |
+| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`      |
+| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs takumi/happy-dom |
 
 Peer dependencies: `@lowalch/tanstack-db` and its peers; optional `xstate` and `@xstate/effect` (for
 `/xstate`), `react-dom`, `happy-dom`, `takumi-js` 2.14.0 and `@effect/atom-react` (for `/screen`).
@@ -25,7 +26,8 @@ each row key showed, in order; for a machine step the machine's name and mode, i
 commands it asked for), and lists the steps (✓ passed, ✗ failed, blank not run).
 
 ```ts
-import * as Story from "@highalch/story"; // the runner and the data steps; never imports XState
+import * as Story from "@highalch/story"; // the runner and the Domain's steps; never imports XState
+import { Db } from "@highalch/story/tanstack-db"; // data steps: what a client shows and its commands
 import { explore, Machine } from "@highalch/story/xstate"; // machine steps and generated stories
 import { invoke } from "@lowalch/tanstack-db/xstate"; // production: how a machine invokes a command
 ```
@@ -50,13 +52,13 @@ const story = Story.make(
 const pure = Story.make();
 
 it("renames optimistically, then settles through the feed", () =>
-  story.with({ invariants: Story.invariants })(
+  story.with({ invariants: Db.invariants })(
     Story.given(Note.ref(id), new NoteCreated({ note: ada })),
-    Story.shows(notes.list({ account: "acc-1" }), [{ title: "Ada" }]),
-    Story.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-    Story.shows(notes.list({ account: "acc-1" }), [{ title: "Ada 2", $hasPendingWrites: true }]),
-    Story.settled("Committed"),
-    Story.shows(notes.list({ account: "acc-1" }), [{ title: "Ada 2", $hasPendingWrites: false }]),
+    Db.then(notes.list({ account: "acc-1" }), [{ title: "Ada" }]),
+    Db.when(notes.rename, { NoteId: "n1", title: "Ada 2" }),
+    Db.then(notes.list({ account: "acc-1" }), [{ title: "Ada 2", $hasPendingWrites: true }]),
+    Db.settled("Committed"),
+    Db.then(notes.list({ account: "acc-1" }), [{ title: "Ada 2", $hasPendingWrites: false }]),
   ));
 ```
 
@@ -70,34 +72,41 @@ a deployed model's records over HTTP.
 
 A hostless story runs any step that needs no Domain: machines stepped purely, and your own steps
 built with `staged`. A data step or a running machine in it fails at once, naming itself:
-`Step 2 (shows …) failed: "shows …" needs a host, and this story has none`. `pure.with(...)` is
+`Step 2 (then …) failed: "then …" needs a host, and this story has none`. `pure.with(...)` is
 refused (it has no clients, clock or invariants).
 
 ## The steps
 
-Data steps (`Story.*`; they need a host):
+Story steps (`Story.*`, from `@highalch/story`): the Domain, its transport and time. All but
+`flatten`/`staged` need a host:
 
-| Step                                                     | What it does                                                                                                          |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `given(ref, ...events)`                                  | history: events committed on an aggregate (seeded as alchemy's `Story.given` seeds them; projections see them)        |
-| `remote(ref, command)` / `remote(label, (api) => eff)`   | another client writes: a command to an aggregate, or any call of the scope's Api client; it must be accepted          |
-| `alchemy(Story.given(...))` / `alchemy(Story.when(...))` | alchemy's own `Given`/`When` step values, run on the story's host                                                     |
-| `open(source, { as?, settle? })`                         | materialises a source in a client and keeps it observed, as a mounted `useLiveQuery` would                            |
-| `shows(source, rows \| predicate, { as? })`              | what the source shows now, by key order, each row compared partially; `$hasPendingWrites` names a pending row         |
-| `state(source, tag \| error, fields?, { single? })`      | the read state, by the same conversion `match` uses: `Loading`, `Retrying`, `Ready`, `Missing`, or the typed error    |
-| `when(command, input)`                                   | the client calls a declared command with its input (`command.with({ client })(input)`)                                |
-| `when(label, ({ client, activate }) => transaction)`     | anything that returns a transaction: `createOptimisticAction(command.options)`, `createPacedMutations(command.paced)` |
-| `settled("Committed" \| "Unconfirmed"?)`                 | the last command (a `when`'s or a running machine's) settled so                                                       |
-| `rejected(error)`                                        | the last command was rejected with this typed error (same class, same fields)                                         |
-| `drop(error?)` / `resume()`                              | the feed fails (reconnecting fails too) / connects again: its retries run now                                         |
-| `mute(on?)`                                              | the feed stays connected and delivers nothing (what it drops is lost to that connection)                              |
-| `fail(name, error, times?)` / `recover(name)`            | a query or command fails with a typed error / answers again                                                           |
-| `reload(source)` / `reload(Rows)`                        | what a `match` handler's `retry` does (`collection.reload()`) / `LowAlch.reload(db, Rows)`, its debounce passed       |
-| `hold()` / `release()`                                   | queries answer with what they saw when asked, but only at `release` (a write racing a load)                           |
-| `advance(ms)`                                            | time passes on the story's clock: retries, reload debounces and settle timeouts due within `ms` fire, in order        |
-| `settle()` / `idle()`                                    | wait until nothing more happens by itself / until every command ended                                                 |
-| `check(label, (world) => ...)`                           | anything else: the host's services, a client's wire (`sent`, `asked`), the runs, the feed's entries                   |
-| `as(scope, ...steps)`                                    | the steps act as the client of another scope (two accounts in one story; a machine started inside runs there)         |
+| Step                                                   | What it does                                                                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `given(ref, ...events)`                                | history: events committed on an aggregate (seeded as alchemy's `Story.given` seeds them; projections see them) |
+| `remote(ref, command)` / `remote(label, (api) => eff)` | another client writes: a command to an aggregate, or any call of the scope's Api client; it must be accepted   |
+| `alchemy(Story.given(...))` / `alchemy(Db.when(...))`  | alchemy's own `Given`/`When` step values, run on the story's host                                              |
+| `drop(error?)` / `resume()`                            | the feed fails (reconnecting fails too) / connects again: its retries run now                                  |
+| `mute(on?)`                                            | the feed stays connected and delivers nothing (what it drops is lost to that connection)                       |
+| `fail(name, error, times?)` / `recover(name)`          | a query or command fails with a typed error / answers again                                                    |
+| `hold()` / `release()`                                 | queries answer with what they saw when asked, but only at `release` (a write racing a load)                    |
+| `advance(ms)`                                          | time passes on the story's clock: retries, reload debounces and settle timeouts due within `ms` fire, in order |
+| `settle()` / `idle()`                                  | wait until nothing more happens by itself / until every command ended                                          |
+| `check(label, (world) => ...)`                         | anything else: the host's services, a client's wire (`sent`, `asked`), the runs, the feed's entries            |
+| `as(scope, ...steps)`                                  | the steps act as the client of another scope (two accounts in one story; a machine started inside runs there)  |
+
+Data steps (`Db.*`, from `@highalch/story/tanstack-db`): what a client's sources show and the
+commands it runs:
+
+| Step                                                 | What it does                                                                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `open(source, { as?, settle? })`                     | materialises a source in a client and keeps it observed, as a mounted `useLiveQuery` would                            |
+| `then(source, rows \| predicate, { as? })`           | what the source shows now, by key order, each row compared partially; `$hasPendingWrites` names a pending row         |
+| `then(source, { rows?, state?, fields?, single? })`  | its rows and its read state, by the conversion `match` uses: `Loading`, `Retrying`, `Ready`, `Missing`, a typed error |
+| `when(command, input)`                               | the client calls a declared command with its input (`command.with({ client })(input)`)                                |
+| `when(label, ({ client, activate }) => transaction)` | anything that returns a transaction: `createOptimisticAction(command.options)`, `createPacedMutations(command.paced)` |
+| `settled("Committed" \| "Unconfirmed"?)`             | the last command (a `when`'s or a running machine's) settled so                                                       |
+| `rejected(error)`                                    | the last command was rejected with this typed error (same class, same fields)                                         |
+| `reload(source)` / `reload(Rows)`                    | what a `match` handler's `retry` does (`collection.reload()`) / `LowAlch.reload(db, Rows)`, its debounce passed       |
 
 Machine steps (`Machine.*`). Each addressing step takes a last `{ machine?: name }` (default: the
 machine introduced last), as data steps take `{ as?: scope }`:
@@ -111,8 +120,8 @@ machine introduced last), as data steps take `{ as?: scope }`:
 | `then({ state, context? }, { machine? })`                   | `snapshot.matches(state)`, context compared partially          | the same, on the actor's snapshot                                           |
 | `asked(command, input?, { machine? })`                      | the last transition's spawn actions of `invoke(command)` logic | the commands the story's `Runner` ran for it since its last event           |
 | `askedNothing({ machine? })`                                | the last transition spawned none                               | it ran none since its last event                                            |
-| `done(command, output?, { machine? })`                      | feeds `xstate.done.actor` for the command it asked for last    | an error: its commands settle by themselves (`Story.settled`)               |
-| `failed(command, error, { machine? })`                      | feeds `xstate.error.actor` with the typed error                | an error: assert the real rejection with `Story.rejected`                   |
+| `done(command, output?, { machine? })`                      | feeds `xstate.done.actor` for the command it asked for last    | an error: its commands settle by themselves (`Db.settled`)                  |
+| `failed(command, error, { machine? })`                      | feeds `xstate.error.actor` with the typed error                | an error: assert the real rejection with `Db.rejected`                      |
 
 `(read) => …` computes a snapshot or an event from what the story's sources show when the step runs
 (`read(source, { as? })` returns its rows, opening it first), so a stepped machine can be asked
@@ -130,13 +139,13 @@ nothing switches modes silently.
   it asks for are never sent.
 - **`Machine.start` — running.** An actor on the story's client (of the step's scope). The
   commands it invokes run there and are recorded as its runs; their real outcomes arrive by
-  themselves and `Story.settled`/`Story.rejected` assert them. It proves the machine and the data
+  themselves and `Db.settled`/`Db.rejected` assert them. It proves the machine and the data
   together: what is shown while a command is in flight, how it reacts to typed rejections, that
   rows roll back. Needs a host.
 
 - **`Machine.mounted` — running, as a component reads it.** The actor the story's atom registry
   holds for the atoms `createActorAtoms` (from `@xstate/effect/atom`) made, which is the one a
-  component under `Screen.render` reads through the same atoms. From then on it is a running
+  component under `List.render` reads through the same atoms. From then on it is a running
   machine: `when` sends to it, `then` and `asked` read it, and its commands run on the story's
   client, recorded. The story keeps the actor alive until it ends, so the step may come before or
   after the render. Needs a host. See [Machines in a screen](#machines-in-a-screen).
@@ -144,20 +153,20 @@ nothing switches modes silently.
 ```ts
 story(
   Story.given(n1, new NoteCreated({ note: ada })),
-  Story.open(one),
+  Db.open(one),
   Story.remote(n1, new RenameNote({ NoteId: "n1", title: "Ada (theirs)" })),
   // A draft editor, stepped purely, beside the data: what would it save?
   Machine.given(editor, { input: { NoteId: "n1" } }, { name: "draft" }),
   Machine.when(async (read) => ({ type: "Edit", title: `${(await read(one))[0]?.title}, edited` })),
   Machine.when({ type: "Save" }),
   Machine.asked(notes.rename, { title: "Ada (theirs), edited" }),
-  Story.shows(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]), // nothing was sent
+  Db.then(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]), // nothing was sent
   // A running editor: its rename really runs, is rejected and rolls back.
   Machine.start(editor, { input: { NoteId: "n1" }, name: "live" }),
   Machine.when({ type: "Edit", title: "locked" }, { machine: "live" }),
   Machine.when({ type: "Save" }, { machine: "live" }),
-  Story.shows(one, [{ title: "locked", $hasPendingWrites: true }]),
-  Story.rejected(new NoteLocked({ title: "locked" })),
+  Db.then(one, [{ title: "locked", $hasPendingWrites: true }]),
+  Db.rejected(new NoteLocked({ title: "locked" })),
   Machine.then({ state: "Failed" }, { machine: "live" }),
 );
 ```
@@ -232,7 +241,7 @@ in flight, closing its clients (`LowAlch.close` waits for sent commands) lets th
 and runs the clock's waits, so a failure is reported instead of hanging.
 
 **Invariants.** `story.with({ invariants })` checks invariants after every step and at the end.
-`Story.invariants` are a collection's defaults:
+`Db.invariants` are a collection's defaults:
 
 - `noFlickerBack`: a source never shows a row of the feed older than one it already showed for that
   key, and once a command's optimistic row showed, never one older than the command's own change
@@ -252,9 +261,9 @@ a browser and compared with reviewed baselines. A story then yields a filmstrip:
 pending, settled or rolled back, retrying.
 
 ```tsx
-import * as Viewport from "@highalch/story/screen";
+import { Screen } from "@highalch/story/screen";
 
-const Screen = Viewport.make({
+const List = Screen.make({
   css, // the compiled stylesheet(s) the markup is painted with
   width: 360,
   height: 200,
@@ -266,20 +275,20 @@ const Screen = Viewport.make({
 
 await story.with({ name: "rename is rejected" })(
   Story.given(n1, new NoteCreated({ note: ada })),
-  Screen.render(<NoteList account="acc-1" />), // mounted; frame 2
-  Story.when(notes.rename, { NoteId: "n1", title: "locked" }), // frame 3: pending
-  Story.rejected(new NoteLocked({ title: "locked" })), // frame 4: rolled back
+  List.render(<NoteList account="acc-1" />), // mounted; frame 2
+  Db.when(notes.rename, { NoteId: "n1", title: "locked" }), // frame 3: pending
+  Db.rejected(new NoteLocked({ title: "locked" })), // frame 4: rolled back
 );
 ```
 
-- `Screen.render(element, { every? })` mounts the element with `react-dom/client` under the package's
+- `List.render(element, { every? })` mounts the element with `react-dom/client` under the package's
   `Provider` with the story's client (of the step's scope), so stock `useLiveQuery` reads story
   data, and under the story's atom registry, so atoms read there are the story's; React is
   flushed with `act`. After this step and every later one, once the world is quiet
   (command replies still held, so a pending row stays pending) and React has flushed, the DOM is
-  serialised and painted. `every: false` captures only at `Screen.shot(label?)` steps. One screen per
+  serialised and painted. `every: false` captures only at `List.shot(label?)` steps. One screen per
   story; it is unmounted when the story ends, passed or failed.
-- `Screen.check(label, (container) => …)` asserts on the mounted DOM: it is given the container
+- `List.check(label, (container) => …)` asserts on the mounted DOM: it is given the container
   the element is mounted in, once the world is quiet and React has flushed, so it sees what a
   frame taken now would paint. Use it for what a picture does not say: that the title is an `h1`
   (`container.querySelector("h1")`), that a button is disabled, what a control's value is. The
@@ -324,16 +333,16 @@ export function NoteEditor({ NoteId }: { NoteId: string }) {
 await story.with({ name: "editor is rejected" })(
   Story.given(n1, new NoteCreated({ note: ada })),
   Machine.mounted(editing("n1")),
-  Screen.render(<NoteEditor NoteId="n1" />), // Idle
+  List.render(<NoteEditor NoteId="n1" />), // Idle
   Machine.when({ type: "Edit", title: "locked" }), // Editing
   Machine.when({ type: "Save" }), // Saving
-  Story.rejected(new NoteLocked({ title: "locked" })), // Failed
+  Db.rejected(new NoteLocked({ title: "locked" })), // Failed
   Machine.then({ state: "Failed", context: { problem: "NoteLocked" } }),
 );
 ```
 
 - Each story run has its own atom registry (`Story.registry(stage)` in a step of your own), made
-  on first use and disposed when the story ends. `Screen.render` mounts the element under it, and
+  on first use and disposed when the story ends. `List.render` mounts the element under it, and
   `Machine.mounted` reads the actor from it, so the component and the story see one actor and no
   actor outlives its story.
 - Loading `@highalch/story/xstate` adds one layer to `Atom.runtime` (`addGlobalLayer`): in a
@@ -344,8 +353,8 @@ await story.with({ name: "editor is rejected" })(
 - A command is recorded as its machine's when the story introduced that machine with
   `Machine.mounted`; two actors of one machine are told apart by the input of the command each
   invokes. A command of a machine the story never introduced is recorded under `mounted`, and
-  `Story.settled` and `Story.rejected` still assert it.
-- Put `Machine.mounted` before `Screen.render` when the first frame matters: the step waits until
+  `Db.settled` and `Db.rejected` still assert it.
+- Put `Machine.mounted` before `List.render` when the first frame matters: the step waits until
   the actor has started, so the first frame shows its state and not the component's own loading
   branch.
 - A stepped machine (`Machine.given`) has no actor, so it has no frame: a screen shows running
@@ -397,10 +406,10 @@ process, or whatever transport your `Hosting` uses), or orders the story does no
 A presentational component takes plain props; its composition component renders
 `match(useLiveQuery(...)).on(...)`. To render each branch without a server:
 
-- `Story.Live` constructs every state `match` gives a live query (`Loading()`, `Retrying({ error,
+- `Db.Live` constructs every state `match` gives a live query (`Loading()`, `Retrying({ error,
   attempt, data })`, `Ready({ data, feed, retry })`, `Missing()`, `Disabled()`), and
-  `Story.Settled` a command's settled value (`Committed(...)`, `Unconfirmed(...)`).
-- `Story.view(source, state)` is a value shaped like a stock `useLiveQuery` result over `source` in
+  `Db.Settled` a command's settled value (`Committed(...)`, `Unconfirmed(...)`).
+- `Db.view(source, state)` is a value shaped like a stock `useLiveQuery` result over `source` in
   that state (a `Live` state or one of the source's typed errors), which `match` accepts without
   casts and reads exactly as the real one, with the source's errors; `retried()` counts `retry`
   calls. It is for view tests only: it holds no collection.

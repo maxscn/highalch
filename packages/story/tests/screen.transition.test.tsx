@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
-import * as Viewport from "@highalch/story/screen";
+import { Db } from "@highalch/story/tanstack-db";
+import { Screen } from "@highalch/story/screen";
 import { install, serialize } from "../src/screen/dom";
 import { Machine } from "@highalch/story/xstate";
 import { editor } from "../../../fixtures/editor";
@@ -27,7 +28,7 @@ const story = Story.make(Story.memory({ api: NotesApi, layer: notebook, services
   scope: "acc-1",
 });
 
-const Screen = Viewport.make({
+const List = Screen.make({
   css,
   width: 360,
   height: 200,
@@ -37,7 +38,7 @@ const Screen = Viewport.make({
 });
 
 /** The editor's screen: the same places, its own stylesheet. */
-const Editor = Viewport.make({
+const Editor = Screen.make({
   css: editorCss,
   width: 360,
   height: 200,
@@ -59,45 +60,45 @@ const list = notes.list({ account: "acc-1" });
 
 describe("f(story steps) → a frame of the mounted note list after each", () => {
   it("f(query held, released) → Loading, then the notes", async () => {
-    await story.with({ name: "list loads", invariants: Story.invariants })(
+    await story.with({ name: "list loads", invariants: Db.invariants })(
       exist(ada, bob),
       Story.hold(),
-      Screen.render(<NoteList account="acc-1" />),
+      List.render(<NoteList account="acc-1" />),
       Story.release(),
-      Story.shows(list, [{ title: "Ada" }, { title: "Bob" }]),
+      Db.then(list, [{ title: "Ada" }, { title: "Bob" }]),
     );
   });
 
   it("f(query held behind Suspense, released) → the fallback, then the notes", async () => {
-    await story.with({ name: "list suspends", invariants: Story.invariants })(
+    await story.with({ name: "list suspends", invariants: Db.invariants })(
       exist(ada, bob),
       Story.hold(),
       // Frames only where they do not depend on the wall clock: React keeps a fallback it just
       // showed for 300 ms before it reveals content, however soon the data is there.
-      Screen.render(<SuspendingNoteList account="acc-1" />, { every: false }),
-      Screen.shot("fallback"),
+      List.render(<SuspendingNoteList account="acc-1" />, { every: false }),
+      List.shot("fallback"),
       Story.release(),
-      Story.shows(list, [{ title: "Ada" }, { title: "Bob" }]),
+      Db.then(list, [{ title: "Ada" }, { title: "Bob" }]),
       Story.check("fallback throttle passed", () => new Promise((done) => setTimeout(done, 350))),
-      Screen.shot("list"),
+      List.shot("list"),
     );
   });
 
   it("f(rename) → pending, then committed", async () => {
-    await story.with({ name: "rename settles", invariants: Story.invariants })(
+    await story.with({ name: "rename settles", invariants: Db.invariants })(
       exist(ada, bob),
-      Screen.render(<NoteList account="acc-1" />),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
-      Story.settled("Committed"),
+      List.render(<NoteList account="acc-1" />),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
+      Db.settled("Committed"),
     );
   });
 
   it("f(locked rename) → pending, then rolled back", async () => {
-    await story.with({ name: "rename is rejected", invariants: Story.invariants })(
+    await story.with({ name: "rename is rejected", invariants: Db.invariants })(
       exist(ada, bob),
-      Screen.render(<NoteList account="acc-1" />),
-      Story.when(notes.rename, { NoteId: "n1", title: "locked" }),
-      Story.rejected(new NoteLocked({ title: "locked" })),
+      List.render(<NoteList account="acc-1" />),
+      Db.when(notes.rename, { NoteId: "n1", title: "locked" }),
+      Db.rejected(new NoteLocked({ title: "locked" })),
     );
   });
 
@@ -106,11 +107,11 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
   it("f(shown, feed drops with a transport error, resumes) → Retrying, then the notes", async () => {
     await story.with({ name: "list retries" })(
       exist(ada),
-      Screen.render(<NoteList account="acc-1" />),
+      List.render(<NoteList account="acc-1" />),
       Story.drop(),
-      Story.state(list, "Retrying"),
+      Db.then(list, { state: "Retrying" }),
       Story.resume(),
-      Story.state(list, "Ready"),
+      Db.then(list, { state: "Ready" }),
     );
   });
 
@@ -118,34 +119,34 @@ describe("f(story steps) → a frame of the mounted note list after each", () =>
     await story.with({ name: "list recovers" })(
       exist(ada),
       Story.fail("Notes", Story.transport()),
-      Screen.render(<NoteList account="acc-1" />),
-      Story.state(list, "Loading"),
+      List.render(<NoteList account="acc-1" />),
+      Db.then(list, { state: "Loading" }),
       Story.recover("Notes"),
       Story.advance(100),
-      Story.state(list, "Ready"),
+      Db.then(list, { state: "Ready" }),
     );
   });
 
   it("f(running editor, frames only where asked) → shot steps beside machine steps", async () => {
     await story.with({ name: "editor saves" })(
       exist(ada),
-      Screen.render(<NoteList account="acc-1" />, { every: false }),
+      List.render(<NoteList account="acc-1" />, { every: false }),
       Machine.start(editor, { input: { NoteId: "n1" } }),
       Machine.when({ type: "Edit", title: "Ada 2" }),
       Machine.when({ type: "Save" }),
-      Screen.shot("saving"),
-      Story.settled("Committed"),
+      List.shot("saving"),
+      Db.settled("Committed"),
       Machine.then({ state: "Saved" }),
-      Screen.shot("saved"),
+      List.shot("saved"),
     );
   });
 });
 
 describe("f(a component reading its machine through atoms, machine steps) → a frame of each state", () => {
   it("f(edit, save) → Idle, Editing, Saving, Saved; the rename is the mounted machine's", async () => {
-    await story.with({ name: "mounted editor saves", invariants: Story.invariants })(
+    await story.with({ name: "mounted editor saves", invariants: Db.invariants })(
       exist(ada),
-      Story.open(list),
+      Db.open(list),
       Machine.mounted(editing("n1")),
       Editor.render(<NoteEditor NoteId="n1" />, { every: false }),
       Machine.then({ state: "Idle" }),
@@ -155,26 +156,26 @@ describe("f(a component reading its machine through atoms, machine steps) → a 
       Machine.when({ type: "Save" }),
       Machine.then({ state: "Saving" }),
       Machine.asked(notes.rename, { NoteId: "n1", title: "Ada 2" }),
-      Story.shows(list, [{ title: "Ada 2", $hasPendingWrites: true }]),
+      Db.then(list, [{ title: "Ada 2", $hasPendingWrites: true }]),
       Editor.shot("saving"),
-      Story.settled("Committed"),
+      Db.settled("Committed"),
       Machine.then({ state: "Saved" }),
-      Story.shows(list, [{ title: "Ada 2", $hasPendingWrites: false }]),
+      Db.then(list, [{ title: "Ada 2", $hasPendingWrites: false }]),
       Editor.shot("saved"),
     );
   });
 
   it("f(save a locked title) → Failed with the typed rejection, the row rolled back", async () => {
-    await story.with({ name: "mounted editor is rejected", invariants: Story.invariants })(
+    await story.with({ name: "mounted editor is rejected", invariants: Db.invariants })(
       exist(ada),
-      Story.open(list),
+      Db.open(list),
       Machine.mounted(editing("n1")),
       Editor.render(<NoteEditor NoteId="n1" />, { every: false }),
       Machine.when({ type: "Edit", title: "locked" }),
       Machine.when({ type: "Save" }),
-      Story.rejected(new NoteLocked({ title: "locked" })),
+      Db.rejected(new NoteLocked({ title: "locked" })),
       Machine.then({ state: "Failed", context: { problem: "NoteLocked" } }),
-      Story.shows(list, [{ title: "Ada", $hasPendingWrites: false }]),
+      Db.then(list, [{ title: "Ada", $hasPendingWrites: false }]),
       Editor.shot("failed"),
     );
   });
@@ -195,7 +196,7 @@ describe("f(a component reading its machine through atoms, machine steps) → a 
   it("f(two mounted editors of one machine) → each command is recorded as its own machine's", async () => {
     await story(
       exist(ada, bob),
-      Story.open(list),
+      Db.open(list),
       Machine.mounted(editing("n1"), { name: "ada" }),
       Machine.mounted(editing("n2"), { name: "bob" }),
       Machine.when({ type: "Edit", title: "Ada 2" }, { machine: "ada" }),
@@ -203,7 +204,7 @@ describe("f(a component reading its machine through atoms, machine steps) → a 
       Machine.when({ type: "Save" }, { machine: "bob" }),
       Machine.asked(notes.rename, { NoteId: "n2", title: "Bob 2" }, { machine: "bob" }),
       Machine.askedNothing({ machine: "ada" }),
-      Story.settled("Committed"),
+      Db.settled("Committed"),
       Machine.then({ state: "Saved" }, { machine: "bob" }),
       Machine.then({ state: "Editing" }, { machine: "ada" }),
     );
@@ -218,19 +219,19 @@ describe("f(mounted DOM, check) → what is rendered, as elements", () => {
   it("f(note list) → the heading is an h1, each note a list item", async () => {
     await story.with({ name: "list is checked" })(
       exist(ada, bob),
-      Screen.render(<NoteList account="acc-1" />, { every: false }),
-      Screen.check("the heading and the notes", (container) => {
+      List.render(<NoteList account="acc-1" />, { every: false }),
+      List.check("the heading and the notes", (container) => {
         expect(container.querySelector("h1")?.textContent).toBe("Notes");
         expect(
           [...container.querySelectorAll("li .title")].map((each) => each.textContent),
         ).toEqual(["Ada", "Bob"]);
       }),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
-      Screen.check("the pending row is marked", (container) => {
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
+      List.check("the pending row is marked", (container) => {
         expect(container.querySelector("li.pending .badge")?.textContent).toBe("saving");
       }),
-      Story.settled("Committed"),
-      Screen.check("nothing is pending", (container) => {
+      Db.settled("Committed"),
+      List.check("nothing is pending", (container) => {
         expect(container.querySelector("li.pending")).toBeNull();
       }),
     );
@@ -240,8 +241,8 @@ describe("f(mounted DOM, check) → what is rendered, as elements", () => {
     const failure = await story
       .with({ name: "check fails" })(
         exist(ada),
-        Screen.render(<NoteList account="acc-1" />, { every: false }),
-        Screen.check("a heading that is not there", (container) => {
+        List.render(<NoteList account="acc-1" />, { every: false }),
+        List.check("a heading that is not there", (container) => {
           expect(container.querySelector("h2")?.textContent).toBe("Notes");
         }),
       )
@@ -254,18 +255,18 @@ describe("f(mounted DOM, check) → what is rendered, as elements", () => {
   });
 
   it("f(check before render) → fails naming what to do", async () => {
-    const failure = await story(Screen.check("too early", () => {})).then(
+    const failure = await story(List.check("too early", () => {})).then(
       () => undefined,
       (error: Story.StoryFailure) => error,
     );
 
-    expect(failure?.message).toContain("nothing is rendered yet: Screen.render(element) first");
+    expect(failure?.message).toContain("nothing is rendered yet: List.render(element) first");
   });
 });
 
 describe("f(screen misuse) → clear errors", () => {
   it("f(render in a story without a name) → fails naming the step", async () => {
-    const failure = await story(exist(ada), Screen.render(<NoteList account="acc-1" />)).then(
+    const failure = await story(exist(ada), List.render(<NoteList account="acc-1" />)).then(
       () => undefined,
       (error: Story.StoryFailure) => error,
     );
@@ -276,7 +277,7 @@ describe("f(screen misuse) → clear errors", () => {
   });
 
   it("f(render in a hostless story) → needs a host", async () => {
-    const failure = await Story.make()(Screen.render(<NoteList account="acc-1" />)).then(
+    const failure = await Story.make()(List.render(<NoteList account="acc-1" />)).then(
       () => undefined,
       (error: Story.StoryFailure) => error,
     );
@@ -285,11 +286,11 @@ describe("f(screen misuse) → clear errors", () => {
   });
 
   it("f(story ends) → the DOM globals are removed again", async () => {
-    await story.with({ name: "rename settles", invariants: Story.invariants })(
+    await story.with({ name: "rename settles", invariants: Db.invariants })(
       exist(ada, bob),
-      Screen.render(<NoteList account="acc-1" />),
-      Story.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
-      Story.settled("Committed"),
+      List.render(<NoteList account="acc-1" />),
+      Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
+      Db.settled("Committed"),
     );
 
     expect("document" in globalThis).toBe(false);
