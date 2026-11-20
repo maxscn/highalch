@@ -31,8 +31,8 @@ parallel, and start no dev servers.
 - **Packages.** Two npm scopes in one workspace. LowAlch (`@lowalch/*`) converts alchemy
   Domain primitives for other infrastructure; HighAlch (`@highalch/*`) verifies apps built on
   them. `@lowalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
-  `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./lowalch`, `./xstate`, `./screen`,
-  `./takumi`). Shared
+  `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./lowalch`, `./tanstack-form`,
+  `./xstate`, `./screen`, `./takumi`, `./vite`, and the internal `./react-form`). Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy
@@ -50,6 +50,10 @@ parallel, and start no dev servers.
     `node:` files (the runner keeps its traces and replays with `node:fs`, `node:path` and
     `node:url`); only `@highalch/story/takumi` (a screen painter) imports `takumi-js`.
   - `@lowalch/tanstack-db` never imports `@highalch/story`.
+  - Only `@highalch/story/tanstack-form` imports `@tanstack/react-form`; stories find the app's
+    forms through the `highalch()` Vite plugin (`@highalch/story/vite`), never a hook in the app.
+  - No module exports `then` (`import()` would treat the module as a thenable and hang): put `then`
+    on a namespace object (`Db.then`, `Machine.then`, `Form.then`).
   - The story runner (`@highalch/story`'s root) imports neither TanStack DB nor LowAlch;
     `@highalch/story/tanstack-db` never imports LowAlch; only `./lowalch` and `./xstate` do.
 - **Internals.** `@highalch/story` reaches core internals only through `@lowalch/tanstack-db/internal`.
@@ -72,9 +76,10 @@ parallel, and start no dev servers.
   memory with real clients. Domain steps (`Story.given`, `Story.remote`, the transport's faults), data steps
   (`Db.when`, `Db.then`, `Db.settled`, `Db.rejected`, ...) and machine steps (`Machine.given` stepped purely, `Machine.start` running) compose in one
   story. `explore` generates interleavings checked against `Db.rules`.
-- `examples/` holds bugs a story catches: each a broken and an approved variant of a view or
-  machine, one story run against both, both variants' frames as reviewed baselines
-  (`examples/baselines/takumi/`). Its components and machines are fixtures too.
+- `packages/examples` (`@highalch/examples`, private) holds bugs a story catches: each a broken
+  and an approved variant of a view, machine or form, one story run against both, both variants'
+  frames as reviewed baselines (`packages/examples/tests/baselines/takumi/`). Other tests import
+  its components, machines and forms by its package name as fixtures.
 - Shared example Domains and views live in `fixtures/` (`notebook.ts`, `ledger.ts`, `notes.ts`,
   `editor.ts`, `note-list.tsx`). They import `@lowalch/*` and `@highalch/*` like a consumer does.
 - Tests run from source. The aliases in `vite.config.ts` and the `paths` in

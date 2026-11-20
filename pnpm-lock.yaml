@@ -188,6 +188,9 @@ catalogs:
     '@tanstack/react-db':
       specifier: 1.0.0-rc.1.5
       version: 1.0.0-rc.1.5
+    '@tanstack/react-form':
+      specifier: 1.33.5
+      version: 1.33.5
     '@types/node':
       specifier: ^24
       version: 24.19.2
@@ -272,6 +275,51 @@ importers:
         specifier: 'catalog:'
         version: 6.0.0-beta.3
 
+  packages/examples:
+    devDependencies:
+      '@alchemy.run/domain':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.87(alchemy@2.0.0-beta.87(@types/react@19.2.17)(@voidzero-dev/vite-plus-core@1.5.1(@types/node@24.19.2)(typescript@7.0.2)(yaml@2.9.1))(effect@4.1.4)(ws@8.23.0))(effect@4.1.4)
+      '@effect/atom-react':
+        specifier: 'catalog:'
+        version: 4.1.4(effect@4.1.4)(react@19.2.7)(scheduler@0.27.0)
+      '@highalch/story':
+        specifier: workspace:*
+        version: link:../story
+      '@lowalch/tanstack-db':
+        specifier: workspace:*
+        version: link:../tanstack-db
+      '@tanstack/db':
+        specifier: 'catalog:'
+        version: 1.0.0-rc.1.5(typescript@7.0.2)
+      '@tanstack/react-db':
+        specifier: 'catalog:'
+        version: 1.0.0-rc.1.5(react@19.2.7)(typescript@7.0.2)
+      '@tanstack/react-form':
+        specifier: 'catalog:'
+        version: 1.33.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.17
+      '@xstate/effect':
+        specifier: 'catalog:'
+        version: 1.0.0-beta.2(@oxlint/plugins@1.91.0)(effect@4.1.4)(xstate@6.0.0-beta.3)
+      effect:
+        specifier: 'catalog:'
+        version: 4.1.4
+      react:
+        specifier: 'catalog:'
+        version: 19.2.7
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.5.1(@types/node@24.19.2)(@vitest/ui@5.1.0)(happy-dom@20.11.1)(typescript@7.0.2)(yaml@2.9.1)
+      xstate:
+        specifier: 'catalog:'
+        version: 6.0.0-beta.3
+
   packages/story:
     devDependencies:
       '@alchemy.run/domain':
@@ -289,6 +337,9 @@ importers:
       '@tanstack/react-db':
         specifier: 'catalog:'
         version: 1.0.0-rc.1.5(react@19.2.7)(typescript@7.0.2)
+      '@tanstack/react-form':
+        specifier: 'catalog:'
+        version: 1.33.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
@@ -1015,6 +1066,18 @@ packages:
     peerDependencies:
       typescript: '>=4.7'
 
+  '@tanstack/devtools-event-client@0.4.4':
+    resolution: {integrity: sha512-6T5Yop/793YI+H+5J8Hsyj4kCih9sl4t3ElLgKioW5hk3ocn+ZdSJ94tT7vL7uabxSugWYBZlOTMPzEw2puvQw==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  '@tanstack/form-core@1.33.5':
+    resolution: {integrity: sha512-3dfx9MBP0aq5sXKteikG629X9oviptrQj0IFRk9YGcb+lB7Kv5x8S17oOSk1wUWgjQZ4xVJEMbKwOAODymocgA==}
+
+  '@tanstack/pacer-lite@0.1.1':
+    resolution: {integrity: sha512-y/xtNPNt/YeyoVxE/JCx+T7yjEzpezmbb+toK8DDD1P4m7Kzs5YR956+7OKexG3f8aXgC3rLZl7b1V+yNUSy5w==}
+    engines: {node: '>=18'}
+
   '@tanstack/pacer-lite@0.3.0':
     resolution: {integrity: sha512-+YeHKWX5Zd1Irga2smwAolGtzOcf8VVYhM2QI5XEA5TN58iKKufTjhvrbTCEgLLglR1ynHMGVT/l4m5PkwOdaw==}
     engines: {node: '>=20'}
@@ -1023,6 +1086,24 @@ packages:
     resolution: {integrity: sha512-6IDdNA8iNYtEAfbFkI/32gKC2INlV6b17CweaDpyfLdkQ+LyX/qWxDFBL6rKsS29crkAitepPkG3zXDHZpFBEw==}
     peerDependencies:
       react: '>=18.0.0'
+
+  '@tanstack/react-form@1.33.5':
+    resolution: {integrity: sha512-LlRB28qJwO/QCGaHvWnbdh4haBgTFiZVmzA2uzxSBS3YA7/IqrQ6HOBK70CkFQ+DbflZ7NawsmSln13h5iIdTA==}
+    peerDependencies:
+      '@tanstack/react-start': '*'
+      react: ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@tanstack/react-start':
+        optional: true
+
+  '@tanstack/react-store@0.11.2':
+    resolution: {integrity: sha512-oj5O5DmiMWE+ih+SioX2ayC1kbK7d3fpLx0B75fPJr9nY3zU+hoW010yr64qXsY/9fyiLVE2bn5mGNV3owm8RQ==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  '@tanstack/store@0.11.2':
+    resolution: {integrity: sha512-sJ4mjol8uQsHV0gOJzzjwXfh2Fwm+Sz0+8deqiTm4jGbMdjzNSW+xZCFm0kUa870uhd8yi+DpKnZb5Kc4apa0Q==}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -1803,6 +1884,11 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
+  use-sync-external-store@1.7.0:
+    resolution: {integrity: sha512-6L+EeigHMQhdaIPNIFUKwfWJSwWFQ8gJbJ2DLOs5sDIegTwR9fRxvnM3uciHKjIZhFz+KAv2emhWMRvDmMcY8A==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   vite-plus@1.5.1:
     resolution: {integrity: sha512-Ckl9Vc5fg3BC8SlxPKujSQz+p1CbFy+5++yrFVbwZRdcpHzj0ExaWuNccKdnW128xGU8ECX6RK7n5YPXSHFWpg==}
     engines: {node: ^22.18.0 || ^24.11.0 || >=26.0.0}
@@ -2332,6 +2418,16 @@ snapshots:
       '@tanstack/pacer-lite': 0.3.0
       typescript: 7.0.2
 
+  '@tanstack/devtools-event-client@0.4.4': {}
+
+  '@tanstack/form-core@1.33.5':
+    dependencies:
+      '@tanstack/devtools-event-client': 0.4.4
+      '@tanstack/pacer-lite': 0.1.1
+      '@tanstack/store': 0.11.2
+
+  '@tanstack/pacer-lite@0.1.1': {}
+
   '@tanstack/pacer-lite@0.3.0': {}
 
   '@tanstack/react-db@1.0.0-rc.1.5(react@19.2.7)(typescript@7.0.2)':
@@ -2340,6 +2436,23 @@ snapshots:
       react: 19.2.7
     transitivePeerDependencies:
       - typescript
+
+  '@tanstack/react-form@1.33.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@tanstack/form-core': 1.33.5
+      '@tanstack/react-store': 0.11.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react: 19.2.7
+    transitivePeerDependencies:
+      - react-dom
+
+  '@tanstack/react-store@0.11.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@tanstack/store': 0.11.2
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+      use-sync-external-store: 1.7.0(react@19.2.7)
+
+  '@tanstack/store@0.11.2': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -2959,6 +3072,10 @@ snapshots:
       '@typescript/typescript-win32-x64': 7.0.2
 
   undici-types@7.24.6: {}
+
+  use-sync-external-store@1.7.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
 
   vite-plus@1.5.1(@types/node@24.19.2)(@vitest/ui@5.1.0)(happy-dom@20.11.1)(typescript@7.0.2)(yaml@2.9.1):
     dependencies:

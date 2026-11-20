@@ -5,7 +5,7 @@ import { Explore, ExploreFailure } from "@highalch/story";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
-import { approvedEditor, brokenEditor } from "../../../examples/swallowed-rejection";
+import { SwallowedRejection } from "@highalch/examples";
 import {
   address,
   NoteAggregate,
@@ -17,6 +17,8 @@ import {
   type Note,
 } from "../../../fixtures/notebook";
 import { notes } from "../../../fixtures/notes";
+
+const { approvedEditor, brokenEditor } = SwallowedRejection;
 
 const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, services: store }), {
   scope: "acc-1",

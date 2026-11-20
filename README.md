@@ -189,9 +189,9 @@ that lead there.
 
 ## Examples
 
-[`examples/`](examples/README.md) shows bugs a story catches (a list that claims to be empty while
-it loads, a rejected rename that stays on screen, a rejected save that says "Saved"), each with
-the broken screen next to the approved one.
+[`packages/examples`](packages/examples/README.md) shows bugs a story catches (a list that claims to be
+empty while it loads, a rejected rename that stays on screen, a rejected save that says "Saved",
+a form that forgets your draft), each with the broken variant next to the approved one.
 
 ## Repository
 
@@ -200,7 +200,7 @@ A Vite+ (`vp`) pnpm workspace:
 ```
 packages/tanstack-db   @lowalch/tanstack-db
 packages/story         @highalch/story
-examples/              bugs a story catches, broken vs approved (tests and fixtures)
+packages/examples      @highalch/examples (private): bugs a story catches, broken vs approved
 fixtures/              example Domains and views shared by both packages' tests (not published)
 scripts/               check-patterns.ts: the packages' import boundaries
 ```

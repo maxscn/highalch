@@ -90,8 +90,7 @@ export const noFlickerBack: Rule = {
 
         const caused = entries.flatMap((entry) => {
           const own =
-            entry.commandId === run.transaction.id ||
-            entry.commandId.startsWith(`${run.transaction.id}:`);
+            entry.commandId === run.commandId || entry.commandId.startsWith(`${run.commandId}:`);
 
           if (entry.key !== run.key || entry.entity !== entity || !own) return [];
 

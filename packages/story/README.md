@@ -6,14 +6,16 @@ given server history, when a client, another client or the world acts, then what
 shows, its read state and how each command settled. Optional screen steps paint a filmstrip of a
 mounted React component without a browser.
 
-| Entry point                   | What                                                                                                |
-| ----------------------------- | --------------------------------------------------------------------------------------------------- |
-| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time)               |
-| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)       |
-| `@highalch/story/lowalch`     | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, feed rules, view helpers |
-| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                 |
-| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom                   |
-| `@highalch/story/takumi`      | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`                   |
+| Entry point                     | What                                                                                                |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `@highalch/story`               | The story runner, the Domain's steps (history, other clients, transport faults, time)               |
+| `@highalch/story/tanstack-db`   | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)       |
+| `@highalch/story/tanstack-form` | `Form`: type into and submit the app's own forms, readers, `Form.typing` for explorations           |
+| `@highalch/story/vite`          | `highalch()`: the Vite plugin through which stories find the forms the app mounts                   |
+| `@highalch/story/lowalch`       | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, feed rules, view helpers |
+| `@highalch/story/xstate`        | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                 |
+| `@highalch/story/screen`        | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom                   |
+| `@highalch/story/takumi`        | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`                   |
 
 Peer dependencies: `effect`, `@alchemy.run/domain`, `@tanstack/db` and `react`; optional
 `@lowalch/tanstack-db` (for `/lowalch` and `/xstate`), `xstate` and `@xstate/effect` (for
@@ -320,6 +322,37 @@ await Explore.run({
   walks), so the replay reproduces it.
 - `Db.commands()` reads the commands the clients ran (label, who ran them, how they ended), for
   rules about outcomes: "an editor says Saved only after its save committed".
+
+**Forms.** A form is the app's own `formOptions({...})` object, which its components spread into
+stock `useForm`; the app wires nothing. Add the kit's plugin to the Vite (Vitest) config the stories
+run with, `plugins: [highalch()]` from `@highalch/story/vite`: stories then see every mounted form,
+in mount order (the plugin hands app imports of `@tanstack/react-form` a wrapper whose `useForm`
+registers the form while its component is mounted; everything else is the stock module).
+
+```ts
+import { Form } from "@highalch/story/tanstack-form";
+
+Form.when(renameForm, "title", "locked"), // types: the field's onChange validators run
+Form.submit(renameForm), // its onSubmit runs; a command it sends is recorded like any other
+Db.rejected(new NoteLocked({ title: "locked" })),
+Form.then(renameForm, { values: { title: "locked" } }),
+```
+
+- A mounted form is an instance of a declared one when every option the declaration has (but its
+  default values, which components often set per instance) is the very object in the mounted form's
+  options. A step addressing a form with several mounted instances fails, listing them
+  (`renameForm #1 (NoteId: "n1", title: "Ada"); renameForm #2 (…)`); pick one with
+  `Form.where(renameForm, (values) => values.NoteId === "n1")`. It never guesses.
+- Readers: `Form.state(target)` (one instance's state; `undefined` when none is mounted) and
+  `Form.all(form)` (every instance's, for rules that must hold of each).
+- `Form.typing(form, { fields?, values?, instances? })` is an exploration's source: every field
+  (or `fields`) with every value, typed into the first mounted instance (or the first
+  `instances`). Values come from `values`, or are sampled (seeded, the same on every run) from the
+  form's validator when it is an Effect Schema struct (`Schema.toStandardSchemaV1(Struct)`); with
+  any other validator the types require `values`. Forms no source names do not join.
+- Commands the app sends itself (a form's `onSubmit`, a component's handler) are recorded as the
+  app's, so `Db.rejected`, `Db.commands()` and rest see them: pending until their reply arrives,
+  then `Committed` or `Rejected`.
 
 **Traces.** `story.with({ name, trace: true, traces, update })` keeps a text snapshot of the story:
 each step, then what every adapter shows after it (each observed source's rows, the commands and

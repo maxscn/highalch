@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
 import * as LowAlch from "@lowalch/tanstack-db";
-import { notes } from "../fixtures/notes";
+import { notes } from "../../../fixtures/notes";
 
 /**
  * Example: **a rejected rename stays on screen.**
@@ -76,4 +76,4 @@ export const BrokenTitles = titles(BrokenTitle);
 
 export const ApprovedTitles = titles(ApprovedTitle);
 
-export { css } from "../fixtures/note-list";
+export { css } from "../../../fixtures/note-list";

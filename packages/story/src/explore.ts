@@ -147,9 +147,12 @@ const aboutOf = (failure: StoryFailure) => failure.reason.replace(/step \d+ \([^
 /** Runs one sequence quietly (nothing captured); its failure, if any. */
 const attempt = async (exploration: Exploration, sequence: ReadonlyArray<Move>) => {
   try {
-    await exploration.story.with({ rules: exploration.rules, capture: "off", trace: false })(
-      stepsOf(exploration, sequence),
-    );
+    await exploration.story.with({
+      rules: exploration.rules,
+      capture: "off",
+      trace: false,
+      name: exploration.name,
+    })(stepsOf(exploration, sequence));
 
     return Option.none<StoryFailure>();
   } catch (error) {

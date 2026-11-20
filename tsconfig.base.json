@@ -19,9 +19,13 @@
       "@lowalch/tanstack-db/react": ["./packages/tanstack-db/src/react.tsx"],
       "@lowalch/tanstack-db/xstate": ["./packages/tanstack-db/src/xstate/index.ts"],
       "@lowalch/tanstack-db/internal": ["./packages/tanstack-db/src/internal.ts"],
+      "@highalch/examples": ["./packages/examples/src/index.ts"],
       "@highalch/story": ["./packages/story/src/index.ts"],
       "@highalch/story/tanstack-db": ["./packages/story/src/tanstack-db/index.ts"],
       "@highalch/story/lowalch": ["./packages/story/src/lowalch/index.ts"],
+      "@highalch/story/tanstack-form": ["./packages/story/src/tanstack-form/index.ts"],
+      "@highalch/story/react-form": ["./packages/story/src/tanstack-form/react-form.ts"],
+      "@highalch/story/vite": ["./packages/story/src/vite.ts"],
       "@highalch/story/xstate": ["./packages/story/src/xstate/index.ts"],
       "@highalch/story/screen": ["./packages/story/src/screen/index.ts"],
       "@highalch/story/takumi": ["./packages/story/src/takumi/index.ts"]

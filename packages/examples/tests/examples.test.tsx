@@ -2,17 +2,21 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
-import { NoteLocked } from "../fixtures/notebook";
-import { notes } from "../fixtures/notes";
-import * as EmptyWhileLoading from "./empty-while-loading";
-import { ada, bob, exist, failureOf, list, screen, story } from "./shared";
-import * as StickyOptimistic from "./sticky-optimistic";
-import * as SwallowedRejection from "./swallowed-rejection";
+import {
+  EmptyWhileLoading,
+  Shared,
+  StickyOptimistic,
+  SwallowedRejection,
+} from "@highalch/examples";
+import { NoteLocked } from "../../../fixtures/notebook";
+import { notes } from "../../../fixtures/notes";
+
+const { ada, bob, exist, failureOf, list, screen, story } = Shared;
 
 /**
  * Each example runs one story against two variants of a view (or machine): the broken one, which
  * the story catches with a readable failure, and the approved one, which passes. Both variants'
- * frames are reviewed baselines under `examples/baselines/takumi/`, so the broken screen and the
+ * frames are reviewed baselines under `tests/baselines/takumi/`, so the broken screen and the
  * approved one sit side by side.
  */
 

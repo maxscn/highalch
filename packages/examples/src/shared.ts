@@ -10,8 +10,8 @@ import {
   notebook,
   store,
   type Note,
-} from "../fixtures/notebook";
-import { notes } from "../fixtures/notes";
+} from "../../../fixtures/notebook";
+import { notes } from "../../../fixtures/notes";
 
 /**
  * The examples' story runner: the Notebook Domain in memory with LowAlch clients, one account.
@@ -59,8 +59,8 @@ export const screen = (css: string) =>
     width: 360,
     height: 200,
     painter: Takumi.layer(),
-    baselines: new URL("./baselines/", import.meta.url),
-    output: new URL("./artifacts/", import.meta.url),
+    baselines: new URL("../tests/baselines/", import.meta.url),
+    output: new URL("../artifacts/", import.meta.url),
     update: process.env.UPDATE_SCREENS === "1",
   });
 

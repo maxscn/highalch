@@ -175,12 +175,13 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   };
 
   /**
-   * At rest: settled since the last change, no wire held down, and nothing an adapter tracks in
-   * flight (every command ended).
+   * At rest: settled since the last change, no wire held down or holding a reply (a command the
+   * app sent, from a story step or its own code, has not been answered), and nothing an adapter
+   * tracks in flight (every command ended).
    */
   rest = () =>
     this.settled === this.tick &&
-    this.all().every((wire) => !wire.dropped) &&
+    this.all().every((wire) => !wire.dropped && wire.held === 0) &&
     this.rests.every((check) => check());
 
   /**
