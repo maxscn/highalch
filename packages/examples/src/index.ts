@@ -4,6 +4,7 @@
  * `import { SwallowedRejection } from "@highalch/examples"`.
  */
 export * as EmptyWhileLoading from "./empty-while-loading";
+export * as OverflowingTitle from "./overflowing-title";
 export * as ResetOnSubmit from "./reset-on-submit";
 export * as Shared from "./shared";
 export * as StickyOptimistic from "./sticky-optimistic";

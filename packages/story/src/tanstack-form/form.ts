@@ -223,7 +223,10 @@ const schemaOf = (form: Declared) => {
   );
 };
 
-/** Values for a field, sampled from its schema (seeded, so every run tries the same ones). */
+/**
+ * Values for a field: its schema's boundaries, then values sampled from it (seeded, so every run
+ * tries the same ones).
+ */
 const sampled = (
   form: Declared,
   field: string,
@@ -240,8 +243,31 @@ const sampled = (
     // SAFETY: a field of a struct schema is a schema; sampling it needs no services.
     const arbitrary = Arbitrary.schema(fieldSchema as Schema.Top & Schema.Constraint);
 
-    return Option.some(Effect.runSync(Arbitrary.sampleEffect(arbitrary, { count: 3, seed })));
+    return Option.some([
+      ...boundaries(fieldSchema),
+      ...Effect.runSync(Arbitrary.sampleEffect(arbitrary, { count: 3, seed })),
+    ]);
   });
+
+/**
+ * The values at a string field's declared edge, which random samples rarely reach (they stay
+ * short): the longest value its schema accepts (`Schema.isMaxLength(60)`), as one word of the
+ * widest letter, since an unbreakable word is what a layout fails on. Read from the schema's
+ * checks, so every run tries the same values.
+ */
+const boundaries = (schema: Schema.Top): ReadonlyArray<string> =>
+  (schema.ast.checks ?? []).flatMap((check) =>
+    Option.liftPredicate(
+      Reflect.get(check.annotations ?? {}, "arbitraryConstraint"),
+      Predicate.isObject,
+    ).pipe(
+      Option.map((constraint) => Reflect.get(constraint, "maxLength")),
+      Option.filter(Predicate.isNumber),
+      Option.filter((length) => length > 0),
+      Option.map((length) => "W".repeat(length)),
+      Option.toArray,
+    ),
+  );
 
 /** Whether a declared form's values can be generated: its validator is an Effect Schema struct. */
 type Generated<F> = F extends { readonly validators?: infer V }
@@ -284,8 +310,8 @@ const typeInto = (form: Declared, typed: Typed): Step =>
 
 /**
  * The user typing into a form, as an exploration's source: every field (or `fields`), every value
- * (its own `values`, or ones sampled from the form's Effect Schema), into the first mounted
- * instance (or the first `instances`). Forms no source names do not join the exploration.
+ * (its own `values`, or its Effect Schema's boundaries and values sampled from it), into the
+ * first mounted instance (or the first `instances`). Forms no source names do not join the exploration.
  */
 export const typing = <F extends Declared>(form: F, options: Typing<F>): AnySource => {
   const defaults: unknown = Reflect.get(form, "defaultValues");

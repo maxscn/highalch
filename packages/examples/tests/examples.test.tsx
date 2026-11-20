@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
+import { Explore } from "@highalch/story";
+import { Screen } from "@highalch/story/screen";
+import { Takumi } from "@highalch/story/takumi";
+import { Form } from "@highalch/story/tanstack-form";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
 import {
   EmptyWhileLoading,
+  OverflowingTitle,
   Shared,
   StickyOptimistic,
   SwallowedRejection,
@@ -111,4 +116,44 @@ describe("example: a rejected save says Saved", () => {
 
   it("approved: Failed with the typed rejection", () =>
     saved("swallowed rejection (approved)", SwallowedRejection.approvedEditing("n1")));
+});
+
+describe("example: a long title runs off its card", () => {
+  // Only this example's rule reads a layout, so only its screen has a layout engine.
+  const Card = screen(OverflowingTitle.css, 240).pipe(Takumi.layout());
+
+  const fits = Explore.rule("nothing on screen spills out of its box", {
+    at: "step",
+    reads: { layout: Card.layout() },
+    holds: ({ layout }) => Screen.overflowing(layout).length === 0,
+  });
+
+  const renamed = (name: string, view: React.JSX.Element) =>
+    story.with({ name, rules: [...Db.rules, fits] })(
+      exist(ada),
+      Card.render(view),
+      Form.when(OverflowingTitle.titleForm, "title", "W".repeat(60)),
+      Form.submit(OverflowingTitle.titleForm),
+      Db.settled("Committed"),
+    );
+
+  it("broken: the heading runs off the card once the title shows", async () => {
+    const failure = await failureOf(
+      renamed(
+        "overflowing title (broken)",
+        <OverflowingTitle.BrokenNoteCard NoteId="n1" title="Ada" />,
+      ),
+    );
+
+    expect(failure?.step).toBe(4);
+    expect(failure?.message).toContain(
+      'main.page > section.card > h1.title: text \\"WWWWWWWWWWWW…\\" (60 characters) runs 788px past its right edge',
+    );
+  });
+
+  it("approved: the heading wraps inside the card", () =>
+    renamed(
+      "overflowing title (approved)",
+      <OverflowingTitle.ApprovedNoteCard NoteId="n1" title="Ada" />,
+    ));
 });

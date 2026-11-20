@@ -3,7 +3,6 @@ import * as Story from "@highalch/story";
 import { Explore, ExploreFailure } from "@highalch/story";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Screen } from "@highalch/story/screen";
-import { Takumi } from "@highalch/story/takumi";
 import { Form } from "@highalch/story/tanstack-form";
 import { Db } from "@highalch/story/tanstack-db";
 import { ResetOnSubmit } from "@highalch/examples";
@@ -25,13 +24,8 @@ const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, serv
   scope: "acc-1",
 });
 
-const View = Screen.make({
-  width: 360,
-  height: 120,
-  painter: Takumi.layer(),
-  baselines: new URL("./baselines/", import.meta.url),
-  output: new URL("../artifacts/stories/", import.meta.url),
-});
+/** The forms are mounted, never painted: no story here compares a frame. */
+const View = Screen.make({ width: 360, height: 120 });
 
 const ada: Note = { NoteId: "n1", account: "acc-1", BookId: "b1", title: "Ada", pinned: false };
 
@@ -49,7 +43,7 @@ describe("f(form steps) → the app's own form, found without wiring", () => {
     await story.with({ name: "form keeps draft", rules: Db.rules })(
       exist(ada),
       Db.open(list),
-      View.render(<ApprovedRenameForm NoteId="n1" title="Ada" />, { every: false }),
+      View.render(<ApprovedRenameForm NoteId="n1" title="Ada" />),
       Form.then(renameForm, { values: { title: "Ada" }, canSubmit: true }),
       Form.when(renameForm, "title", "locked"),
       Form.submit(renameForm),
@@ -68,7 +62,6 @@ describe("f(form steps) → the app's own form, found without wiring", () => {
             <ApprovedRenameForm NoteId="n1" title="Ada" />
             <ApprovedRenameForm NoteId="n2" title="Bob" />
           </>,
-          { every: false },
         ),
         Form.when(renameForm, "title", "x"),
       )
@@ -89,7 +82,6 @@ describe("f(form steps) → the app's own form, found without wiring", () => {
           <ApprovedRenameForm NoteId="n1" title="Ada" />
           <ApprovedRenameForm NoteId="n2" title="Bob" />
         </>,
-        { every: false },
       ),
       Form.when(
         Form.where(renameForm, (values) => values.NoteId === "n2"),
@@ -127,7 +119,7 @@ const settle = Explore.source("settle", { step: () => Story.settle() });
 const explorationOf = (name: string, view: React.JSX.Element) => ({
   name,
   story,
-  setup: [exist(ada), Db.open(list), View.render(view, { every: false })],
+  setup: [exist(ada), Db.open(list), View.render(view)],
   sources: [
     Form.typing(renameForm, { fields: ["title"], values: { title: ["Ada 2", "locked"] } }),
     submit,
