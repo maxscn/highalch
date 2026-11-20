@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
 import { Db } from "@highalch/story/tanstack-db";
 import { Screen } from "@highalch/story/screen";
+import { Takumi } from "@highalch/story/takumi";
 import { install, serialize } from "../src/screen/dom";
 import { Machine } from "@highalch/story/xstate";
 import { editor } from "../../../fixtures/editor";
@@ -35,6 +36,7 @@ const List = Screen.make({
   baselines: new URL("./baselines/", import.meta.url),
   output: new URL("../artifacts/stories/", import.meta.url),
   update: process.env.UPDATE_SCREENS === "1",
+  painter: Takumi.layer(),
 });
 
 /** The editor's screen: the same places, its own stylesheet. */
@@ -45,6 +47,7 @@ const Editor = Screen.make({
   baselines: new URL("./baselines/", import.meta.url),
   output: new URL("../artifacts/stories/", import.meta.url),
   update: process.env.UPDATE_SCREENS === "1",
+  painter: Takumi.layer(),
 });
 
 const ada: Note = { NoteId: "n1", account: "acc-1", BookId: "b1", title: "Ada", pinned: false };

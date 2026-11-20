@@ -44,7 +44,9 @@ export {
   Mismatch,
 } from "./steps";
 
-export type { Stage } from "./stage";
+export { CurrentStage } from "./stage";
+
+export type { Adapter, Done, Stage } from "./stage";
 
 export { registryOf as registry } from "./atoms";
 
@@ -54,6 +56,6 @@ export type { Invariant, Moment } from "./invariants";
 
 export { transport, Wire } from "./wire";
 
-export { json, plain, retryTransport, World, Observed } from "./world";
+export { json, macrotask, World } from "./world";
 
-export type { Client, Entry, Observation, Options, Outcome, Run, Shown, Source } from "./world";
+export type { Field, Options, Plain } from "./world";

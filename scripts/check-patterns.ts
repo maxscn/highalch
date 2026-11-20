@@ -4,8 +4,10 @@
  * - `@lowalch/tanstack-db` imports only effect, alchemy Domain, TanStack DB and React; XState only in its
  *   `xstate` entry.
  * - `@highalch/story` additionally imports `@lowalch/tanstack-db`; XState only in its `xstate` entry;
- *   takumi, happy-dom, react-dom and node files only in its `screen` entry.
- * - Neither reaches an XState or screen entry from outside it (type-only imports are erased).
+ *   happy-dom, react-dom, `@effect/atom-react` and node files only in its `screen` entry; takumi
+ *   (and the node file reading its WASM) only in its `takumi` entry.
+ * - Neither reaches an XState, screen or takumi entry from outside it (type-only imports are
+ *   erased); a painter entry (`takumi`) may reach the screen entry it paints for.
  * - `@lowalch/tanstack-db` never imports the story kit.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
  */
@@ -42,8 +44,8 @@ const files = (directory: string): Array<string> =>
 
 const core = /^(?:effect|react|@alchemy\.run\/domain|@tanstack\/(?:db|react-db))(?:\/|$)/;
 const xstate = /^(?:xstate|@xstate\/effect)(?:\/|$)/;
-const screen =
-  /^(?:takumi-js|happy-dom|react-dom|@effect\/atom-react|node:(?:fs|path|url|zlib))(?:\/|$)/;
+const screen = /^(?:happy-dom|react-dom|@effect\/atom-react|node:(?:fs|path|url|zlib))(?:\/|$)/;
+const takumi = /^(?:takumi-js|node:fs)(?:\/|$)/;
 const effects = ["useEffect", "useLayoutEffect", "useInsertionEffect"];
 
 export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.url))) => {
@@ -64,6 +66,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
     const inDb = inside(file, db);
     const xstateEntry = inside(file, join(db, "xstate")) || inside(file, join(story, "xstate"));
     const screenEntry = inside(file, join(story, "screen"));
+    const takumiEntry = inside(file, join(story, "takumi"));
 
     // SAFETY: oxc's program body; only the fields of `Declaration` are read.
     for (const node of program.body as unknown as ReadonlyArray<Declaration>) {
@@ -89,11 +92,12 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         !core.test(module) &&
         !(!inDb && /^@lowalch\/tanstack-db(?:\/|$)/.test(module)) &&
         !(xstateEntry && xstate.test(module)) &&
-        !(screenEntry && screen.test(module))
+        !(screenEntry && screen.test(module)) &&
+        !(takumiEntry && takumi.test(module))
       )
         report(
           node,
-          `${module}: the packages import only effect, alchemy Domain, TanStack DB and React (XState only in the xstate entries; takumi, happy-dom, react-dom, @effect/atom-react and node files only in @highalch/story/screen)`,
+          `${module}: the packages import only effect, alchemy Domain, TanStack DB and React (XState only in the xstate entries; happy-dom, react-dom, @effect/atom-react and node files only in @highalch/story/screen; takumi only in @highalch/story/takumi)`,
         );
 
       if (
@@ -110,13 +114,21 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
 
       if (
         !screenEntry &&
+        !takumiEntry &&
         !typeOnly &&
         (module === "@highalch/story/screen" || inside(resolved, join(story, "screen")))
       )
         report(
           node,
-          "Only @highalch/story/screen imports takumi, happy-dom and react-dom: other entries do not",
+          "Only @highalch/story/screen imports happy-dom and react-dom: other entries do not",
         );
+
+      if (
+        !takumiEntry &&
+        !typeOnly &&
+        (module === "@highalch/story/takumi" || inside(resolved, join(story, "takumi")))
+      )
+        report(node, "Only @highalch/story/takumi imports takumi: other entries do not");
 
       if (inDb && (/^@highalch\/story(?:\/|$)/.test(module) || inside(resolved, story)))
         report(node, "@lowalch/tanstack-db never imports the story kit");

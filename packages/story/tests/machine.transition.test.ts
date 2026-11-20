@@ -262,7 +262,7 @@ describe("f(machines and data in one story) → what only the combination shows"
       ),
       Machine.then({ state: "Saved" }),
       Story.check("nothing was sent", (world) => {
-        expect(world.client().wire.sent).toEqual([]);
+        expect(world.wire().sent).toEqual([]);
       }),
     );
   });

@@ -1,31 +1,18 @@
 import type * as Aggregate from "@alchemy.run/domain/Aggregate";
 import type { Step as AlchemyStep } from "@alchemy.run/domain/Story";
-import type { DbClient, Transaction } from "@tanstack/db";
 import { Effect, Exit, Option, Predicate } from "effect";
-import * as LowAlch from "@lowalch/tanstack-db";
-import { activate, type Settled, type TaggedFailure } from "@lowalch/tanstack-db";
-import type { Answer, Input } from "@lowalch/tanstack-db/internal";
-import {
-  json,
-  macrotask,
-  type Declared,
-  type Reply,
-  type Observed,
-  type Plain,
-  type Run,
-  type Shown,
-  type Source,
-  type World,
-} from "./world";
+import type { TaggedFailure } from "@lowalch/tanstack-db";
+import type { Answer } from "@lowalch/tanstack-db/internal";
+import { json, type World } from "./world";
 import { Mismatch, type Stage } from "./stage";
 import { transport } from "./wire";
 
 /**
  * One step of a story: a label for its report and how it interprets itself against the story's
- * run (`Stage`). Steps are plain values, and every kind carries its own interpretation: data steps
- * (`step`) act on the hosted world, machine steps (`@highalch/story/xstate`) keep their
- * machines on the stage, and a consumer's own kinds are built with `staged`. One runner runs them
- * all, in any order.
+ * run (`Stage`). Steps are plain values, and every kind carries its own interpretation: the
+ * Domain's steps (`step`) act on the hosted world, data, machine and screen steps keep their state
+ * in adapters the stage builds (`stage.use(adapter)`), and a consumer's own kinds are built with
+ * `staged`. One runner runs them all, in any order.
  */
 export type Step = {
   readonly label: string;
@@ -36,8 +23,8 @@ export type Step = {
 export type Steps = Step | ReadonlyArray<Steps>;
 
 /**
- * Builds a data step: it acts on (or checks) the hosted world. In a hostless story it fails at
- * once, naming the step.
+ * Builds a step of the Domain: it acts on (or checks) the hosted world. In a hostless story it
+ * fails at once, naming the step.
  */
 export const step = (label: string, run: (world: World) => Promise<void>): Step => ({
   label,
@@ -46,8 +33,9 @@ export const step = (label: string, run: (world: World) => Promise<void>): Step 
 
 /**
  * Builds a step of any kind from the stage: `stage.world` (the hosted world, `None` in a hostless
- * story), `stage.hosted(label)` (the world, or a failure naming the step) and `stage.slot(key)`
- * (state the kind keeps for the run). The machine steps are built so.
+ * story), `stage.hosted(label)` (the world, or a failure naming the step) and
+ * `stage.use(adapter)` (an adapter's service: the state a kind of step keeps for the run, built
+ * from its Layer). The data, machine and screen steps are built so.
  */
 export const staged = (label: string, run: (stage: Stage) => Promise<void>): Step => ({
   label,
@@ -55,37 +43,6 @@ export const staged = (label: string, run: (stage: Stage) => Promise<void>): Ste
 });
 
 export { Mismatch };
-
-const clip = (text: string, max = 100) => {
-  if (text.length <= max) return text;
-
-  return `${text.slice(0, max - 1)}…`;
-};
-
-/** A row in a report: its fields of interest (all when none are named), and its pending flag. */
-const brief = (shown: Shown, fields: ReadonlyArray<string>) => {
-  const picked = Option.match(
-    Option.liftPredicate(fields, (named) => named.length > 0),
-    {
-      onNone: () => shown.row,
-      onSome: (named) => Object.fromEntries(named.map((field) => [field, shown.row[field]])),
-    },
-  );
-
-  return `${clip(json(picked))}${shown.pending ? " (pending)" : ""}`;
-};
-
-/** Every state one key showed in an observed source, in order: `a → b (pending) → -`. */
-export const historyOf = (observed: Observed, key: string, fields: ReadonlyArray<string> = []) =>
-  observed.history
-    .flatMap((each) => {
-      if (each.key !== key) return [];
-
-      return [
-        Option.match(each.shown, { onNone: () => "-", onSome: (shown) => brief(shown, fields) }),
-      ];
-    })
-    .join(" → ");
 
 /** Does `actual` hold every field of `expected`, deeply? */
 export const partial = <E, A>(expected: E, actual: A): boolean => {
@@ -98,28 +55,6 @@ export const partial = <E, A>(expected: E, actual: A): boolean => {
   }
 
   return json(expected) === json(actual);
-};
-
-const asRow = (shown: Shown): Plain => ({ ...shown.row, $hasPendingWrites: shown.pending });
-
-/** The rows a source shows, as `then` compares them: by key, with `$hasPendingWrites`. */
-export type ShownRow<Row> = Row & { readonly $hasPendingWrites: boolean };
-
-/** What a `then` step expects of rows: by key order (each compared partially), or a predicate. */
-export type Expected<Row> =
-  | ReadonlyArray<Partial<Row> & { readonly $hasPendingWrites?: boolean }>
-  | ((rows: ReadonlyArray<ShownRow<Row>>) => boolean);
-
-/** Which client a step acts as, and the source's label in reports. */
-type Scoped = { readonly as?: string };
-
-/** Opens a source (once) in the step's client; a newly opened source is settled. */
-const opened = async <Row extends object>(world: World, source: Source<Row>, scope?: string) => {
-  const { observed, opened: fresh } = await world.observe(source, scope);
-
-  if (fresh) await world.settle();
-
-  return observed;
 };
 
 /**
@@ -193,282 +128,17 @@ export function remote(
   });
 }
 
-/** Materialises a source in the step's client and keeps it observed (`settle: false`: as is). */
-export const open = <Row extends object>(
-  source: Source<Row>,
-  options: Scoped & { readonly settle?: boolean } = {},
-) =>
-  step(`open ${source.id ?? "source"}`, async (world) => {
-    await world.observe(source, options.as);
-
-    if (options.settle !== false) await world.settle();
-  });
-
-/** The rows a source shows now, checked against what a `then` step expects of them. */
-const rowsHold = <Row extends object>(observed: Observed, expected: Expected<Row>) => {
-  const rows = observed.sorted();
-  const actual = rows.map(([, shown]) => asRow(shown));
-
-  const list = Option.liftPredicate(expected, Array.isArray);
-
-  const fields = Option.match(list, {
-    onNone: () => [],
-    onSome: (rows: ReadonlyArray<Plain>) => [...new Set(rows.flatMap(Object.keys))],
-  });
-
-  const holds = Option.match(list, {
-    onSome: (rows: ReadonlyArray<Plain>) =>
-      rows.length === actual.length && rows.every((row, index) => partial(row, actual[index])),
-    onNone: () => {
-      // SAFETY: not an array, so the predicate form; the rows are the source's rows.
-      const predicate = expected as (rows: ReadonlyArray<Plain>) => boolean;
-
-      return predicate(actual);
-    },
-  });
-
-  if (holds) return;
-
-  const keys = new Set(observed.history.map((each) => each.key));
-
-  throw new Mismatch(`${observed.label} does not show what was expected`, [
-    Option.match(list, {
-      onSome: (rows: ReadonlyArray<Plain>) => `expected ${clip(json(rows), 400)}`,
-      onNone: () => "expected rows for which the predicate holds",
-    }),
-    `observed ${clip(json(rows.map(([, shown]) => asRow(shown))), 400)}`,
-    ...[...keys].map((key) => `${key}: ${historyOf(observed, key, fields)}`),
-  ]);
-};
-
-/** A read state as a `then` step names it: one of `match`'s own tags, or a typed error. */
-export type ReadState = "Loading" | "Retrying" | "Ready" | "Missing" | TaggedFailure;
-
-/** Whether a state is what a `then` step expects: the tag (and fields), or the error's fields. */
-const matches = (expected: ReadState, fields: Plain, actual: TaggedFailure) => {
-  if (Predicate.isString(expected))
-    return Predicate.isTagged(actual, expected) && partial(fields, actual);
-
-  return actual.constructor === expected.constructor && json(actual) === json(expected);
-};
-
-/** The source's read state now, checked against what a `then` step expects of it. */
-const stateHolds = (observed: Observed, expected: ReadState, fields: Plain, single: boolean) => {
-  const actual = observed.state(single);
-
-  if (matches(expected, fields, actual)) return;
-
-  const shown = Object.fromEntries(
-    Object.entries(actual).filter(([field]) => !["data", "retry", "feed"].includes(field)),
-  );
-
-  throw new Mismatch(`${observed.label} is not in the expected state`, [
-    `expected ${clip(json(expected))} ${clip(json(fields))}`,
-    `observed ${clip(json(shown))}`,
-  ]);
-};
-
-/**
- * What a `then` step expects of a source: its rows (by key, each compared partially, or a
- * predicate), or an object naming its rows and its read state, as `match` reads it (`Loading`,
- * `Retrying`, `Ready`, `Missing` with `single` for a `findOne`, or the typed error, compared by
- * class and fields); `fields` are fields of that state (`{ state: "Retrying", fields: { attempt: 2 } }`).
- */
-export type Then<Row> =
-  | Expected<Row>
-  | {
-      readonly rows?: Expected<Row>;
-      readonly state?: ReadState;
-      readonly fields?: Plain;
-      readonly single?: boolean;
-    };
-
-type Parts<Row> = Exclude<Then<Row>, Expected<Row>>;
-
-/** A `then` expectation as its parts: rows alone are the rows. */
-const partsOf = <Row>(expected: Then<Row>): Parts<Row> => {
-  if (Array.isArray(expected) || Predicate.isFunction(expected)) return { rows: expected };
-
-  // SAFETY: neither a list of rows nor a predicate, so the object form.
-  return expected as Parts<Row>;
-};
-
-/**
- * `Db.then`: a source shows what was expected in the step's client, as `useLiveQuery` over it would.
- * With rows to check, a source not yet observed is opened and settled first; a state alone is
- * read as the source is now.
- */
-// Not exported as `then`: a module whose exports include `then` is a thenable to `import()`.
-export const thenShows = <Row extends object>(
-  source: Source<Row>,
-  expected: Then<Row>,
-  options: Scoped = {},
-) =>
-  step(`then ${source.id ?? "source"}`, async (world) => {
-    const { rows, state, fields, single } = partsOf(expected);
-
-    const observed = await Option.match(Option.fromUndefinedOr(rows), {
-      onNone: async () => (await world.observe(source, options.as)).observed,
-      onSome: () => opened(world, source, options.as),
-    });
-
-    if (state !== undefined) stateHolds(observed, state, fields ?? {}, single ?? false);
-
-    if (rows !== undefined) rowsHold(observed, rows);
-  });
-
-/** A command a `when` step can call: a `LowAlch` command, bound to the story's client. */
-export type Callable<I> = {
-  readonly with: (options: {
-    readonly client?: DbClient;
-  }) => (
-    input: I,
-    callbacks?: { readonly onCommitted?: (value: Settled<Reply>) => void },
-  ) => Transaction;
-};
-
-/** What a `when(label, call)` step's call gets: the client, and `activate` for `.options`/`.paced`. */
-export type Acting = {
-  readonly client: DbClient;
-  /** Registers the client for commands called without one (until the story ends). */
-  readonly activate: () => void;
-};
-
-/**
- * The client runs a command, as a component calls it: `when(notes.rename, input)` calls the
- * declared command with its input on the step's client (`command.with({ client })(input)`), and
- * `when(label, ({ client, activate }) => transaction)` runs anything that returns a transaction
- * (`createOptimisticAction(command.options)`, `createPacedMutations({ ...command.paced })`). The
- * step does not wait: the next step sees the optimistic rows; `settled`/`rejected` wait.
- */
-export function when<I extends Input>(command: Callable<I> & Declared, input: I): Step;
-export function when(label: string, call: (acting: Acting) => Transaction): Step;
-export function when(
-  command: (Callable<Input> & Declared) | string,
-  argument: Input | ((acting: Acting) => Transaction),
-): Step {
-  if (Predicate.isString(command) && Predicate.isFunction(argument))
-    return step(`when ${command}`, async (world) => {
-      await world.start(command, world.scope, "story", {}, (client) =>
-        argument({
-          client,
-          activate: () => {
-            const release = activate(client);
-
-            world.releases.push(release);
-          },
-        }),
-      );
-    });
-
-  if (Predicate.isString(command) || Predicate.isFunction(argument))
-    throw new Error("when(command, input) or when(label, (acting) => transaction)");
-
-  const input = argument;
-
-  return step(`when ${clip(json(input), 80)}`, async (world) => {
-    await world.start(
-      clip(json(input), 80),
-      world.scope,
-      "story",
-      input,
-      (client, onCommitted) => command.with({ client })(input, { onCommitted }),
-      Option.some(command),
-    );
-  });
-}
-
-/** The last command the story's clients ran (a `when` step or a machine's), or the one named. */
-const last = (world: World): Run => {
-  const run = world.runs.at(-1);
-
-  if (!run) throw new Mismatch("no command ran before this step");
-
-  return run;
-};
-
-/** Waits until a run ended; fails when the world went quiet and it had not. */
-const pending = (run: Run) => Predicate.isTagged(run.outcome, "Pending");
-
-export const ended = async (world: World, run: Run) => {
-  if (pending(run)) await world.settle();
-
-  for (let round = 0; round < 20 && pending(run); round += 1) await macrotask();
-
-  if (pending(run))
-    throw new Mismatch(`${run.label} has not settled and nothing more happens by itself`, [
-      `waiting on the clock: ${json(world.clock.scheduled())} (advance it?)`,
-    ]);
-
-  return run.outcome;
-};
-
-const outcomeOf = (run: Run) =>
-  Option.match(
-    Option.liftPredicate(run.outcome, (outcome) => Predicate.isTagged(outcome, "Rejected")),
-    {
-      onSome: (outcome) => json(outcome),
-      onNone: () => run.outcome._tag,
-    },
-  );
-
-/**
- * The last command settled (the transaction completed): as `Committed` (the feed delivered its
- * change) or `Unconfirmed` (the settle timeout passed first), or either when no tag is given.
- */
-export const settled = (expected?: "Committed" | "Unconfirmed") =>
-  step(`settled${expected ? ` ${expected}` : ""}`, async (world) => {
-    const run = last(world);
-    const outcome = await ended(world, run);
-
-    const holds =
-      (Predicate.isTagged(outcome, "Committed") || Predicate.isTagged(outcome, "Unconfirmed")) &&
-      (expected === undefined || Predicate.isTagged(outcome, expected));
-
-    if (!holds)
-      throw new Mismatch(`${run.label} did not settle as expected`, [
-        `expected ${expected ?? "Committed | Unconfirmed"}`,
-        `observed ${outcomeOf(run)}`,
-      ]);
-
-    await world.settle();
-  });
-
-/**
- * The last command was rejected with this typed error: the same class (its original instance)
- * with the same fields. The transaction rolled back.
- */
-export const rejected = (expected: TaggedFailure) =>
-  step(`rejected ${expected._tag}`, async (world) => {
-    const run = last(world);
-    const outcome = await ended(world, run);
-
-    const holds =
-      Predicate.isTagged(outcome, "Rejected") &&
-      "error" in outcome &&
-      outcome.error.constructor === expected.constructor &&
-      json(outcome.error) === json(expected);
-
-    if (!holds)
-      throw new Mismatch(`${run.label} was not rejected as expected`, [
-        `expected ${json(expected)}`,
-        `observed ${outcomeOf(run)}`,
-      ]);
-
-    await world.settle();
-  });
-
 /** The feed of the step's client drops (a transport failure); reconnecting fails until `resume`. */
 export const drop = (error = transport()) =>
   step("drop the feed", async (world) => {
-    (await world.connect()).wire.drop(error);
+    world.wire().drop(error);
     await world.settle();
   });
 
 /** The feed can connect again; its pending retries run now, and the world settles. */
 export const resume = () =>
   step("resume the feed", async (world) => {
-    (await world.connect()).wire.resume();
+    world.wire().resume();
 
     while (world.clock.fireNext(Number.POSITIVE_INFINITY, ["retry"])) await world.settle();
 
@@ -478,7 +148,7 @@ export const resume = () =>
 /** The feed stays connected and delivers nothing while muted. */
 export const mute = (on = true) =>
   step(on ? "mute the feed" : "unmute the feed", async (world) => {
-    (await world.connect()).wire.mute(on);
+    world.wire().mute(on);
   });
 
 /**
@@ -487,60 +157,26 @@ export const mute = (on = true) =>
  */
 export const fail = (name: string, error: TaggedFailure, times?: number) =>
   step(`fail ${name} with ${error._tag}`, async (world) => {
-    (await world.connect()).wire.fail(name, error, times);
+    world.wire().fail(name, error, times);
   });
 
 /** The endpoint answers again. */
 export const recover = (name: string) =>
   step(`recover ${name}`, async (world) => {
-    (await world.connect()).wire.recover(name);
+    world.wire().recover(name);
   });
 
 /** Every query of the step's client answers with what it saw when asked, but only at `release`. */
 export const hold = () =>
   step("hold query answers", async (world) => {
-    (await world.connect()).wire.hold();
+    world.wire().hold();
   });
 
 export const release = () =>
   step("release query answers", async (world) => {
-    (await world.connect()).wire.release();
+    world.wire().release();
     await world.settle();
   });
-
-/** An entity, as `LowAlch.reload(db, Rows)` takes it. */
-type Entity = { readonly entityName: string };
-
-const isEntity = <Row extends object>(target: Source<Row> | Entity): target is Entity =>
-  Predicate.hasProperty(target, "entityName") && Predicate.isString(target.entityName);
-
-/**
- * `reload(source)` reloads a source, as the `retry` a `match` handler receives does
- * (`collection.reload()`). `reload(Rows)` reloads every loaded subset of an entity in the step's
- * client, as `LowAlch.reload(db, Rows)` does after a write the feed does not carry; its debounce
- * (`reloadDelay`) passes, so the subsets have reloaded when the step ends.
- */
-export function reload<Row extends object>(source: Source<Row>, options?: Scoped): Step;
-export function reload(entity: Entity, options?: Scoped): Step;
-export function reload<Row extends object>(target: Source<Row> | Entity, options: Scoped = {}) {
-  if (isEntity(target))
-    return step(`reload ${target.entityName}`, async (world) => {
-      LowAlch.reload((await world.connect(options.as)).db, target);
-
-      while (world.clock.fireNext(Number.POSITIVE_INFINITY, ["reload"])) await world.settle();
-
-      await world.settle();
-    });
-
-  return step(`reload ${target.id ?? "source"}`, async (world) => {
-    const { observed } = await world.observe(target, options.as);
-
-    // A reload that fails waits for its retry on the story's clock: the step ends when the world
-    // is quiet, not when the reload succeeded (`advance` lets the retry run).
-    void observed.collection.reload().catch(() => undefined);
-    await world.settle();
-  });
-}
 
 /**
  * Time passes on the story's manual clock: every retry, reload debounce and settle timeout due
@@ -554,15 +190,15 @@ export const advance = (ms: number) =>
 /** Waits until nothing more happens by itself (see `World.settle`). */
 export const settle = () => step("settle", (world) => world.settle());
 
-/** Waits until every command ran so far has ended, then settles. */
+/** Waits until every command ran so far has ended (as each adapter knows them), then settles. */
 export const idle = () =>
   step("idle", async (world) => {
-    for (const run of world.runs) await ended(world, run);
+    for (const wait of world.idles) await wait();
 
     await world.settle();
   });
 
-/** Any check of the world (the host's services, a client's wire, the runs); throw to fail. */
+/** Any check of the world (the host's services, a scope's wire: `world.wire().sent`); throw to fail. */
 export const check = (label: string, assert: (world: World) => Promise<void> | void) =>
   step(`check ${label}`, async (world) => {
     await assert(world);

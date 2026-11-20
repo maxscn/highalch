@@ -1,5 +1,5 @@
-import { Option } from "effect";
-import type { Slot, World } from "./world";
+import { Cause, Context, Effect, Exit, Layer, Option, Scope } from "effect";
+import type { World } from "./world";
 
 /** A failed expectation inside a step: what it was about, what it expected and what it saw. */
 export class Mismatch extends Error {
@@ -15,17 +15,39 @@ export class Mismatch extends Error {
 export type Done = { readonly step: number; readonly label: string };
 
 /**
+ * The story run an adapter is built for, as a service: an adapter's Layer reads it to reach the
+ * hosted world, register work after every step and at the end, and name what it writes.
+ */
+export class CurrentStage extends Context.Service<CurrentStage, Stage>()("@highalch/story/Stage") {}
+
+/**
+ * A kind of step's state for one story run: a service and the Layer that builds it. A stage
+ * builds each adapter once, on first use, shares the Layers adapters build on, and releases them
+ * (their finalizers) when the story ends, before its world is disposed.
+ */
+export type Adapter<I, S> = {
+  readonly service: Context.Key<I, S>;
+  /**
+   * Needs at most the stage: an adapter that builds on others provides their Layers to its own
+   * (`Layer.provide(layer, clients.layer)`), and the stage builds each Layer once per run.
+   */
+  readonly layer: Layer.Layer<I, never, CurrentStage>;
+};
+
+/**
  * One run of a story, as every step sees it: the hosted world (`None` in a hostless story), the
- * number of the step running, and the state that kinds of steps keep for the length of the run
- * (a machine's snapshot or its actor). A step kind interprets itself against it: data steps read
- * the world through `hosted`, machine steps keep their machines in a `slot`.
+ * number of the step running, the work registered after every step and at the end, and the
+ * adapters (`use`) that kinds of steps keep their state in for the run (the clients a data step
+ * reads, a machine's snapshot or actor, a mounted screen).
  */
 export class Stage {
   /** The step running now (from 1). */
   step = 0;
-  private readonly slots = new Map<symbol, Slot>();
   private readonly afters: Array<(done: Done) => Promise<void>> = [];
   private readonly ends: Array<() => Promise<void>> = [];
+  private readonly scope = Effect.runSync(Scope.make());
+  private readonly memo = Layer.makeMemoMapUnsafe();
+  private readonly built = new Map<unknown, Promise<unknown>>();
 
   constructor(
     readonly world: Option.Option<World>,
@@ -41,9 +63,32 @@ export class Stage {
     this.afters.push(run);
   };
 
-  /** Runs `run` when the story ends, passed or failed, before its world is disposed. */
+  /** Runs `run` when the story ends, passed or failed, before its adapters are released. */
   end = (run: () => Promise<void>) => {
     this.ends.push(run);
+  };
+
+  /**
+   * An adapter's service for this run, built from its Layer on first use (with this stage as its
+   * `CurrentStage`); later uses get the same service.
+   */
+  use = <I, S>(adapter: Adapter<I, S>): Promise<S> => {
+    const known = this.built.get(adapter.service);
+
+    // SAFETY: built from this adapter, under its own service key.
+    if (known) return known as Promise<S>;
+
+    const layer = adapter.layer.pipe(Layer.provide(Layer.succeed(CurrentStage, this)));
+
+    const made = Effect.runPromise(
+      Layer.buildWithMemoMap(layer, this.memo, this.scope).pipe(
+        Effect.map((context) => Context.get(context, adapter.service)),
+      ),
+    );
+
+    this.built.set(adapter.service, made);
+
+    return made;
   };
 
   /** The runner calls this after each step that passed. */
@@ -51,7 +96,10 @@ export class Stage {
     for (const run of this.afters) await run(done);
   };
 
-  /** The runner calls this once when the story ends; the first failure, if any. */
+  /**
+   * The runner calls this once when the story ends: the registered ends (last first), then the
+   * adapters' finalizers. The first failure, if any.
+   */
   close = async (): Promise<Option.Option<unknown>> => {
     let failure = Option.none<unknown>();
 
@@ -59,6 +107,11 @@ export class Stage {
       await run().catch((error) => {
         if (Option.isNone(failure)) failure = Option.some(error);
       });
+
+    const released = await Effect.runPromiseExit(Scope.close(this.scope, Exit.void));
+
+    if (Exit.isFailure(released) && Option.isNone(failure))
+      failure = Option.some(Cause.squash(released.cause));
 
     return failure;
   };
@@ -75,20 +128,4 @@ export class Stage {
           `"${label}" needs a host, and this story has none: data steps and running machines need Story.make(hosting, options); a hostless story (Story.make()) steps machines purely`,
         ),
     );
-
-  /** A value a step kind keeps for the length of the run, under its own private key. */
-  slot = <T extends Slot>(key: symbol, make: () => T): T => {
-    const known = this.slots.get(key);
-
-    if (known) {
-      // SAFETY: each step kind keys its own slot with a private symbol and one type.
-      return known as T;
-    }
-
-    const made = make();
-
-    this.slots.set(key, made);
-
-    return made;
-  };
 }

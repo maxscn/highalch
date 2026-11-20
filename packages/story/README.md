@@ -5,15 +5,17 @@ given server history, when a client, another client or the world acts, then what
 shows, its read state and how each command settled. Optional screen steps paint a filmstrip of a
 mounted React component without a browser.
 
-| Entry point                   | What                                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------- |
-| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time)    |
-| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, invariants and view helpers      |
-| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`      |
-| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs takumi/happy-dom |
+| Entry point                   | What                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
+| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time) |
+| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, invariants and view helpers   |
+| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`   |
+| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom     |
+| `@highalch/story/takumi`      | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`     |
 
 Peer dependencies: `@lowalch/tanstack-db` and its peers; optional `xstate` and `@xstate/effect` (for
-`/xstate`), `react-dom`, `happy-dom`, `takumi-js` 2.14.0 and `@effect/atom-react` (for `/screen`).
+`/xstate`), `react-dom`, `happy-dom` and `@effect/atom-react` (for `/screen`) and `takumi-js` 2.14.0
+(for `/takumi`).
 
 A story tells a frontend's behaviour like Foldkit's: given a state, when something happens, then
 the next state and what was asked for. There is **one runner** and one vocabulary: data steps (a
@@ -91,7 +93,7 @@ Story steps (`Story.*`, from `@highalch/story`): the Domain, its transport and t
 | `hold()` / `release()`                                 | queries answer with what they saw when asked, but only at `release` (a write racing a load)                    |
 | `advance(ms)`                                          | time passes on the story's clock: retries, reload debounces and settle timeouts due within `ms` fire, in order |
 | `settle()` / `idle()`                                  | wait until nothing more happens by itself / until every command ended                                          |
-| `check(label, (world) => ...)`                         | anything else: the host's services, a client's wire (`sent`, `asked`), the runs, the feed's entries            |
+| `check(label, (world) => ...)`                         | anything else of the Domain: the host's services, a scope's wire (`world.wire().sent`, `.asked`)               |
 | `as(scope, ...steps)`                                  | the steps act as the client of another scope (two accounts in one story; a machine started inside runs there)  |
 
 Data steps (`Db.*`, from `@highalch/story/tanstack-db`): what a client's sources show and the
@@ -106,6 +108,7 @@ commands it runs:
 | `when(label, ({ client, activate }) => transaction)` | anything that returns a transaction: `createOptimisticAction(command.options)`, `createPacedMutations(command.paced)` |
 | `settled("Committed" \| "Unconfirmed"?)`             | the last command (a `when`'s or a running machine's) settled so                                                       |
 | `rejected(error)`                                    | the last command was rejected with this typed error (same class, same fields)                                         |
+| `check(label, (db) => ...)`                          | anything else of the clients: their runs, observed sources, a `DbClient`, the feed's entries                          |
 | `reload(source)` / `reload(Rows)`                    | what a `match` handler's `retry` does (`collection.reload()`) / `LowAlch.reload(db, Rows)`, its debounce passed       |
 
 Machine steps (`Machine.*`). Each addressing step takes a last `{ machine?: name }` (default: the
@@ -256,18 +259,21 @@ They judge rows against the feed's own entries (read from the Domain, not throug
 ## Screens: a filmstrip of a story
 
 `@highalch/story/screen` adds steps that mount a real React component against the story's
-own client and capture a frame after every later step, painted by takumi's WASM renderer without
-a browser and compared with reviewed baselines. A story then yields a filmstrip: loading, ready,
-pending, settled or rolled back, retrying.
+own client and capture a frame after every later step, painted by the screen's painter and
+compared with reviewed baselines. A story then yields a filmstrip: loading, ready, pending, settled
+or rolled back, retrying. The painter is a Layer: `Takumi.layer()` (`@highalch/story/takumi`)
+paints with takumi's WASM renderer, without a browser; another painter (a real browser) is another
+Layer providing `PainterOf`.
 
 ```tsx
 import { Screen } from "@highalch/story/screen";
+import { Takumi } from "@highalch/story/takumi";
 
 const List = Screen.make({
   css, // the compiled stylesheet(s) the markup is painted with
   width: 360,
   height: 200,
-  fonts, // optional: local font bytes; takumi's built-in font otherwise
+  painter: Takumi.layer({ fonts }), // fonts optional: takumi's built-in font otherwise
   baselines: new URL("./baselines/", import.meta.url), // committed, reviewed PNGs
   output: new URL("../artifacts/stories/", import.meta.url), // the run's report (ignored)
   update: process.env.UPDATE_SCREENS === "1", // write baselines; never implicitly
@@ -294,7 +300,9 @@ await story.with({ name: "rename is rejected" })(
   (`container.querySelector("h1")`), that a button is disabled, what a control's value is. The
   container is an ordinary DOM node, so a testing library's queries (`within(container)`) work on
   it; do not use such a library's own `render`, which mounts outside the story's client.
-- A frame is named by the story's name and the step: `<story>/<step>-<label>.png`. A screen story
+- A frame is named by its painter, the story's name and the step:
+  `<painter>/<story>/<step>-<label>.png` under `baselines` (engines paint the same markup
+  differently, so each painter has its own baselines). A screen story
   needs `story.with({ name })`; without one, and in a hostless story, `render` fails naming
   itself. Screen steps compose with machine steps (a running editor's frames) like any other.
 - Frames compare decoded pixels exactly, not PNG bytes. A missing or different baseline fails the
@@ -305,8 +313,9 @@ await story.with({ name: "rename is rejected" })(
   filmstrip page `index.html`, and an `index.html` of all stories. A story's folder starts afresh
   on each run.
 - The happy-dom window is installed as the global DOM when `render` runs and removed exactly when
-  the story ends, so other tests keep their environment. Only this entry imports `takumi-js`,
-  `happy-dom` and `react-dom` (optional peer dependencies), checked by `vp run check:patterns`.
+  the story ends, so other tests keep their environment. Only this entry imports `happy-dom` and
+  `react-dom`, and only `@highalch/story/takumi` imports `takumi-js` (optional peer dependencies),
+  checked by `vp run check:patterns`.
 
 ### Machines in a screen
 
@@ -341,7 +350,7 @@ await story.with({ name: "editor is rejected" })(
 );
 ```
 
-- Each story run has its own atom registry (`Story.registry(stage)` in a step of your own), made
+- Each story run has its own atom registry (`await Story.registry(stage)` in a step of your own), made
   on first use and disposed when the story ends. `List.render` mounts the element under it, and
   `Machine.mounted` reads the actor from it, so the component and the story see one actor and no
   actor outlives its story.
@@ -360,7 +369,7 @@ await story.with({ name: "editor is rejected" })(
 - A stepped machine (`Machine.given`) has no actor, so it has no frame: a screen shows running
   machines only.
 
-**What the painter does and does not do.** Takumi paints HTML and CSS (flexbox, borders, radii,
+**What the takumi painter does and does not do.** Takumi paints HTML and CSS (flexbox, borders, radii,
 colours, text) and runs no script. Form controls are not painted, so `input`, `textarea` and
 `select` are serialised as `span`s with their attributes, `data-control` naming the control, and
 their current value as text (passwords masked, checkboxes ☑/☐); style them by class, not by tag.
@@ -373,12 +382,21 @@ retries; `Retrying` is a ready source whose feed retries) has no frame to captur
 
 Every step carries its own interpretation: `{ label, run(stage) }`, where the `Stage` is one story
 run: `stage.world` (the hosted world, `None` hostless), `stage.hosted(label)` (the world, or the
-"needs a host" failure naming the step) and `stage.slot(key, make)` (state your kind of step keeps
-for the run, under a private symbol), `stage.after(run)` (runs after every later step, as a screen
-captures its frames) and `stage.end(run)` (runs when the story ends, before its clients close).
-`Story.step(label, (world) => …)` builds a data step;
-`Story.staged(label, (stage) => …)` any other kind. The machine steps are built exactly so; the
-runner knows nothing about XState. Throw a `Story.Mismatch(reason, detail)` for a readable failure.
+"needs a host" failure naming the step), `stage.use(adapter)` (an adapter's service for the run),
+`stage.after(run)` (runs after every later step, as a screen captures its frames) and
+`stage.end(run)` (runs when the story ends, before the adapters are released).
+`Story.step(label, (world) => …)` builds a step of the Domain; `Story.staged(label, (stage) => …)`
+any other kind. Throw a `Story.Mismatch(reason, detail)` for a readable failure.
+
+**Adapters.** A kind of step keeps its state for a run in an adapter: `{ service, layer }`, an
+Effect service and the Layer that builds it. The Layer may read the `Story.CurrentStage` (the run:
+its world, `after`, `end`, its name) and use other adapters by providing their Layers to its own;
+`stage.use(adapter)` builds it once per run, on first use, shares the Layers adapters build on,
+and runs their finalizers when the story ends, before the host is disposed. The data steps keep
+their clients in `Db.clients` (its service, `Db.Clients`, is what `Db.check(label, (db) => …)`
+reads: `db.runs`, `db.observed()`, `db.entries()`, `db.connect()`), the machine steps their
+machines, a screen its mounted component and its painter (`PainterOf`, provided by a painter
+entry's Layer). The runner knows nothing about TanStack DB, XState or React.
 
 ## Built on alchemy's `Story`?
 
