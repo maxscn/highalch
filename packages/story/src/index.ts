@@ -57,4 +57,3 @@ export { transport, Wire } from "./wire";
 export { json, plain, retryTransport, World, Observed } from "./world";
 
 export type { Client, Entry, Observation, Options, Outcome, Run, Shown, Source } from "./world";
-

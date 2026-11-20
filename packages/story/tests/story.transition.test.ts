@@ -166,9 +166,7 @@ describe("f(ready subsets, command) as stories", () => {
       Db.open(book),
       Db.when(notes.file, { account: "acc-1", BookId: "b2", title: "Cyd" }),
       // In the list (no rule), not in book b1 (its rule refuses b2).
-      Db.then(list, (rows) =>
-        rows.some((row) => row.NoteId === "b2:Cyd" && row.$hasPendingWrites),
-      ),
+      Db.then(list, (rows) => rows.some((row) => row.NoteId === "b2:Cyd" && row.$hasPendingWrites)),
       Db.then(book, [{ NoteId: "n1" }]),
       Db.settled("Committed"),
       Db.when(notes.pin, { NoteId: "n1", pinned: true }),
@@ -650,9 +648,9 @@ describe("f(story failure) → a readable report", () => {
     );
 
     expect(failure).toBeInstanceOf(Story.StoryFailure);
-    expect(failure?.message).toContain("Step 5 (shows");
+    expect(failure?.message).toContain("Step 5 (then");
     expect(failure?.message).toMatch(
-      /expected \[\{"title":"Ada"\}\][\s\S]*observed[\s\S]*n1: \{"title":"Ada"\} → \{"title":"Ada 2"\} \(pending\) → \{"title":"Ada 2"\}[\s\S]*✓ 4\. settled Committed[\s\S]*✗ 5\. shows/,
+      /expected \[\{"title":"Ada"\}\][\s\S]*observed[\s\S]*n1: \{"title":"Ada"\} → \{"title":"Ada 2"\} \(pending\) → \{"title":"Ada 2"\}[\s\S]*✓ 4\. settled Committed[\s\S]*✗ 5\. then/,
     );
   });
 });

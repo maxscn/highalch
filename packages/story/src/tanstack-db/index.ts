@@ -23,14 +23,15 @@ import {
   rejectedRestores,
   subsetsAgree,
 } from "../invariants";
-import { historyOf, open, rejected, reload, settled, then, when } from "../steps";
+import { historyOf, open, rejected, reload, settled, thenShows, when } from "../steps";
 import { Live, Settled, view } from "../view";
 
 /** The TanStack DB steps, invariants and view helpers. */
 export const Db = {
   open,
   when,
-  then,
+  // oxlint-disable-next-line unicorn/no-thenable -- `then` is the given/when/then vocabulary
+  then: thenShows,
   settled,
   rejected,
   reload,

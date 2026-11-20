@@ -205,10 +205,7 @@ export const open = <Row extends object>(
   });
 
 /** The rows a source shows now, checked against what a `then` step expects of them. */
-const rowsHold = <Row extends object>(
-  observed: Observed,
-  expected: Expected<Row>,
-) => {
+const rowsHold = <Row extends object>(observed: Observed, expected: Expected<Row>) => {
   const rows = observed.sorted();
   const actual = rows.map(([, shown]) => asRow(shown));
 
@@ -297,11 +294,12 @@ const partsOf = <Row>(expected: Then<Row>): Parts<Row> => {
 };
 
 /**
- * Then a source shows what was expected in the step's client, as `useLiveQuery` over it would.
+ * `Db.then`: a source shows what was expected in the step's client, as `useLiveQuery` over it would.
  * With rows to check, a source not yet observed is opened and settled first; a state alone is
  * read as the source is now.
  */
-export const then = <Row extends object>(
+// Not exported as `then`: a module whose exports include `then` is a thenable to `import()`.
+export const thenShows = <Row extends object>(
   source: Source<Row>,
   expected: Then<Row>,
   options: Scoped = {},

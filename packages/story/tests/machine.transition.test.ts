@@ -173,7 +173,7 @@ describe("f(hostless story, step that needs a host) → a clear error naming the
 
     expect(failure?.step).toBe(2);
     expect(failure?.message).toMatch(
-      /Step 2 \(shows NoteRows\/NoteById[^\n]*\) failed: "shows NoteRows\/NoteById[^\n]*" needs a host, and this story has none[\s\S]*✓ 1\. given editor stepped purely[\s\S]*✗ 2\. shows[\s\S]* {3}3\. machine is "Idle"/,
+      /Step 2 \(then NoteRows\/NoteById[^\n]*\) failed: "then NoteRows\/NoteById[^\n]*" needs a host, and this story has none[\s\S]*✓ 1\. given editor stepped purely[\s\S]*✗ 2\. then[\s\S]* {3}3\. machine is "Idle"/,
     );
   });
 

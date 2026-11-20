@@ -260,7 +260,7 @@ describe("f(mounted DOM, check) → what is rendered, as elements", () => {
       (error: Story.StoryFailure) => error,
     );
 
-    expect(failure?.message).toContain("nothing is rendered yet: List.render(element) first");
+    expect(failure?.message).toContain("nothing is rendered yet: render(element) first");
   });
 });
 
