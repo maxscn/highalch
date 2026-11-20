@@ -1,10 +1,10 @@
 /**
- * HighAlch: an alchemy Domain synced into TanStack DB collections, with typed errors from the
- * Domain definitions. React-free; the provider is in `@highalch/db/react`, the server-only
- * declarations in `@highalch/db/server` (re-exported here).
+ * LowAlch: an alchemy Domain synced into TanStack DB collections, with typed errors from the
+ * Domain definitions. React-free; the provider is in `@lowalch/tanstack-db/react`, the server-only
+ * declarations in `@lowalch/tanstack-db/server` (re-exported here).
  *
  * ```ts
- * import * as HighAlch from "@highalch/db";
+ * import * as LowAlch from "@lowalch/tanstack-db";
  * ```
  */
 import type * as Domain from "@alchemy.run/domain";

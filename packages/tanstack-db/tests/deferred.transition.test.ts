@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createPacedMutations, debounceStrategy } from "@tanstack/db";
 import { Effect, Layer, Stream } from "effect";
 import * as Domain from "@alchemy.run/domain";
-import * as HighAlch from "@highalch/db";
+import * as LowAlch from "@lowalch/tanstack-db";
 import { observe, quick, tick, until } from "../../../fixtures/harness";
 import {
   entries,
@@ -30,7 +30,7 @@ const open = async () => {
 };
 
 const client = (server: Ledger, settleTimeout = 2_000, api = server.api) => {
-  const db = HighAlch.make({
+  const db = LowAlch.make({
     api: LedgerApi,
     layer: Layer.succeed(LedgerApi.Client, api),
     scope: "acc-1",
@@ -39,7 +39,7 @@ const client = (server: Ledger, settleTimeout = 2_000, api = server.api) => {
     retry: quick,
   });
 
-  cleanup.push(() => Effect.runPromise(HighAlch.close(db)));
+  cleanup.push(() => Effect.runPromise(LowAlch.close(db)));
 
   return db;
 };
@@ -165,7 +165,7 @@ describe("f(deferred settlement, command)", () => {
 
     const db = client(server);
     const list = observe<Entry>(db, entries.list({ account: "acc-1" }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
 
     cleanup.push(async () => release());
     await until(() => list.isReady(), "ready");

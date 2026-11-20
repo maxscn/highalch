@@ -1,12 +1,12 @@
 /**
  * The packages' confinement rules, checked on their sources (tests excluded):
  *
- * - `@highalch/db` imports only effect, alchemy Domain, TanStack DB and React; XState only in its
+ * - `@lowalch/tanstack-db` imports only effect, alchemy Domain, TanStack DB and React; XState only in its
  *   `xstate` entry.
- * - `@highalch/story` additionally imports `@highalch/db`; XState only in its `xstate` entry;
+ * - `@highalch/story` additionally imports `@lowalch/tanstack-db`; XState only in its `xstate` entry;
  *   takumi, happy-dom, react-dom and node files only in its `screen` entry.
  * - Neither reaches an XState or screen entry from outside it (type-only imports are erased).
- * - `@highalch/db` never imports the story kit.
+ * - `@lowalch/tanstack-db` never imports the story kit.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -48,7 +48,7 @@ const effects = ["useEffect", "useLayoutEffect", "useInsertionEffect"];
 
 export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.url))) => {
   const problems: Array<Problem> = [];
-  const db = join(root, "packages/db/src");
+  const db = join(root, "packages/tanstack-db/src");
   const story = join(root, "packages/story/src");
   const inside = (file: string, directory: string) =>
     file === directory || file.startsWith(`${directory}/`);
@@ -87,7 +87,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
       if (
         !module.startsWith(".") &&
         !core.test(module) &&
-        !(!inDb && /^@highalch\/db(?:\/|$)/.test(module)) &&
+        !(!inDb && /^@lowalch\/tanstack-db(?:\/|$)/.test(module)) &&
         !(xstateEntry && xstate.test(module)) &&
         !(screenEntry && screen.test(module))
       )
@@ -99,7 +99,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
       if (
         !xstateEntry &&
         !typeOnly &&
-        (/^@highalch\/(?:db|story)\/xstate$/.test(module) ||
+        (/^@(?:lowalch\/tanstack-db|highalch\/story)\/xstate$/.test(module) ||
           inside(resolved, join(db, "xstate")) ||
           inside(resolved, join(story, "xstate")))
       )
@@ -119,7 +119,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         );
 
       if (inDb && (/^@highalch\/story(?:\/|$)/.test(module) || inside(resolved, story)))
-        report(node, "@highalch/db never imports the story kit");
+        report(node, "@lowalch/tanstack-db never imports the story kit");
 
       if (
         module === "react" &&

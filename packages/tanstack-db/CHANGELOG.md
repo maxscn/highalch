@@ -1,4 +1,6 @@
-# @highalch/db
+# @highalch/tanstack-db
+
+Versions up to 0.0.5 were named `@highalch/db`.
 
 ## 0.0.5
 

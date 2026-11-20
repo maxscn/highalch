@@ -19,7 +19,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as HighAlch from "@highalch/db";
+import * as LowAlch from "@lowalch/tanstack-db";
 import {
   createdKey,
   Defect,
@@ -27,7 +27,7 @@ import {
   type Settings,
   type Settled,
   type TaggedFailure,
-} from "@highalch/db";
+} from "@lowalch/tanstack-db";
 import {
   connectionOf,
   fromLive,
@@ -37,7 +37,7 @@ import {
   type Input,
   type Row,
   type Rows,
-} from "@highalch/db/internal";
+} from "@lowalch/tanstack-db/internal";
 import { Clock } from "./clock";
 import type { Host } from "./host";
 import { endpointsOf, isFeed, Wire, type Endpoints } from "./wire";
@@ -75,10 +75,10 @@ export const json = <V>(value: V): string =>
   });
 
 /** A source a consumer passes to `useLiveQuery`: a collection descriptor. */
-export type Source<Row extends object = object> = HighAlch.Source<Row>;
+export type Source<Row extends object = object> = LowAlch.Source<Row>;
 
 /** The row type of a source. */
-export type RowOf<S> = S extends HighAlch.Source<infer Row> ? Row : never;
+export type RowOf<S> = S extends LowAlch.Source<infer Row> ? Row : never;
 
 /** One change of a collection, as a story reads it (with TanStack DB's virtual fields). */
 type Change = {
@@ -146,7 +146,7 @@ export class Observed {
     return this.collection.id;
   }
 
-  /** The entity whose subset this is, when it is one (a `HighAlch.query` result is not). */
+  /** The entity whose subset this is, when it is one (a `LowAlch.query` result is not). */
   entity = (): Option.Option<Rows.Any> => {
     for (const subsets of connectionOf(this.world.client(this.scope).db).subsets.values())
       for (const subset of subsets)
@@ -200,7 +200,7 @@ export const Outcome = Data.taggedEnum<Outcome>();
 /** What a command replies, as a story holds it. */
 export type Reply = Answer | void;
 
-/** A declared `HighAlch` command, as a story holds it (to compare it with what a machine ran). */
+/** A declared `LowAlch` command, as a story holds it (to compare it with what a machine ran). */
 export interface Declared {}
 
 /** A command one of the story's clients ran (a `when` step, or one a machine invoked). */
@@ -251,7 +251,7 @@ export type Options = Partial<Omit<Settings, "scope" | "clock">> & {
 
 /** Retries transport failures (every 100 ms on the story's clock); stops for anything else. */
 export const retryTransport: Retry = Schedule.spaced(100).pipe(
-  Schedule.while(({ input }: { input: HighAlch.TaggedFailure | HighAlch.Defect }) =>
+  Schedule.while(({ input }: { input: LowAlch.TaggedFailure | LowAlch.Defect }) =>
     Predicate.isTagged(input, "RpcClientError"),
   ),
 );
@@ -345,7 +345,7 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
     // SAFETY: the wrapped client has the Api client's endpoints, as its `Client` key yields them.
     const layer = Layer.succeed(api.Client, wire.wrap(raw, this.queries) as never);
 
-    const db = HighAlch.make({
+    const db = LowAlch.make({
       api,
       layer,
       scope,
@@ -639,7 +639,7 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   };
 
   /**
-   * Closes a client. `HighAlch.close` waits until the commands it sent have settled, and a story
+   * Closes a client. `LowAlch.close` waits until the commands it sent have settled, and a story
    * holds them (replies wait at the wire, settle timeouts on the manual clock): a story that ended
    * or failed with a command in flight lets its replies through and runs the clock's waits until
    * the close returns, so disposing never hangs. Gives up waiting after `deadline`.
@@ -647,7 +647,7 @@ export class World<A extends Domain.Api.Any = Domain.Api.Any> {
   private close = async (client: Client, deadline: number) => {
     let closed = false;
 
-    const closing = Effect.runPromise(HighAlch.close(client.db)).finally(() => {
+    const closing = Effect.runPromise(LowAlch.close(client.db)).finally(() => {
       closed = true;
     });
 

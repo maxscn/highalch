@@ -16,9 +16,9 @@ export type Marked<Row, E> = Row & { readonly [Errors]?: E };
  * fail with when its selected fields no longer carry the row marker (a field projection):
  *
  * ```ts
- * declare module "@highalch/db" {
+ * declare module "@lowalch/tanstack-db" {
  *   interface Register {
- *     readonly errors: HighAlch.ApiErrors<typeof MyApi>;
+ *     readonly errors: LowAlch.ApiErrors<typeof MyApi>;
  *   }
  * }
  * ```
@@ -310,7 +310,7 @@ const whenLoaded = (result: LiveResult): Promise<void> => {
   const collection = result.collection;
 
   if (!pinnable(collection))
-    throw new Error("HighAlch.Suspend needs a stock useLiveQuery result with its collection");
+    throw new Error("LowAlch.Suspend needs a stock useLiveQuery result with its collection");
 
   return Option.match(placeOf(collection), {
     onNone: () => observe(collection),
@@ -336,7 +336,7 @@ const whenLoaded = (result: LiveResult): Promise<void> => {
 };
 
 /**
- * The `Loading` handler that suspends: `match(res).on({ Loading: HighAlch.Suspend, ... })` throws
+ * The `Loading` handler that suspends: `match(res).on({ Loading: LowAlch.Suspend, ... })` throws
  * a promise to the nearest `<Suspense>`. The promise is shared by every render waiting on the same
  * source collections of one client and resolves (never rejects) when the first load ends for any reason; the retried render
  * then matches `Ready`, a typed error or `Missing` as usual, and a defect still throws.
@@ -346,7 +346,7 @@ export const Suspend = (state: Data.TaggedEnum.Value<Live<unknown, unknown>, "Lo
 
   if (!result)
     throw new Error(
-      "HighAlch.Suspend handles only the Loading state of match(res) over a stock useLiveQuery result",
+      "LowAlch.Suspend handles only the Loading state of match(res) over a stock useLiveQuery result",
     );
 
   throw whenLoaded(result);

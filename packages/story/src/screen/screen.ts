@@ -7,7 +7,7 @@ import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { render as paint, type Font } from "takumi-js";
 import wasm from "takumi-js/wasm-url";
-import { Provider } from "@highalch/db/react";
+import { Provider } from "@lowalch/tanstack-db/react";
 import { registryOf } from "../atoms";
 import { Mismatch, type Done, type Stage } from "../stage";
 import { staged, type Step } from "../steps";

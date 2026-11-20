@@ -1,8 +1,8 @@
 /**
- * Unstable internals of `@highalch/db` for `@highalch/story` (and other test kits). Nothing here
- * is covered by semver: names and shapes change without notice. Applications use `@highalch/db`.
+ * Unstable internals of `@lowalch/tanstack-db` for `@highalch/story` (and other test kits). Nothing here
+ * is covered by semver: names and shapes change without notice. Applications use `@lowalch/tanstack-db`.
  *
- * - `waitKind`: the current HighAlch wait, for a story’s Clock to inspect.
+ * - `waitKind`: the current LowAlch wait, for a story’s Clock to inspect.
  * - `connectionOf` / `Connection`: a client's Domain connection, its feed subscriptions (each with
  *   a read-only `current`: caught up and not failed) and its materialised subsets.
  * - `Live` / `fromLive`: the constructors of `match`'s live states and the conversion `match` uses.

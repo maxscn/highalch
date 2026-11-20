@@ -12,10 +12,10 @@ import {
 } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import * as InMemory from "@alchemy.run/domain/InMemory";
-import * as HighAlch from "@highalch/db";
+import * as LowAlch from "@lowalch/tanstack-db";
 
 /**
- * A small self-contained Domain for the HighAlch packages' tests: notes and books, per account, on one
+ * A small self-contained Domain for the LowAlch packages' tests: notes and books, per account, on one
  * feed (`NotebookChanges`) written by one projection. Every event carries the whole row after it,
  * so the feed's entries carry rows. A note's aggregate id is `[account, NoteId]` as JSON (not its
  * row key, as an aggregate keyed per scope is); a book's is its row key.
@@ -142,10 +142,10 @@ export class NoteAggregate extends Domain.Aggregate("Note", {
 }) {}
 
 /** The feed: one stream per account, carrying both entities' rows. */
-export class NotebookChanges extends HighAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
+export class NotebookChanges extends LowAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
 
 /** The first entity on the feed: notes, whose commands address `[account, NoteId]`. */
-export class NoteRows extends HighAlch.Rows("NoteRows", {
+export class NoteRows extends LowAlch.Rows("NoteRows", {
   feed: NotebookChanges,
   row: Note,
   key: "NoteId",
@@ -154,9 +154,9 @@ export class NoteRows extends HighAlch.Rows("NoteRows", {
     Predicate.isTagged(event, "NoteDeleted") ? event.account : event.note.account,
   target: (key, scope) => address(scope, key),
   on: {
-    NoteCreated: (event) => HighAlch.upserted(event.note),
-    NoteChanged: (event) => HighAlch.upserted(event.note),
-    NoteDeleted: (event) => HighAlch.removed(event.NoteId),
+    NoteCreated: (event) => LowAlch.upserted(event.note),
+    NoteChanged: (event) => LowAlch.upserted(event.note),
+    NoteDeleted: (event) => LowAlch.removed(event.NoteId),
   },
 }) {}
 
@@ -210,20 +210,20 @@ export class BookAggregate extends Domain.Aggregate("Book", {
 }) {}
 
 /** The second entity on the same feed: no `target`, so a book command addresses its key. */
-export class BookRows extends HighAlch.Rows("BookRows", {
+export class BookRows extends LowAlch.Rows("BookRows", {
   feed: NotebookChanges,
   row: Book,
   key: "BookId",
   from: [BookAggregate],
   scope: ({ event }) => event.book.account,
   on: {
-    BookCreated: (event) => HighAlch.upserted(event.book),
-    BookRenamed: (event) => HighAlch.upserted(event.book),
+    BookCreated: (event) => LowAlch.upserted(event.book),
+    BookRenamed: (event) => LowAlch.upserted(event.book),
   },
 }) {}
 
 /** The feed's one writer: both entities, one line each. */
-export class NotebookWriter extends HighAlch.Projection("NotebookChanges", {
+export class NotebookWriter extends LowAlch.Projection("NotebookChanges", {
   feed: NotebookChanges,
   entities: [NoteRows, BookRows],
 }) {}

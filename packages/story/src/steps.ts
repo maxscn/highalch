@@ -2,9 +2,9 @@ import type * as Aggregate from "@alchemy.run/domain/Aggregate";
 import type { Step as AlchemyStep } from "@alchemy.run/domain/Story";
 import type { DbClient, Transaction } from "@tanstack/db";
 import { Effect, Exit, Option, Predicate } from "effect";
-import * as HighAlch from "@highalch/db";
-import { activate, type Settled, type TaggedFailure } from "@highalch/db";
-import type { Answer, Input } from "@highalch/db/internal";
+import * as LowAlch from "@lowalch/tanstack-db";
+import { activate, type Settled, type TaggedFailure } from "@lowalch/tanstack-db";
+import type { Answer, Input } from "@lowalch/tanstack-db/internal";
 import {
   json,
   macrotask,
@@ -290,7 +290,7 @@ export const state = <Row extends object>(
     ]);
   });
 
-/** A command a `when` step can call: a `HighAlch` command, bound to the story's client. */
+/** A command a `when` step can call: a `LowAlch` command, bound to the story's client. */
 export type Callable<I> = {
   readonly with: (options: {
     readonly client?: DbClient;
@@ -481,7 +481,7 @@ export const release = () =>
     await world.settle();
   });
 
-/** An entity, as `HighAlch.reload(db, Rows)` takes it. */
+/** An entity, as `LowAlch.reload(db, Rows)` takes it. */
 type Entity = { readonly entityName: string };
 
 const isEntity = <Row extends object>(target: Source<Row> | Entity): target is Entity =>
@@ -490,7 +490,7 @@ const isEntity = <Row extends object>(target: Source<Row> | Entity): target is E
 /**
  * `reload(source)` reloads a source, as the `retry` a `match` handler receives does
  * (`collection.reload()`). `reload(Rows)` reloads every loaded subset of an entity in the step's
- * client, as `HighAlch.reload(db, Rows)` does after a write the feed does not carry; its debounce
+ * client, as `LowAlch.reload(db, Rows)` does after a write the feed does not carry; its debounce
  * (`reloadDelay`) passes, so the subsets have reloaded when the step ends.
  */
 export function reload<Row extends object>(source: Source<Row>, options?: Scoped): Step;
@@ -498,7 +498,7 @@ export function reload(entity: Entity, options?: Scoped): Step;
 export function reload<Row extends object>(target: Source<Row> | Entity, options: Scoped = {}) {
   if (isEntity(target))
     return step(`reload ${target.entityName}`, async (world) => {
-      HighAlch.reload((await world.connect(options.as)).db, target);
+      LowAlch.reload((await world.connect(options.as)).db, target);
 
       while (world.clock.fireNext(Number.POSITIVE_INFINITY, ["reload"])) await world.settle();
 

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
-import * as HighAlch from "@highalch/db";
+import * as LowAlch from "@lowalch/tanstack-db";
 import { notes } from "./notes";
 
 /** A demo view for screen stories: one account's notes, read with stock `useLiveQuery`. */
@@ -12,7 +12,7 @@ export function NoteList({ account }: { readonly account: string }) {
   return (
     <section className="notes">
       <h1>Notes</h1>
-      {HighAlch.match(result).on({
+      {LowAlch.match(result).on({
         Loading: () => <p className="status loading">Loading notes…</p>,
         Retrying: ({ error, attempt }) => (
           <p className="status retrying">
@@ -45,14 +45,14 @@ function Items({ notes: rows }: { readonly notes: ReadonlyArray<Row> }) {
   );
 }
 
-/** The same notes read with `Loading: HighAlch.Suspend`: the first load suspends. */
+/** The same notes read with `Loading: LowAlch.Suspend`: the first load suspends. */
 function SuspendingItems({ account }: { readonly account: string }) {
   const result = useLiveQuery((q) =>
     q.from({ note: notes.list({ account }) }).orderBy(({ note }) => note.NoteId),
   );
 
-  return HighAlch.match(result).on({
-    Loading: HighAlch.Suspend,
+  return LowAlch.match(result).on({
+    Loading: LowAlch.Suspend,
     Retrying: ({ error, attempt }) => (
       <p className="status retrying">
         Reconnecting after {error._tag} (attempt {attempt})…

@@ -1,5 +1,5 @@
 ---
-"@highalch/db": patch
+"@lowalch/tanstack-db": patch
 "@highalch/story": patch
 ---
 

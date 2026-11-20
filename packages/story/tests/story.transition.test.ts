@@ -2,7 +2,7 @@ import { createOptimisticAction, createPacedMutations, debounceStrategy } from "
 import { Effect, Option } from "effect";
 import { Story as Alchemy } from "@alchemy.run/domain/Story";
 import { describe, expect, it } from "vite-plus/test";
-import * as HighAlch from "@highalch/db";
+import * as LowAlch from "@lowalch/tanstack-db";
 import * as Story from "@highalch/story";
 import {
   entries,
@@ -36,7 +36,7 @@ import {
 import { notes, stats } from "../../../fixtures/notes";
 
 /**
- * The package's transitions as stories: the Notebook model hosted in memory, a real `HighAlch`
+ * The package's transitions as stories: the Notebook model hosted in memory, a real `LowAlch`
  * client per account behind the story's wire, on the story's manual clock.
  */
 const story = Story.make(Story.memory({ api: NotesApi, layer: notebook, services: store }), {
@@ -63,11 +63,11 @@ const book = notes.byBook({ BookId: "b1" });
 
 describe("f(read declarations, feed burst) as stories", () => {
   it("places rows by rule and re-asks each query-decided subset once", async () => {
-    const reads = HighAlch.collection(NoteRows, {
+    const reads = LowAlch.collection(NoteRows, {
       queries: {
-        read: HighAlch.read(NotesByCursor),
+        read: LowAlch.read(NotesByCursor),
         bare: NotesByCursor,
-        wrapped: HighAlch.read(WrappedNotes)
+        wrapped: LowAlch.read(WrappedNotes)
           .rows((answer) => answer.Items)
           .where((row, input) => row.account === input.account),
       },
@@ -386,7 +386,7 @@ describe("f(change outside the feed, client close) as stories", () => {
   });
 
   it("f(rename in flight, feed muted, story fails) → the failure is reported; closing still ends", async () => {
-    // `HighAlch.close` waits for sent commands: the story lets the reply through and runs its
+    // `LowAlch.close` waits for sent commands: the story lets the reply through and runs its
     // clock's waits (here the settle timeout), so the failure surfaces instead of a hang.
     const failure = await story(
       exist(ada),
@@ -478,7 +478,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
           // Bound to the story's client, or on the client the provider registered.
           if (bound) command = notes.rename.with({ client: db });
-          else release = HighAlch.activate(db);
+          else release = LowAlch.activate(db);
 
           try {
             outcome = command.result({ NoteId: "n1", title });
@@ -569,10 +569,10 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
       Story.check("close the client", async (world) => {
         const { db } = await world.connect();
 
-        await Effect.runPromise(HighAlch.close(db));
+        await Effect.runPromise(LowAlch.close(db));
       }),
       rename.call("Ada 2", true, false),
-      rename.rejects("rejected", "HighAlch client is closing or closed"),
+      rename.rejects("rejected", "LowAlch client is closing or closed"),
     );
   });
 
@@ -630,7 +630,7 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
   it("f(rename with no client registered) → the promise rejects; nothing is thrown at the call", async () => {
     await expect(notes.rename.result({ NoteId: "n1", title: "Ada 2" })).rejects.toThrow(
-      "No HighAlch client is active",
+      "No LowAlch client is active",
     );
   });
 });
@@ -668,7 +668,7 @@ describe("view helpers", () => {
       Story.view(list, Story.Live.Ready({ data, feed: Option.some(new QueryRefused()), retry })),
       Story.view(list, new QueryRefused()),
     ].map((result) =>
-      HighAlch.match(result).on({
+      LowAlch.match(result).on({
         Loading: () => "loading",
         Retrying: ({ error, attempt, data }) => `retrying:${error._tag}:${attempt}:${data.length}`,
         Ready: ({ data, feed }) =>
@@ -695,13 +695,13 @@ describe("view helpers", () => {
   });
 
   it("f(Settled, Live) → the constructors of each outcome and state", () => {
-    const outcome = (): HighAlch.Settled<undefined> =>
+    const outcome = (): LowAlch.Settled<undefined> =>
       Story.Settled.Committed({ reply: undefined, stream: "Note/n1", version: 2 });
 
     const committed = outcome();
 
     expect(
-      HighAlch.match(committed).on({ Committed: () => "saved", Unconfirmed: () => "unconfirmed" }),
+      LowAlch.match(committed).on({ Committed: () => "saved", Unconfirmed: () => "unconfirmed" }),
     ).toBe("saved");
     expect(Story.Live.Missing()._tag).toBe("Missing");
   });

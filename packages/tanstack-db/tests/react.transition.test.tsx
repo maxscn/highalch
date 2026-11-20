@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import { Option } from "effect";
-import * as HighAlch from "@highalch/db";
-import { Provider } from "@highalch/db/react";
+import * as LowAlch from "@lowalch/tanstack-db";
+import { Provider } from "@lowalch/tanstack-db/react";
 import { account, retryTransport, seed, tick, until, type Host } from "../../../fixtures/harness";
 import { host, QueryRefused } from "../../../fixtures/notebook";
 import { notes, stats } from "../../../fixtures/notes";
@@ -60,7 +60,7 @@ function Page() {
 
   return (
     <p>
-      {HighAlch.match(result).on({
+      {LowAlch.match(result).on({
         Loading: () => "loading",
         Retrying: ({ error, attempt, data }) => `retrying:${error._tag}:${attempt}:${data.length}`,
         Ready: ({ data, feed, retry }) => {
@@ -92,8 +92,8 @@ function One({ id }: { id: string }) {
 
   return (
     <p>
-      {HighAlch.match(result).on({
-        [HighAlch.anyOf("Loading", "Retrying")]: () => "loading",
+      {LowAlch.match(result).on({
+        [LowAlch.anyOf("Loading", "Retrying")]: () => "loading",
         Ready: ({ data }) => `note:${data.title}`,
         Missing: () => "missing",
         orElse: (error) => `error:${error._tag}`,
@@ -109,7 +109,7 @@ function Maybe({ on }: { on: boolean }) {
 
   return (
     <p>
-      {HighAlch.match(result).on({
+      {LowAlch.match(result).on({
         Disabled: () => "off",
         Ready: ({ data }) => `on:${data.length}`,
         orElse: () => "pending",
@@ -123,7 +123,7 @@ function Summary() {
 
   return (
     <p>
-      {HighAlch.match(result).on({
+      {LowAlch.match(result).on({
         Ready: ({ data }) => `count:${data.count}`,
         orElse: () => "pending",
       })}
@@ -138,7 +138,7 @@ class Boundary extends Component<{ readonly children: ReactNode }, Caught> {
   override state: Caught = {};
 
   static getDerivedStateFromError(cause: Error) {
-    return { failed: cause instanceof HighAlch.Defect ? `Defect ${cause.name}` : cause.message };
+    return { failed: cause instanceof LowAlch.Defect ? `Defect ${cause.name}` : cause.message };
   }
 
   override render() {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { createAsyncLogic, setup, types } from "xstate";
 import * as Story from "@highalch/story";
 import { explore, Machine, pathsOf } from "@highalch/story/xstate";
-import { mark } from "@highalch/db/xstate";
+import { mark } from "@lowalch/tanstack-db/xstate";
 import { editor } from "../../../fixtures/editor";
 import {
   address,

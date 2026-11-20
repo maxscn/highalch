@@ -23,7 +23,7 @@ import type { Subset } from "./subset";
 import type { Answer, Input } from "./values";
 
 /** The DbClient dependency under which the Domain connection is kept. */
-export const dependency = "@highalch/db";
+export const dependency = "@lowalch/tanstack-db";
 
 /** A schedule of retries for typed read failures, or defects reported by a read. */
 export type Retry = Schedule.Schedule<unknown, TaggedFailure | Defect>;
@@ -37,7 +37,7 @@ export const transient: Retry = Schedule.exponential(250).pipe(
 
 /** Time is provided by Clock. The story kit uses this reference to inspect its waits. */
 export type Wait = "retry" | "reload" | "settle";
-export const waitKind = Context.Reference<Wait>("HighAlch/Wait", { defaultValue: () => "retry" });
+export const waitKind = Context.Reference<Wait>("LowAlch/Wait", { defaultValue: () => "retry" });
 
 type Identifier<A extends Domain.Api.Any> = A["Client"]["Identifier"];
 
@@ -351,7 +351,7 @@ export class Connection {
         if (transaction.state === "pending")
           yield* Effect.try(() =>
             transaction.rollback({ error: closedClientError(), isSecondaryRollback: true }),
-          ).pipe(Effect.ignore({ log: "Warn", message: "HighAlch: a rollback at close threw" }));
+          ).pipe(Effect.ignore({ log: "Warn", message: "LowAlch: a rollback at close threw" }));
 
       this.paced.clear();
       yield* FiberSet.awaitEmpty(this.commands);
@@ -398,7 +398,7 @@ export const make = <A extends Domain.Api.Any>(config: Config<A>) => makeClient(
 export const close = (db: DbClient) => Effect.suspend(() => connectionOf(db).close(db));
 
 /** The TanStack client supplied by layer. */
-export class Client extends Context.Service<Client, DbClient>()("HighAlch/Client") {}
+export class Client extends Context.Service<Client, DbClient>()("LowAlch/Client") {}
 
 /** Makes a client for the lifetime of the layer. */
 export const layer = <A extends Domain.Api.Any>(config: Config<A>) =>
@@ -444,10 +444,10 @@ export const current = (): DbClient => {
 
   if (distinct.length === 0)
     throw new Error(
-      "No HighAlch client is active: render HighAlch's Provider, or pass a client with command.with({ client })",
+      "No LowAlch client is active: render LowAlch's Provider, or pass a client with command.with({ client })",
     );
 
   throw new Error(
-    "Several HighAlch clients are active: pass the one to use with command.with({ client })",
+    "Several LowAlch clients are active: pass the one to use with command.with({ client })",
   );
 };

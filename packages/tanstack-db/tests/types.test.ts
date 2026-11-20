@@ -4,7 +4,7 @@ import { Schema } from "effect";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
-import * as HighAlch from "@highalch/db";
+import * as LowAlch from "@lowalch/tanstack-db";
 import {
   type Book,
   CreateNote,
@@ -30,9 +30,9 @@ import { EntryRows, NotYours } from "../../../fixtures/ledger";
  * The application registers its floor once: a live query whose projection drops the row marker
  * can fail with any read error of its Api.
  */
-declare module "@highalch/db" {
+declare module "@lowalch/tanstack-db" {
   interface Register {
-    readonly errors: HighAlch.ApiErrors<typeof NotesApi> | NotYours;
+    readonly errors: LowAlch.ApiErrors<typeof NotesApi> | NotYours;
   }
 }
 
@@ -42,7 +42,7 @@ type Read = QueryRefused | RpcClientError;
 export function Recovered() {
   const from = useLiveQuery((q) => q.from({ note: notes.list({ account: "a" }) }));
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof from.data>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof from.data>>().toEqualTypeOf<Read>();
 
   const where = useLiveQuery((q) =>
     q
@@ -52,7 +52,7 @@ export function Recovered() {
       .limit(3),
   );
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof where.data>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof where.data>>().toEqualTypeOf<Read>();
 
   const joined = useLiveQuery((q) =>
     q
@@ -62,17 +62,17 @@ export function Recovered() {
       ),
   );
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof joined.data>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof joined.data>>().toEqualTypeOf<Read>();
 
   const one = useLiveQuery((q) => q.from({ note: notes.get({ NoteId: "n" }) }).findOne());
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof one.data>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof one.data>>().toEqualTypeOf<Read>();
 
   const whole = useLiveQuery((q) =>
     q.from({ note: notes.list({ account: "a" }) }).select(({ note }) => note),
   );
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof whole.data>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof whole.data>>().toEqualTypeOf<Read>();
 
   const spread = useLiveQuery((q) =>
     q
@@ -80,26 +80,26 @@ export function Recovered() {
       .select(({ note }) => ({ ...note, heading: note.title })),
   );
 
-  expectTypeOf<HighAlch.ErrorsOf<typeof spread.data>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof spread.data>>().toEqualTypeOf<Read>();
 
   // A non-entity result whose field is an open record (a page cursor) keeps its own errors.
-  type Page = HighAlch.Marked<
+  type Page = LowAlch.Marked<
     { readonly Items: ReadonlyArray<Note>; readonly After?: Record<string, number> },
     Read
   >;
 
-  expectTypeOf<HighAlch.ErrorsOf<Page | undefined>>().toEqualTypeOf<Read>();
+  expectTypeOf<LowAlch.ErrorsOf<Page | undefined>>().toEqualTypeOf<Read>();
 
   // A field projection drops the marker: the registered floor applies.
   const fields = useLiveQuery((q) =>
     q.from({ note: notes.list({ account: "a" }) }).select(({ note }) => ({ id: note.NoteId })),
   );
 
-  expectTypeOf<HighAlch.Floor>().toEqualTypeOf<Read | NotYours>();
-  expectTypeOf<HighAlch.ErrorsOf<typeof fields.data>>().toEqualTypeOf<Read | NotYours>();
+  expectTypeOf<LowAlch.Floor>().toEqualTypeOf<Read | NotYours>();
+  expectTypeOf<LowAlch.ErrorsOf<typeof fields.data>>().toEqualTypeOf<Read | NotYours>();
 
   // @ts-expect-error dropping the marker means the extra floor rejection, NotYours, is required
-  HighAlch.match(fields).on({
+  LowAlch.match(fields).on({
     Loading: () => null,
     Retrying: () => null,
     Ready: () => null,
@@ -108,7 +108,7 @@ export function Recovered() {
   });
 
   // Exhaustive without `orElse`, with each error as its own state.
-  HighAlch.match(from).on({
+  LowAlch.match(from).on({
     Loading: () => null,
     Retrying: () => null,
     Ready: ({ data }) => data.length,
@@ -117,7 +117,7 @@ export function Recovered() {
   });
 
   // @ts-expect-error a missing state is named: QueryRefused
-  HighAlch.match(from).on({
+  LowAlch.match(from).on({
     Loading: () => null,
     Retrying: () => null,
     Ready: () => null,
@@ -125,29 +125,29 @@ export function Recovered() {
   });
 
   // @ts-expect-error `Missing` is impossible for a many-row query
-  HighAlch.match(from).on({
+  LowAlch.match(from).on({
     Ready: () => null,
     Missing: () => null,
     orElse: () => null,
   });
 
-  HighAlch.match(one).on({
+  LowAlch.match(one).on({
     Ready: ({ data }) => expectTypeOf(data.title).toEqualTypeOf<string>(),
     Missing: () => null,
     orElse: () => null,
   });
 
   // @ts-expect-error a state named twice
-  HighAlch.match(from).on({
-    [HighAlch.anyOf("Loading", "Retrying")]: () => null,
+  LowAlch.match(from).on({
+    [LowAlch.anyOf("Loading", "Retrying")]: () => null,
     Ready: () => null,
     orElse: () => null,
     Loading: () => null,
   });
 
   // `Suspend` is the Loading handler whatever the others return; the result drops its `never`.
-  const suspended = HighAlch.match(from).on({
-    Loading: HighAlch.Suspend,
+  const suspended = LowAlch.match(from).on({
+    Loading: LowAlch.Suspend,
     Retrying: ({ data }) => data.length,
     Ready: ({ data }) => data.map((note) => note.title),
     QueryRefused: () => null,
@@ -158,30 +158,30 @@ export function Recovered() {
 
   // It changes nothing else: still exhaustive, and with `orElse` too.
   // @ts-expect-error a missing state is named: QueryRefused
-  HighAlch.match(from).on({
-    Loading: HighAlch.Suspend,
+  LowAlch.match(from).on({
+    Loading: LowAlch.Suspend,
     Retrying: () => null,
     Ready: () => null,
     RpcClientError: () => null,
   });
 
-  HighAlch.match(one).on({ Loading: HighAlch.Suspend, Ready: () => null, orElse: () => null });
+  LowAlch.match(one).on({ Loading: LowAlch.Suspend, Ready: () => null, orElse: () => null });
 
   // @ts-expect-error `Suspend` handles only `Loading`
-  HighAlch.match(from).on({ Loading: () => null, Ready: HighAlch.Suspend, orElse: () => null });
+  LowAlch.match(from).on({ Loading: () => null, Ready: LowAlch.Suspend, orElse: () => null });
 
-  HighAlch.match(from).on({
+  LowAlch.match(from).on({
     // @ts-expect-error nor a group naming another state
-    [HighAlch.anyOf("Loading", "Retrying")]: HighAlch.Suspend,
+    [LowAlch.anyOf("Loading", "Retrying")]: LowAlch.Suspend,
     orElse: () => null,
   });
 
-  HighAlch.match(from).on({
+  LowAlch.match(from).on({
     Loading: () => null,
     Retrying: () => null,
     Ready: () => null,
     // @ts-expect-error nor `orElse`, which receives the typed errors
-    orElse: HighAlch.Suspend,
+    orElse: LowAlch.Suspend,
   });
 
   return null;
@@ -201,22 +201,22 @@ class MaybeNotes extends Domain.Query("MaybeNotes", {
 
 type ReadMethods<T> = Extract<keyof T, string>;
 
-type SourceErrors<Accessor> = Accessor extends (...args: never) => HighAlch.Source<infer Row>
-  ? HighAlch.ErrorsOf<Row>
+type SourceErrors<Accessor> = Accessor extends (...args: never) => LowAlch.Source<infer Row>
+  ? LowAlch.ErrorsOf<Row>
   : never;
 
 /** Every read step keeps the query's input and errors and uses the current entry type. */
 export function ReadBuilder(otherRow: Book) {
-  const start = HighAlch.read(Notes);
-  const selected = HighAlch.read(NotesByTitle).rows((answer) => answer.Items);
+  const start = LowAlch.read(Notes);
+  const selected = LowAlch.read(NotesByTitle).rows((answer) => answer.Items);
   const all = start.all();
-  const where = HighAlch.read(NotesByBook).where((row, input) => {
+  const where = LowAlch.read(NotesByBook).where((row, input) => {
     expectTypeOf(row).toEqualTypeOf<Note>();
-    expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByBook>>();
+    expectTypeOf(input).toEqualTypeOf<LowAlch.QueryInput<typeof NotesByBook>>();
 
     return row.BookId === input.BookId;
   });
-  const one = HighAlch.read(NoteById).one((row, input) => row.NoteId === input.NoteId);
+  const one = LowAlch.read(NoteById).one((row, input) => row.NoteId === input.NoteId);
 
   expectTypeOf<ReadMethods<typeof start>>().toEqualTypeOf<"rows" | "where" | "one" | "all">();
   expectTypeOf<ReadMethods<typeof selected>>().toEqualTypeOf<"where" | "one" | "all">();
@@ -224,7 +224,7 @@ export function ReadBuilder(otherRow: Book) {
   expectTypeOf<ReadMethods<typeof where>>().toBeNever();
   expectTypeOf<ReadMethods<typeof one>>().toBeNever();
 
-  const subsets = HighAlch.collection(NoteRows, {
+  const subsets = LowAlch.collection(NoteRows, {
     queries: {
       read: start,
       bare: Notes,
@@ -235,17 +235,17 @@ export function ReadBuilder(otherRow: Book) {
       selectedAll: selected.all(),
       selectedWhere: selected.where((row, input) => {
         expectTypeOf(row).toEqualTypeOf<Note>();
-        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+        expectTypeOf(input).toEqualTypeOf<LowAlch.QueryInput<typeof NotesByTitle>>();
 
         return row.account === input.account;
       }),
       selectedOne: selected.one((row, input) => {
         expectTypeOf(row).toEqualTypeOf<Note>();
-        expectTypeOf(input).toEqualTypeOf<HighAlch.QueryInput<typeof NotesByTitle>>();
+        expectTypeOf(input).toEqualTypeOf<LowAlch.QueryInput<typeof NotesByTitle>>();
 
         return row.account === input.account;
       }),
-      optional: HighAlch.read(OptionalNotes).rows((answer) => {
+      optional: LowAlch.read(OptionalNotes).rows((answer) => {
         expectTypeOf(answer).toEqualTypeOf<{ readonly Items: ReadonlyArray<Note> }>();
 
         return answer.Items;
@@ -253,11 +253,9 @@ export function ReadBuilder(otherRow: Book) {
     },
   });
 
-  expectTypeOf(subsets.list).toEqualTypeOf<HighAlch.Subsets<typeof NoteRows, typeof Notes>>();
+  expectTypeOf(subsets.list).toEqualTypeOf<LowAlch.Subsets<typeof NoteRows, typeof Notes>>();
   expectTypeOf(subsets.read).toEqualTypeOf<typeof subsets.bare>();
-  expectTypeOf(subsets.page).toEqualTypeOf<
-    HighAlch.Subsets<typeof NoteRows, typeof NotesByTitle>
-  >();
+  expectTypeOf(subsets.page).toEqualTypeOf<LowAlch.Subsets<typeof NoteRows, typeof NotesByTitle>>();
   expectTypeOf(subsets.selectedAll).toEqualTypeOf<typeof subsets.page>();
   expectTypeOf(subsets.selectedWhere).toEqualTypeOf<typeof subsets.page>();
   expectTypeOf(subsets.selectedOne).toEqualTypeOf<typeof subsets.page>();
@@ -271,7 +269,7 @@ export function ReadBuilder(otherRow: Book) {
     q.from({ note: subsets.selectedWhere({ account: "a", Offset: 0, Limit: 10 }) }),
   );
 
-  HighAlch.match(combined).on({
+  LowAlch.match(combined).on({
     Loading: () => null,
     Retrying: () => null,
     Ready: ({ data }) => data.map((row) => row.NoteId),
@@ -280,7 +278,7 @@ export function ReadBuilder(otherRow: Book) {
   });
 
   // @ts-expect-error the selected and filtered read still requires its typed rejection
-  HighAlch.match(combined).on({
+  LowAlch.match(combined).on({
     Loading: () => null,
     Retrying: () => null,
     Ready: () => null,
@@ -299,18 +297,18 @@ export function ReadBuilder(otherRow: Book) {
   // @ts-expect-error one completes the declaration
   one.all();
 
-  const cursor = HighAlch.read(NotesByCursor);
+  const cursor = LowAlch.read(NotesByCursor);
   const paged = cursor.rows((answer) => answer.entries);
 
   expectTypeOf<ReadMethods<typeof cursor>>().toEqualTypeOf<"rows" | "where" | "one">();
   expectTypeOf<ReadMethods<typeof paged>>().toEqualTypeOf<"where" | "one">();
 
-  const pages = HighAlch.collection(NoteRows, {
+  const pages = LowAlch.collection(NoteRows, {
     queries: { byCursor: paged.where((row, input) => row.account === input.account) },
   });
 
   expectTypeOf(pages.byCursor).toEqualTypeOf<
-    HighAlch.Subsets<typeof NoteRows, typeof NotesByCursor>
+    LowAlch.Subsets<typeof NoteRows, typeof NotesByCursor>
   >();
   expectTypeOf<SourceErrors<typeof pages.byCursor>>().toEqualTypeOf<Read>();
   pages.byCursor({ account: "a" }, { after: "2", take: 10 });
@@ -334,83 +332,83 @@ export function ReadBuilder(otherRow: Book) {
   selected.where((row) => row.Items.length > 0);
 
   // @ts-expect-error the selector receives the wrapped answer, not a note
-  HighAlch.read(OptionalNotes).rows((answer) => answer.title);
+  LowAlch.read(OptionalNotes).rows((answer) => answer.title);
 
   // @ts-expect-error the selector only receives non-null answers
-  HighAlch.read(OptionalNotes).rows((_answer: null) => []);
+  LowAlch.read(OptionalNotes).rows((_answer: null) => []);
 
   // @ts-expect-error the selector must return an array of rows
-  HighAlch.read(OptionalNotes).rows((answer) => answer.Items[0]);
+  LowAlch.read(OptionalNotes).rows((answer) => answer.Items[0]);
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       // @ts-expect-error the selected book does not belong to NoteRows
-      wrongEntity: HighAlch.read(Notes).rows(() => [otherRow]),
+      wrongEntity: LowAlch.read(Notes).rows(() => [otherRow]),
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       good: Notes,
       // @ts-expect-error the valid sibling does not mask selecting strings and adding a rule
-      bad: HighAlch.read(NotesByTitle)
+      bad: LowAlch.read(NotesByTitle)
         .rows((answer) => answer.Items.map((row) => row.title))
         .where((row) => row.length > 0),
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       // @ts-expect-error the default entry is still checked when using all
-      bad: HighAlch.read(NoteStats).all(),
+      bad: LowAlch.read(NoteStats).all(),
     },
   });
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       // @ts-expect-error the feed delivers notes, which have no `extra` for the rule to read
-      widened: HighAlch.read(NotesByTitle)
+      widened: LowAlch.read(NotesByTitle)
         .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
         .where((row) => row.extra.startsWith("x")),
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       // @ts-expect-error a rule over another entity's row is not saved by selecting no rows
-      empty: HighAlch.read(NotesByTitle)
+      empty: LowAlch.read(NotesByTitle)
         .rows(() => [])
         .where((row: Book) => row.name.length > 0),
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       // @ts-expect-error the same holds for a single row
-      widenedOne: HighAlch.read(NotesByTitle)
+      widenedOne: LowAlch.read(NotesByTitle)
         .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
         .one((row) => row.extra === "x"),
     },
   });
 
   // Rows with extra fields are fine while the query decides: no rule reads them.
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
-      widened: HighAlch.read(NotesByTitle).rows((answer) =>
+      widened: LowAlch.read(NotesByTitle).rows((answer) =>
         answer.Items.map((row) => ({ ...row, extra: "x" })),
       ),
-      widenedAll: HighAlch.read(NotesByTitle)
+      widenedAll: LowAlch.read(NotesByTitle)
         .rows((answer) => answer.Items.map((row) => ({ ...row, extra: "x" })))
         .all(),
       // An answer that may be `null` holds the same rows as one that may not.
       maybe: MaybeNotes,
-      maybeAll: HighAlch.read(MaybeNotes).all(),
+      maybeAll: LowAlch.read(MaybeNotes).all(),
     },
   });
 }
 
 /** Commands: input-only calls typed from the Domain definitions, `onRejected` checked. */
 export function Commands() {
-  type Errors = HighAlch.ErrorOf<typeof RenameNote>;
+  type Errors = LowAlch.ErrorOf<typeof RenameNote>;
 
   expectTypeOf<Errors["_tag"]>().toEqualTypeOf<"NoteMissing" | "NoteLocked" | "RpcClientError">();
 
@@ -419,7 +417,7 @@ export function Commands() {
     {
       onRejected: {
         NoteLocked: (error) => expectTypeOf(error.title).toEqualTypeOf<string>(),
-        [HighAlch.anyOf("NoteMissing", "RpcClientError")]: () => null,
+        [LowAlch.anyOf("NoteMissing", "RpcClientError")]: () => null,
       },
     },
   );
@@ -451,17 +449,17 @@ export function Commands() {
   // A create's transaction holds the created key; other transactions do not claim one.
   const created = notes.create({ account: "a", BookId: "b", title: "t" });
 
-  expectTypeOf(HighAlch.created(created)).toEqualTypeOf<string>();
+  expectTypeOf(LowAlch.created(created)).toEqualTypeOf<string>();
 
   // @ts-expect-error only an `inserts` transaction holds a created key
-  HighAlch.created(notes.rename({ NoteId: "n", title: "t" }));
+  LowAlch.created(notes.rename({ NoteId: "n", title: "t" }));
 
   expectTypeOf(notes.rename.effect)
     .parameter(0)
-    .toEqualTypeOf<HighAlch.InputOf<typeof RenameNote>>();
+    .toEqualTypeOf<LowAlch.InputOf<typeof RenameNote>>();
 
   expectTypeOf(notes.rename.effect).returns.toEqualTypeOf<
-    import("effect").Effect.Effect<HighAlch.Settled<void>, Errors>
+    import("effect").Effect.Effect<LowAlch.Settled<void>, Errors>
   >();
 
   return null;
@@ -488,37 +486,37 @@ class RefreshAll extends Domain.Command("RefreshAll", {
 
 /** Declarations: rows, queries, keys and targets are checked against the entity. */
 export const Declarations = () => {
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: {
       // @ts-expect-error NoteStats answers `{ count }`, not notes
       stats: NoteStats,
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: { get: NoteById },
     commands: {
       // @ts-expect-error the pending row is missing note fields
-      create: HighAlch.inserts(CreateNote, { row: (input) => ({ title: input.title }) }),
+      create: LowAlch.inserts(CreateNote, { row: (input) => ({ title: input.title }) }),
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: { get: NoteById },
     commands: {
       // @ts-expect-error Retitle's input has no NoteId and declares no `key`
-      retitle: HighAlch.updates(Retitle),
+      retitle: LowAlch.updates(Retitle),
       // @ts-expect-error the same for a delete
-      drop: HighAlch.deletes(Retitle),
+      drop: LowAlch.deletes(Retitle),
       // @ts-expect-error the same for a custom edit
-      edit: HighAlch.edits(Retitle, { change: (draft) => draft }),
+      edit: LowAlch.edits(Retitle, { change: (draft) => draft }),
       // @ts-expect-error the same for a bare command
       bare: Retitle,
       // A declared key (or target) is enough.
-      keyed: HighAlch.updates(Retitle, { key: (input) => input.title }),
-      sent: HighAlch.sends(Retitle, { key: (input) => input.title }),
+      keyed: LowAlch.updates(Retitle, { key: (input) => input.title }),
+      sent: LowAlch.sends(Retitle, { key: (input) => input.title }),
       // An `inserts` key is a fresh id by default: no key field is needed.
-      create: HighAlch.inserts(Retitle, {
+      create: LowAlch.inserts(Retitle, {
         row: (input, key) => ({
           NoteId: key,
           account: "a",
@@ -530,28 +528,28 @@ export const Declarations = () => {
     },
   });
 
-  HighAlch.collection(NoteRows, {
+  LowAlch.collection(NoteRows, {
     queries: { get: NoteById },
     commands: {
       // @ts-expect-error the entity's target is a plain string, not BrandedRename's NoteAddress
-      rename: HighAlch.updates(BrandedRename),
+      rename: LowAlch.updates(BrandedRename),
       // A per-command target of the command's own target type is accepted.
-      renamed: HighAlch.updates(BrandedRename, {
+      renamed: LowAlch.updates(BrandedRename, {
         target: (input, scope) => Address.make(JSON.stringify([scope, input.NoteId])),
       }),
     },
   });
 
   // @ts-expect-error a per-command target must return the command's target type
-  HighAlch.updates(RenameNote, { target: () => 1 });
+  LowAlch.updates(RenameNote, { target: () => 1 });
 
   // @ts-expect-error a key reads the command's input: PinNote has no title
-  HighAlch.edits(PinNote, { key: (input) => input.title, change: () => {} });
+  LowAlch.edits(PinNote, { key: (input) => input.title, change: () => {} });
 
   // @ts-expect-error `updates` takes `key` and `target` only
-  HighAlch.updates(RenameNote, { keys: () => "n" });
+  LowAlch.updates(RenameNote, { keys: () => "n" });
 
-  HighAlch.Rows("BadTarget", {
+  LowAlch.Rows("BadTarget", {
     feed: NotebookChanges,
     row: Note,
     key: "NoteId",
@@ -562,28 +560,28 @@ export const Declarations = () => {
     on: {},
   });
 
-  HighAlch.Projection("Elsewhere", {
+  LowAlch.Projection("Elsewhere", {
     feed: NotebookChanges,
     // @ts-expect-error every entity of a feed's projection is on that feed
     entities: [NoteRows, EntryRows],
   });
 
   // A guarded feed's read errors reach its entity's rows: its rejections and transport.
-  expectTypeOf<HighAlch.FeedError<typeof EntryRows>>().toEqualTypeOf<NotYours | RpcClientError>();
+  expectTypeOf<LowAlch.FeedError<typeof EntryRows>>().toEqualTypeOf<NotYours | RpcClientError>();
 
   // An unguarded feed fails only in transport.
-  expectTypeOf<HighAlch.FeedError<typeof NoteRows>>().toEqualTypeOf<RpcClientError>();
+  expectTypeOf<LowAlch.FeedError<typeof NoteRows>>().toEqualTypeOf<RpcClientError>();
 
   // @ts-expect-error a command outside an entity declares its target
-  HighAlch.command(RenameNote);
+  LowAlch.command(RenameNote);
 
-  HighAlch.command(RenameNote, { target: (input, scope) => `${scope}/${input.NoteId}` });
+  LowAlch.command(RenameNote, { target: (input, scope) => `${scope}/${input.NoteId}` });
 
   // @ts-expect-error the target function returns the command's target type
-  HighAlch.command(BrandedRename, { target: (input) => input.NoteId });
+  LowAlch.command(BrandedRename, { target: (input) => input.NoteId });
 
   // A singleton aggregate's one literal target needs no declaration.
-  HighAlch.command(RefreshAll);
+  LowAlch.command(RefreshAll);
 
   return null;
 };

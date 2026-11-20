@@ -3,10 +3,10 @@
  * entities on it and the one projection that writes it. It imports only `@alchemy.run/domain`
  * and `effect`, so a Domain model (and the Worker hosting it) can declare row feeds without
  * bundling TanStack DB, and Node can load it from source (its relative import names the `.ts`
- * file). `@highalch/db` re-exports it.
+ * file). `@lowalch/tanstack-db` re-exports it.
  *
  * ```ts
- * import * as HighAlch from "@highalch/db/server";
+ * import * as LowAlch from "@lowalch/tanstack-db/server";
  * ```
  */
 export { Feed, Rows, Projection, upserted, removed } from "./rows.ts";

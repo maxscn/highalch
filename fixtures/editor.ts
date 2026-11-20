@@ -1,7 +1,7 @@
 import { setupEffect } from "@xstate/effect";
 import { Match, Predicate } from "effect";
 import { types } from "xstate";
-import { invoke, rejection } from "@highalch/db/xstate";
+import { invoke, rejection } from "@lowalch/tanstack-db/xstate";
 import { notes } from "./notes";
 
 /** What the editor holds: the note it edits, the draft title, and the last problem's tag. */

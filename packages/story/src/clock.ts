@@ -1,5 +1,5 @@
 import { Clock as EffectClock, Duration, Effect } from "effect";
-import { waitKind, type Wait } from "@highalch/db/internal";
+import { waitKind, type Wait } from "@lowalch/tanstack-db/internal";
 
 const live = Effect.runSync(EffectClock.Clock);
 

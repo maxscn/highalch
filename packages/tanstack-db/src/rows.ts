@@ -194,7 +194,7 @@ export type RowsDefinition<
    */
   readonly target?: (key: KeyOf<RowSchema, KeyField>, scope: F["feed"]["scope"]["Type"]) => Target;
   /**
-   * Each source event's row changes: `HighAlch.upserted(row)`, `HighAlch.removed(key)`, several
+   * Each source event's row changes: `LowAlch.upserted(row)`, `LowAlch.removed(key)`, several
    * of them, or nothing. The feed keeps no row, so the event (or a source view's state) must carry
    * the whole row after it.
    */
@@ -273,7 +273,7 @@ const list = <A>(answer: A | ReadonlyArray<A> | undefined): ReadonlyArray<A> => 
  * One entity on a feed: its row schema and key field, the sources whose events change its rows,
  * the feed each event belongs to (`scope`), and the changes `on` maps each event to. Its changes
  * are written by the feed's one projection (`Projection`), which lists it; collections over it
- * read the feed (`HighAlch.collection(CustomerRows, …)`).
+ * read the feed (`LowAlch.collection(CustomerRows, …)`).
  */
 export const Rows = <
   const Name extends string,

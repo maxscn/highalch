@@ -1,6 +1,6 @@
 # @highalch/story
 
-Stories for data synced with [`@highalch/db`](../db/README.md) and the XState machines over it:
+Stories for data synced with [`@lowalch/tanstack-db`](../tanstack-db/README.md) and the XState machines over it:
 given server history, when a client, another client or the world acts, then what each source
 shows, its read state and how each command settled. Optional screen steps paint a filmstrip of a
 mounted React component without a browser.
@@ -11,7 +11,7 @@ mounted React component without a browser.
 | `@highalch/story/xstate` | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`      |
 | `@highalch/story/screen` | Screen steps: a mounted component's frames vs reviewed baselines; needs takumi/happy-dom |
 
-Peer dependencies: `@highalch/db` and its peers; optional `xstate` and `@xstate/effect` (for
+Peer dependencies: `@lowalch/tanstack-db` and its peers; optional `xstate` and `@xstate/effect` (for
 `/xstate`), `react-dom`, `happy-dom`, `takumi-js` 2.14.0 and `@effect/atom-react` (for `/screen`).
 
 A story tells a frontend's behaviour like Foldkit's: given a state, when something happens, then
@@ -27,19 +27,19 @@ commands it asked for), and lists the steps (✓ passed, ✗ failed, blank not r
 ```ts
 import * as Story from "@highalch/story"; // the runner and the data steps; never imports XState
 import { explore, Machine } from "@highalch/story/xstate"; // machine steps and generated stories
-import { invoke } from "@highalch/db/xstate"; // production: how a machine invokes a command
+import { invoke } from "@lowalch/tanstack-db/xstate"; // production: how a machine invokes a command
 ```
 
-`@highalch/db` never imports the story kit. Only `@highalch/db/xstate` and
+`@lowalch/tanstack-db` never imports the story kit. Only `@lowalch/tanstack-db/xstate` and
 `@highalch/story/xstate` import `xstate` and `@xstate/effect`, optional peer dependencies;
 the repository's `vp run check:patterns` enforces both.
 
 ## Making a story
 
-In this example, the whole-list declaration for `notes.list` is `HighAlch.read(Notes).all()`.
+In this example, the whole-list declaration for `notes.list` is `LowAlch.read(Notes).all()`.
 
 ```ts
-// Hosted: the consumer's Domain in memory, real HighAlch clients (one per scope) behind a wire the
+// Hosted: the consumer's Domain in memory, real LowAlch clients (one per scope) behind a wire the
 // story controls, on a clock it controls. Data steps and machine steps.
 const story = Story.make(
   Story.memory({ api: NotesApi, layer: handlers, services: stores, session: readerOf }),
@@ -92,7 +92,7 @@ Data steps (`Story.*`; they need a host):
 | `drop(error?)` / `resume()`                              | the feed fails (reconnecting fails too) / connects again: its retries run now                                         |
 | `mute(on?)`                                              | the feed stays connected and delivers nothing (what it drops is lost to that connection)                              |
 | `fail(name, error, times?)` / `recover(name)`            | a query or command fails with a typed error / answers again                                                           |
-| `reload(source)` / `reload(Rows)`                        | what a `match` handler's `retry` does (`collection.reload()`) / `HighAlch.reload(db, Rows)`, its debounce passed      |
+| `reload(source)` / `reload(Rows)`                        | what a `match` handler's `retry` does (`collection.reload()`) / `LowAlch.reload(db, Rows)`, its debounce passed       |
 | `hold()` / `release()`                                   | queries answer with what they saw when asked, but only at `release` (a write racing a load)                           |
 | `advance(ms)`                                            | time passes on the story's clock: retries, reload debounces and settle timeouts due within `ms` fire, in order        |
 | `settle()` / `idle()`                                    | wait until nothing more happens by itself / until every command ended                                                 |
@@ -169,7 +169,7 @@ machine of the same name is an error); every other machine step addresses one by
 its last event: rename {"NoteId":"n1","title":"Ada 2"}`.
 
 **Invoking a command.** A machine invokes a command through `invoke(command)` from
-`@highalch/db/xstate` (production code imports it there, never from a testing entry;
+`@lowalch/tanstack-db/xstate` (production code imports it there, never from a testing entry;
 `story/xstate` re-exports it), registered as an actor and run with `@xstate/effect`'s
 `createEffectActor`:
 
@@ -192,7 +192,7 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
 
 It is `createEffectLogic` over `command.effect(input)`: the invoked actor's output is the
 `Settled` value. Its error reaches `onError` as `@xstate/effect`'s `EffectFailure` around the
-Effect's cause; `rejection(event.error)` (from `@highalch/db/xstate`) answers the typed rejection
+Effect's cause; `rejection(event.error)` (from `@lowalch/tanstack-db/xstate`) answers the typed rejection
 inside, the original instance. The logic is marked with its command,
 which is what makes "the command it asked for" observable: XState 6's pure `transition` returns,
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
@@ -228,7 +228,7 @@ reload debounce or a settle timeout fires only when `advance` (or `resume`, for 
 so stories never sleep and never race the timer. `clock: "real"` uses `setTimeout`, still tracked.
 A source records what a mounted live query renders: one state per key per change batch (a reload's
 delete and insert of a row in one batch is one change). When a story ends, or fails, with a command
-in flight, closing its clients (`HighAlch.close` waits for sent commands) lets the replies through
+in flight, closing its clients (`LowAlch.close` waits for sent commands) lets the replies through
 and runs the clock's waits, so a failure is reported instead of hanging.
 
 **Invariants.** `story.with({ invariants })` checks invariants after every step and at the end.
@@ -408,7 +408,7 @@ A presentational component takes plain props; its composition component renders
 ## Seams in the core
 
 The kit provides its manual or real clock through Effect's `Clock` service. It uses
-`waitKind` from the unstable `@highalch/db/internal` entry to tell retries, reload debounces and
+`waitKind` from the unstable `@lowalch/tanstack-db/internal` entry to tell retries, reload debounces and
 settle timeouts apart. It also reads each feed subscription's `current` flag to check that the
 feed has caught up and is healthy. The core shares the constructors of `match`'s live states
 and of `Settled` with the kit.

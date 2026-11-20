@@ -12,9 +12,9 @@ import {
   type MachineContext,
   type StateValue,
 } from "xstate";
-import type { TaggedFailure } from "@highalch/db";
-import type { Answer, Input } from "@highalch/db/internal";
-import { commandOf, Runner, type Invocable, type Marked } from "@highalch/db/xstate";
+import type { TaggedFailure } from "@lowalch/tanstack-db";
+import type { Answer, Input } from "@lowalch/tanstack-db/internal";
+import { commandOf, Runner, type Invocable, type Marked } from "@lowalch/tanstack-db/xstate";
 import { registryOf, stageOf } from "../atoms";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Callable, type Step } from "../steps";
@@ -281,7 +281,7 @@ const runnerOf = (
           input,
           (client, onCommitted) => {
             if (!isCallable(command))
-              throw new Error("invoke(command) takes a declared HighAlch command");
+              throw new Error("invoke(command) takes a declared LowAlch command");
 
             return command.with({ client })(input, { onCommitted });
           },
