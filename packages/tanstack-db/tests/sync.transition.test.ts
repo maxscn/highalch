@@ -22,8 +22,8 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import * as HighAlch from "@highalch/tanstack-db";
-import { connectionOf, waitKind } from "@highalch/tanstack-db/internal";
+import * as LowAlch from "@lowalch/tanstack-db";
+import { connectionOf, waitKind } from "@lowalch/tanstack-db/internal";
 import {
   account,
   observe,
@@ -103,7 +103,7 @@ const subsets = (db: DbClient) => ({
 const ready = (...collections: ReadonlyArray<{ isReady: () => boolean }>) =>
   until(() => collections.every((collection) => collection.isReady()), "ready");
 
-it("f(scoped HighAlch client, a command and scope exit) → command uses the service and the feed stops", async () => {
+it("f(scoped LowAlch client, a command and scope exit) → command uses the service and the feed stops", async () => {
   const server = await open();
   await seed(server, ada);
   const config = {
@@ -114,7 +114,7 @@ it("f(scoped HighAlch client, a command and scope exit) → command uses the ser
 
   await Effect.runPromise(
     Effect.gen(function* () {
-      const db = yield* HighAlch.Client;
+      const db = yield* LowAlch.Client;
       const list = observe(db, notes.list({ account: ada.account }), cleanup);
 
       yield* Effect.promise(() => ready(list));
@@ -122,7 +122,7 @@ it("f(scoped HighAlch client, a command and scope exit) → command uses the ser
       expect(titles(list)).toEqual(["n1:Ada"]);
       yield* notes.rename.effect({ NoteId: ada.NoteId, title: "Abel" });
       expect(titles(list)).toEqual(["n1:Abel"]);
-    }).pipe(Effect.provide(HighAlch.layer(config))),
+    }).pipe(Effect.provide(LowAlch.layer(config))),
   );
 
   await until(() => server.wire.counts.open === 0, "scope closed the feed");
@@ -339,9 +339,9 @@ describe("f(ready subsets, feed change)", () => {
 
     await seed(server, ada, bob);
 
-    const wrapped = HighAlch.collection(NoteRows, {
+    const wrapped = LowAlch.collection(NoteRows, {
       queries: {
-        list: HighAlch.read(WrappedNotes)
+        list: LowAlch.read(WrappedNotes)
           .rows((answer) => answer.Items)
           .where((row, input) => row.account === input.account),
       },
@@ -484,25 +484,25 @@ const causeLayer = (server: Host, cause: string) => {
 describe("f(query declaration, configuration)", () => {
   it("rejects a second declaration with different membership in one call or across calls", () => {
     class Rows extends NoteRows {}
-    const full = HighAlch.read(Notes).all();
+    const full = LowAlch.read(Notes).all();
 
-    expect(() => HighAlch.collection(Rows, { queries: { bare: Notes, full } })).toThrow(
-      "HighAlch.collection: conflicting declarations of query Notes for NoteRows",
+    expect(() => LowAlch.collection(Rows, { queries: { bare: Notes, full } })).toThrow(
+      "LowAlch.collection: conflicting declarations of query Notes for NoteRows",
     );
-    const configured = HighAlch.collection(Rows, { queries: { full } });
+    const configured = LowAlch.collection(Rows, { queries: { full } });
 
-    expect(() => HighAlch.collection(Rows, { queries: { bare: Notes } })).toThrow(
-      "HighAlch.collection: conflicting declarations of query Notes for NoteRows",
+    expect(() => LowAlch.collection(Rows, { queries: { bare: Notes } })).toThrow(
+      "LowAlch.collection: conflicting declarations of query Notes for NoteRows",
     );
-    const repeated = HighAlch.collection(Rows, { queries: { full: HighAlch.read(Notes).all() } });
+    const repeated = LowAlch.collection(Rows, { queries: { full: LowAlch.read(Notes).all() } });
 
     expect(repeated.full({ account: "acc-1" }).id).toBe(configured.full({ account: "acc-1" }).id);
   });
 
   it("rejects .all() over a cursor page at runtime", () => {
     // @ts-expect-error bypass the type guard to exercise the runtime guard
-    expect(() => HighAlch.read(NotesByCursor).all()).toThrow(
-      "HighAlch.all cannot declare paged query NotesByCursor",
+    expect(() => LowAlch.read(NotesByCursor).all()).toThrow(
+      "LowAlch.all cannot declare paged query NotesByCursor",
     );
   });
 });
@@ -616,7 +616,7 @@ describe("f(query-decided page, a lagging answer)", () => {
       await tick(5);
     }
 
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
     await Effect.runPromise(clock.adjust(10));
     await until(() => countAsked(server).NotesByTitle === 2, "explicit reload sent");
     await tick();
@@ -653,7 +653,7 @@ describe("f(query-decided page, a lagging answer)", () => {
     if (!stored) throw new Error("The renamed note was not stored");
     server.store.notes.set(ada.NoteId, { ...stored, title: "Imported" });
 
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
     await Effect.runPromise(clock.adjust(10));
     await until(() => countAsked(server).NotesByTitle === 2, "explicit reload sent");
     await tick();
@@ -672,7 +672,7 @@ describe("f(query-decided page, a lagging answer)", () => {
     await ready(page);
     const aaron = { ...ada, NoteId: "n4", title: "Aaron" };
     await seed(server, aaron);
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
 
     for (const [index, title] of ["Ada 1", "Ada 2"].entries()) {
       const release = server.hold();
@@ -691,12 +691,12 @@ describe("f(query-decided page, a lagging answer)", () => {
     const release = server.hold();
     await Effect.runPromise(clock.adjust(10));
     await until(() => countAsked(server).NotesByTitle === 4, "third answer held");
-    const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
+    const committed = Promise.withResolvers<LowAlch.Settled<unknown>>();
     const inserted = notes.create.with({ client: db })(
       { account: input.account, BookId: "b1", title: "Aardvark" },
       { id: cause, onCommitted: committed.resolve },
     );
-    const key = HighAlch.created(inserted);
+    const key = LowAlch.created(inserted);
     await inserted.when("settled");
     expect(await committed.promise).toMatchObject({ _tag: "Committed" });
     expect(page.get(key)?.title).toBe("Aardvark");
@@ -794,7 +794,7 @@ describe("f(query-decided page, a lagging answer)", () => {
       expect(countAsked(server).NotesByTitle).toBe(asked + 4);
 
       lagging = false;
-      HighAlch.reload(db, NoteRows);
+      LowAlch.reload(db, NoteRows);
       await Effect.runPromise(clock.adjust(10));
       await until(() => countAsked(server).NotesByTitle === asked + 5, "fresh re-ask");
       if (action === "delete") await until(() => page.has(cyd.NoteId), "fresh answer backfills");
@@ -845,7 +845,7 @@ describe("f(query-decided page, a lagging answer)", () => {
 
     const aaron = { ...ada, NoteId: "n4", title: "Aaron" };
     await seed(server, aaron);
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const release = server.hold();
@@ -897,13 +897,13 @@ describe("f(query-decided page, a lagging answer)", () => {
       await ready(page);
 
       fail = true;
-      HighAlch.reload(db, NoteRows);
+      LowAlch.reload(db, NoteRows);
       await Effect.runPromise(clock.adjust(10));
       await until(() => page.health.failureReason !== null, "reload waiting to retry");
       expect(countAsked(server).NotesByTitle).toBe(2);
 
       fail = false;
-      if (reason === "explicit reload") HighAlch.reload(db, NoteRows);
+      if (reason === "explicit reload") LowAlch.reload(db, NoteRows);
       else {
         await server.send((client) =>
           client.RenameNote(address(input.account, ada.NoteId), {
@@ -923,10 +923,10 @@ describe("f(query-decided page, a lagging answer)", () => {
       expect(countAsked(server).NotesByTitle).toBe(3);
 
       fail = true;
-      HighAlch.reload(db, NoteRows);
+      LowAlch.reload(db, NoteRows);
       await Effect.runPromise(clock.adjust(10));
       await until(() => page.health.failureReason !== null, "another reload waiting to retry");
-      HighAlch.reload(db, NoteRows);
+      LowAlch.reload(db, NoteRows);
       await Effect.runPromise(clock.adjust(10));
       await until(() => countAsked(server).NotesByTitle === 5, "preempted attempt failed again");
       await tick();
@@ -1050,7 +1050,7 @@ describe("f(offset/limit page, feed change)", () => {
       await until(() => page.get(ada.NoteId)?.title === title, title);
     }
 
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
     await server.indexed((stored) => stored.get(ada.NoteId)?.title === "Zed");
     expect(countAsked(server).NotesByTitle).toBe(1);
 
@@ -1108,7 +1108,7 @@ describe("f(offset/limit page, feed change)", () => {
 
       const clock = reloads();
       const cause = "page-insert";
-      const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
+      const committed = Promise.withResolvers<LowAlch.Settled<unknown>>();
       const db = account(server, input.account, cleanup, {
         clock: clock.clock,
         layer: causeLayer(server, cause),
@@ -1120,7 +1120,7 @@ describe("f(offset/limit page, feed change)", () => {
       let release = server.hold();
 
       if (inFlight) {
-        HighAlch.reload(db, NoteRows);
+        LowAlch.reload(db, NoteRows);
         clock.advance();
         await until(() => countAsked(server).NotesByTitle === 2, "older query held");
       }
@@ -1129,7 +1129,7 @@ describe("f(offset/limit page, feed change)", () => {
         { account: input.account, BookId: "b1", title: "Zed" },
         { id: cause, onCommitted: committed.resolve },
       );
-      const key = HighAlch.created(inserted);
+      const key = LowAlch.created(inserted);
       const seen: Array<string | undefined> = [];
       const subscription = page.subscribeChanges(() => seen.push(page.get(key)?.title));
 
@@ -1291,7 +1291,7 @@ describe("f(offset/limit page, feed change)", () => {
 
     await ready(page);
     holdCursor = true;
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
     clock.advance();
     await until(() => readingCursor, "reload waiting to read cursor");
 
@@ -1361,7 +1361,7 @@ describe("f(offset/limit page, feed change)", () => {
 
       const clock = reloads();
       const cause = `page-${action}`;
-      const committed = Promise.withResolvers<HighAlch.Settled<unknown>>();
+      const committed = Promise.withResolvers<LowAlch.Settled<unknown>>();
       const db = account(server, input.account, cleanup, {
         clock: clock.clock,
         layer: causeLayer(server, cause),
@@ -1424,7 +1424,7 @@ describe("f(ready subsets, command)", () => {
     await ready(list, one, book);
 
     const created = create({ account: "acc-1", BookId: "b2", title: "Cyd" });
-    const n3 = HighAlch.created(created);
+    const n3 = LowAlch.created(created);
 
     // Optimistic at once under a fresh client-generated key: in the whole list, not in
     // book b1 (its rule refuses b2).
@@ -1535,7 +1535,7 @@ describe("f(ready subsets, command)", () => {
 
     const result = await rename.result(locked);
 
-    const shown = HighAlch.match(result).on({
+    const shown = LowAlch.match(result).on({
       Committed: () => "committed",
       Unconfirmed: () => "unconfirmed",
       NoteLocked: (error) => `locked:${error.title}`,
@@ -1610,7 +1610,7 @@ describe("f(ready subsets, command)", () => {
 
     const db = account(server, "acc-1", cleanup);
     const one = observe<Note>(db, notes.get({ NoteId: "n1" }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
 
     cleanup.push(async () => release());
     await ready(one);
@@ -1627,12 +1627,10 @@ describe("f(ready subsets, command)", () => {
   });
 
   it("f(no active client, command) → fails loudly", () => {
-    expect(() => notes.rename({ NoteId: "n1", title: "x" })).toThrow(
-      /No HighAlch client is active/,
-    );
+    expect(() => notes.rename({ NoteId: "n1", title: "x" })).toThrow(/No LowAlch client is active/);
     // The scope (and so the target) is unknown without a client: a create fails the same way.
     expect(() => notes.create({ account: "acc-1", BookId: "b1", title: "x" })).toThrow(
-      /No HighAlch client is active/,
+      /No LowAlch client is active/,
     );
   });
 
@@ -1643,7 +1641,7 @@ describe("f(ready subsets, command)", () => {
 
     const db = account(server, "acc-1", cleanup);
     const one = observe<Note>(db, notes.get({ NoteId: "n1" }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
 
     cleanup.push(async () => release());
     await ready(one);
@@ -1673,17 +1671,17 @@ describe("f(ready subsets, command)", () => {
 
     const db = account(server, "acc-1", cleanup);
     const one = observe<Note>(db, notes.get({ NoteId: "n1" }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
 
     cleanup.push(async () => release());
     await ready(one);
 
     const read: Array<Partial<Note>> = [];
 
-    const saved = HighAlch.collection(NoteRows, {
-      queries: { list: HighAlch.read(Notes).all() },
+    const saved = LowAlch.collection(NoteRows, {
+      queries: { list: LowAlch.read(Notes).all() },
       commands: {
-        rename: HighAlch.updates(RenameNote, {
+        rename: LowAlch.updates(RenameNote, {
           // A call also sets the note's book, as a form sends every field it shows.
           fields: (input) => ({ ...input, BookId: "b1" }),
           input: (row: Partial<Note>) => {
@@ -1744,7 +1742,7 @@ describe("f(declared targets, input-only command)", () => {
     await until(() => server.store.books.get("k1")?.name === "Prose", "book renamed");
 
     const shelved = books.create.with({ client: db })({ account: "acc-1", name: "Essays" });
-    const k2 = HighAlch.created(shelved);
+    const k2 = LowAlch.created(shelved);
 
     expect(shelf.get(k2)?.name).toBe("Essays");
 
@@ -1762,11 +1760,11 @@ describe("f(declared targets, input-only command)", () => {
     const db = account(server, "acc-1", cleanup);
 
     // Declared next to the entity's target: touching a note addresses the note `n2` instead.
-    const elsewhere = HighAlch.collection(NoteRows, {
-      queries: { list: HighAlch.read(Notes).all() },
+    const elsewhere = LowAlch.collection(NoteRows, {
+      queries: { list: LowAlch.read(Notes).all() },
       commands: {
-        touch: HighAlch.sends(TouchNote, { target: (_input, scope) => address(scope, "n2") }),
-        rename: HighAlch.updates(RenameNote, {
+        touch: LowAlch.sends(TouchNote, { target: (_input, scope) => address(scope, "n2") }),
+        rename: LowAlch.updates(RenameNote, {
           target: (input, scope) => address(scope, input.NoteId.toLowerCase()),
         }),
       },
@@ -1804,7 +1802,7 @@ describe("f(declared targets, input-only command)", () => {
 
     const filed = notes.file.with({ client: db })({ account: "acc-1", BookId: "b1", title: "Cyd" });
 
-    expect(HighAlch.created(filed)).toBe("b1:Cyd");
+    expect(LowAlch.created(filed)).toBe("b1:Cyd");
     expect(book.get("b1:Cyd")?.title).toBe("Cyd");
 
     await filed.when("settled");
@@ -1820,14 +1818,14 @@ describe("f(declared targets, input-only command)", () => {
 
     const db = account(server, "acc-1", cleanup);
     const list = observe<Note>(db, notes.list({ account: "acc-1" }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
 
     cleanup.push(async () => release());
     await ready(list);
 
     const create = createOptimisticAction(notes.create.options);
     const transaction = create({ account: "acc-1", BookId: "b1", title: "Dee" });
-    const key = String(transaction.metadata[HighAlch.createdKey]);
+    const key = String(transaction.metadata[LowAlch.createdKey]);
 
     expect(list.get(key)?.title).toBe("Dee");
 
@@ -1853,7 +1851,7 @@ describe("f(feed, failure)", () => {
       );
       await ready(failed);
       server.store.refuse.add("NotesByTitle");
-      HighAlch.reload(db, NoteRows);
+      LowAlch.reload(db, NoteRows);
       await Effect.runPromise(clock.adjust(10));
       await until(() => failed.health.error !== null, "page failed");
       expect(countAsked(server).NotesByTitle).toBe(2);
@@ -1863,7 +1861,7 @@ describe("f(feed, failure)", () => {
       await failed.cleanup();
 
       if (action === "reload") {
-        HighAlch.reload(db, NoteRows);
+        LowAlch.reload(db, NoteRows);
         await Effect.runPromise(clock.adjust(10));
         await tick();
         expect(countAsked(server).NoteById).toBe(2);
@@ -2183,7 +2181,7 @@ describe("f(non-entity query, load)", () => {
   );
 
   it.each(["entity", "standalone", "feed"] as const)(
-    "f(%s endpoint interrupts itself, observe) → fails the load with a HighAlch defect",
+    "f(%s endpoint interrupts itself, observe) → fails the load with a LowAlch defect",
     async (endpoint) => {
       const server = await open();
       const api = server.wire.client;
@@ -2215,7 +2213,7 @@ describe("f(non-entity query, load)", () => {
       );
 
       await until(() => collection.status === "error", "interrupted endpoint reported");
-      expect(collection.health.error?.cause).toBeInstanceOf(HighAlch.Defect);
+      expect(collection.health.error?.cause).toBeInstanceOf(LowAlch.Defect);
       expect(connectionOf(db).subsets.size).toBe(0);
       expect(connectionOf(db).feeds.size).toBe(0);
     },
@@ -2293,8 +2291,8 @@ describe("f(ready subsets, change outside the feed)", () => {
 
     expect(titles(list)).toEqual(["n1:Ada", "n2:Bob"]);
 
-    HighAlch.reload(db, NoteRows);
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
     await until(() => one.get("n1")?.title === "Ada (imported)", "reload");
     await until(() => list.get("n1")?.title === "Ada (imported)", "list reload");
 
@@ -2321,8 +2319,8 @@ describe("f(ready subsets, change outside the feed)", () => {
     expect(titles(one)).toEqual(["n1:Ada"]);
     const asked = server.store.asked.length;
 
-    HighAlch.reload(db, NoteRows);
-    HighAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
+    LowAlch.reload(db, NoteRows);
     await Effect.runPromise(clock.adjust(9));
     expect(server.store.asked).toHaveLength(asked);
     await Effect.runPromise(clock.adjust(1));
@@ -2358,7 +2356,7 @@ describe("f(client, close)", () => {
         await dispose();
       };
 
-      const closed = Effect.runPromise(HighAlch.close(db));
+      const closed = Effect.runPromise(LowAlch.close(db));
       try {
         await started.promise;
         if (when === "after close") {
@@ -2370,7 +2368,7 @@ describe("f(client, close)", () => {
         await Effect.runPromise(clock.adjust(0));
         expect(tx.state).toBe("failed");
         expect(await failure).toEqual(
-          expect.objectContaining({ message: expect.stringMatching(/HighAlch.*clos/i) }),
+          expect.objectContaining({ message: expect.stringMatching(/LowAlch.*clos/i) }),
         );
         if (when === "during cleanup") expect(one.get(ada.NoteId)?.title).toBe("Ada");
         expect(server.wire.counts.commands).toEqual([]);
@@ -2378,7 +2376,7 @@ describe("f(client, close)", () => {
         gate.resolve();
         await closed;
       }
-      await Effect.runPromise(HighAlch.close(db));
+      await Effect.runPromise(LowAlch.close(db));
       expect(disposals).toBe(1);
     },
   );
@@ -2418,9 +2416,9 @@ describe("f(client, close)", () => {
       };
       const user = Effect.runFork(
         Effect.gen(function* () {
-          scoped.resolve(yield* HighAlch.Client);
+          scoped.resolve(yield* LowAlch.Client);
           yield* Effect.never;
-        }).pipe(Effect.provide(HighAlch.layer(config))),
+        }).pipe(Effect.provide(LowAlch.layer(config))),
       );
       const db = await scoped.promise;
       const one = observe(db, notes.get({ NoteId: ada.NoteId }), cleanup);
@@ -2442,7 +2440,7 @@ describe("f(client, close)", () => {
           disposals += 1;
           return dispose();
         };
-        if (how === "explicit close") closed = Effect.runPromise(HighAlch.close(db));
+        if (how === "explicit close") closed = Effect.runPromise(LowAlch.close(db));
         else closed = Effect.runPromise(Fiber.interrupt(user));
         void closed.then(() => closing.resolve());
         await tick();
@@ -2454,7 +2452,7 @@ describe("f(client, close)", () => {
         expect(interrupted).toBe(true);
         await expect(failed).resolves.toEqual(
           expect.objectContaining({
-            message: expect.stringMatching(/HighAlch.*closed before the server replied/i),
+            message: expect.stringMatching(/LowAlch.*closed before the server replied/i),
           }),
         );
         await closing.promise;
@@ -2504,7 +2502,7 @@ describe("f(client, close)", () => {
     const failed = tx.when("settled").catch((error: unknown) => error);
     await sent.promise;
     const seen = history(one, ada.NoteId, (row) => row.title);
-    const closed = Effect.runPromise(HighAlch.close(db));
+    const closed = Effect.runPromise(LowAlch.close(db));
 
     try {
       await Effect.runPromise(clock.adjust(99));
@@ -2513,7 +2511,7 @@ describe("f(client, close)", () => {
       await Effect.runPromise(clock.adjust(1));
       expect(tx.state).toBe("failed");
       await expect(failed).resolves.toMatchObject({
-        message: expect.stringMatching(/HighAlch.*closed before the server replied/i),
+        message: expect.stringMatching(/LowAlch.*closed before the server replied/i),
       });
       await closed;
       expect(tx.state).toBe("failed");
@@ -2548,7 +2546,7 @@ describe("f(client, close)", () => {
         await gate.promise;
         await dispose();
       };
-      const closed = Effect.runPromise(HighAlch.close(db));
+      const closed = Effect.runPromise(LowAlch.close(db));
 
       try {
         await started.promise;
@@ -2567,7 +2565,7 @@ describe("f(client, close)", () => {
         // A read from a closed client is a bug in the caller: `match` throws it as a defect.
         const thrown = (() => {
           try {
-            HighAlch.match({
+            LowAlch.match({
               data: undefined as ReadonlyArray<Note> | undefined,
               status: live.status,
               isEnabled: true,
@@ -2582,9 +2580,9 @@ describe("f(client, close)", () => {
           }
         })();
 
-        expect(thrown).toBeInstanceOf(HighAlch.Defect);
-        expect(String(Cause.squash((thrown as HighAlch.Defect).cause))).toContain(
-          "HighAlch client is closing or closed",
+        expect(thrown).toBeInstanceOf(LowAlch.Defect);
+        expect(String(Cause.squash((thrown as LowAlch.Defect).cause))).toContain(
+          "LowAlch client is closing or closed",
         );
         expect(connectionOf(db).subsets.size).toBe(0);
         expect(connectionOf(db).feeds.size).toBe(0);
@@ -2622,14 +2620,14 @@ describe("f(client, close)", () => {
       await dispose();
     };
 
-    const closed = Effect.runPromise(HighAlch.close(db));
+    const closed = Effect.runPromise(LowAlch.close(db));
 
     try {
       await started.promise;
       await one.reload().catch(() => {});
 
       const read = () =>
-        HighAlch.match({
+        LowAlch.match({
           data: undefined as Note | undefined,
           status: live.status,
           isEnabled: true,
@@ -2640,7 +2638,7 @@ describe("f(client, close)", () => {
           collection: live,
         }).on({ orElse: (state) => state._tag });
 
-      expect(read).toThrow(HighAlch.Defect);
+      expect(read).toThrow(LowAlch.Defect);
     } finally {
       gate.resolve();
       await closed;
@@ -2683,7 +2681,7 @@ describe("f(client, close)", () => {
       await ready(list);
       const settled = vi.fn();
       const closing = (
-        action === "client close" ? Effect.runPromise(HighAlch.close(db)) : list.cleanup()
+        action === "client close" ? Effect.runPromise(LowAlch.close(db)) : list.cleanup()
       ).then(settled);
 
       try {
@@ -2708,7 +2706,7 @@ describe("f(client, close)", () => {
     const clock = await manualClock();
     const db = account(server, ada.account, cleanup, { clock });
     const one = observe(db, notes.get({ NoteId: ada.NoteId }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
     cleanup.push(async () => release());
     await ready(one);
 
@@ -2724,11 +2722,11 @@ describe("f(client, close)", () => {
       expect(tx.state).toBe("pending");
       expect(titles(one)).toEqual(["n1:Abel"]);
 
-      const closing = Effect.runPromise(HighAlch.close(db));
+      const closing = Effect.runPromise(LowAlch.close(db));
       expect(tx.state).toBe("failed");
       expect(seen).toContain("Ada");
       await expect(failed).resolves.toMatchObject({
-        message: "HighAlch client is closing or closed",
+        message: "LowAlch client is closing or closed",
       });
       await closing;
       vi.advanceTimersByTime(500);
@@ -2744,7 +2742,7 @@ describe("f(client, close)", () => {
     const clock = await manualClock();
     const db = account(server, ada.account, cleanup, { clock });
     const list = observe(db, notes.list({ account: ada.account }), cleanup);
-    const release = HighAlch.activate(db);
+    const release = LowAlch.activate(db);
     cleanup.push(async () => release());
     await ready(list);
 
@@ -2768,7 +2766,7 @@ describe("f(client, close)", () => {
       });
       cleanup.push(async () => subscription.unsubscribe());
 
-      await Effect.runPromise(HighAlch.close(db));
+      await Effect.runPromise(LowAlch.close(db));
 
       expect(threw).toBe(true);
       expect([first.state, second.state]).toEqual(["failed", "failed"]);
@@ -2790,15 +2788,15 @@ describe("f(client, close)", () => {
     );
     const run = (closeFirst: boolean) =>
       Effect.gen(function* () {
-        const db = yield* HighAlch.Client;
+        const db = yield* LowAlch.Client;
         const one = observe(db, notes.get({ NoteId: ada.NoteId }), cleanup);
         yield* Effect.promise(() => ready(one));
         expect(server.wire.counts.open).toBe(1);
-        if (closeFirst) yield* HighAlch.close(db);
+        if (closeFirst) yield* LowAlch.close(db);
 
         return yield* Effect.fail("user failed");
       }).pipe(
-        Effect.provide(HighAlch.layer({ api: NotesApi, layer, scope: ada.account })),
+        Effect.provide(LowAlch.layer({ api: NotesApi, layer, scope: ada.account })),
         Effect.flip,
       );
 
@@ -2844,7 +2842,7 @@ describe("f(client, close)", () => {
       { onCommitted: committed },
     );
     await peeking.promise;
-    const closing = Effect.runPromise(HighAlch.close(db));
+    const closing = Effect.runPromise(LowAlch.close(db));
 
     try {
       await Effect.runPromise(clock.adjust(100));
@@ -2868,7 +2866,7 @@ describe("f(client, close)", () => {
     const sent = Promise.withResolvers<void>();
     const reply = Promise.withResolvers<void>();
     const replied = Promise.withResolvers<void>();
-    const settled = Promise.withResolvers<HighAlch.Settled<unknown>>();
+    const settled = Promise.withResolvers<LowAlch.Settled<unknown>>();
     const db = account(server, ada.account, cleanup, {
       clock,
       settleTimeout: 100,
@@ -2894,7 +2892,7 @@ describe("f(client, close)", () => {
       { onCommitted: settled.resolve },
     );
     await sent.promise;
-    const close = Effect.runPromise(HighAlch.close(db));
+    const close = Effect.runPromise(LowAlch.close(db));
 
     try {
       await Effect.runPromise(clock.adjust(99));
@@ -2921,7 +2919,7 @@ describe("f(client, close)", () => {
 
     await seed(server, ada);
 
-    const db = HighAlch.make({
+    const db = LowAlch.make({
       api: NotesApi,
       layer: Layer.succeed(NotesApi.Client, server.wire.client),
       scope: "acc-1",
@@ -2939,7 +2937,7 @@ describe("f(client, close)", () => {
 
     void renamed.when("settled").then(() => order.push("settled"));
 
-    const closed = Effect.runPromise(HighAlch.close(db)).then(() => order.push("closed"));
+    const closed = Effect.runPromise(LowAlch.close(db)).then(() => order.push("closed"));
 
     await tick();
 

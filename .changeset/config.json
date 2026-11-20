@@ -4,7 +4,7 @@
   "access": "public",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [["@highalch/tanstack-db", "@highalch/story"]],
+  "fixed": [["@lowalch/tanstack-db", "@highalch/story"]],
   "linked": [],
   "ignore": [],
   "updateInternalDependencies": "patch"

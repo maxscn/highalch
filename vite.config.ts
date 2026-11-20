@@ -9,21 +9,21 @@ const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
  * Published packages resolve through their `exports`, which point at `dist`.
  */
 const workspace = [
-  { find: /^@highalch\/tanstack-db$/, replacement: source("./packages/tanstack-db/src/index.ts") },
+  { find: /^@lowalch\/tanstack-db$/, replacement: source("./packages/tanstack-db/src/index.ts") },
   {
-    find: /^@highalch\/tanstack-db\/server$/,
+    find: /^@lowalch\/tanstack-db\/server$/,
     replacement: source("./packages/tanstack-db/src/server.ts"),
   },
   {
-    find: /^@highalch\/tanstack-db\/react$/,
+    find: /^@lowalch\/tanstack-db\/react$/,
     replacement: source("./packages/tanstack-db/src/react.tsx"),
   },
   {
-    find: /^@highalch\/tanstack-db\/xstate$/,
+    find: /^@lowalch\/tanstack-db\/xstate$/,
     replacement: source("./packages/tanstack-db/src/xstate/index.ts"),
   },
   {
-    find: /^@highalch\/tanstack-db\/internal$/,
+    find: /^@lowalch\/tanstack-db\/internal$/,
     replacement: source("./packages/tanstack-db/src/internal.ts"),
   },
   { find: /^@highalch\/story$/, replacement: source("./packages/story/src/index.ts") },

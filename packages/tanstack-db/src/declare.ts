@@ -58,7 +58,7 @@ type Select<Q extends Domain.Query.Any, Entry> = (
 
 type Rule<Q extends Domain.Query.Any, Entry> = (row: Entry, input: QueryInput<Q>) => boolean;
 
-const ReadOptions = Symbol("HighAlch.read");
+const ReadOptions = Symbol("LowAlch.read");
 
 /** The callbacks' parameter types are checked by the builder and erased here for storage. */
 type ReadOptions<Q extends Domain.Query.Any, Entry> = {
@@ -74,7 +74,7 @@ type ReadDeclaration<Q extends Domain.Query.Any, Entry> = {
 };
 
 /** Marks a declaration whose rule reads rows, so `collection` checks what the rule may read. */
-const Ruled: unique symbol = Symbol("@highalch/tanstack-db/read/ruled");
+const Ruled: unique symbol = Symbol("@lowalch/tanstack-db/read/ruled");
 
 /**
  * A declaration with a rule that reads rows (`where`, `one`). The feed gives the rule the
@@ -128,7 +128,7 @@ const buildRead = <Q extends Domain.Query.Any, Entry, const Used extends ReadFac
     one: (rule: Rule<Q, Entry>) => withRule(rule, true),
     all: () => {
       if (query.definition.paged)
-        throw new Error(`HighAlch.all cannot declare paged query ${query.queryName}`);
+        throw new Error(`LowAlch.all cannot declare paged query ${query.queryName}`);
 
       return withRule(includesAll, false);
     },
@@ -294,7 +294,7 @@ export class Sends<
 /**
  * A create: `row` builds the pending row from the input and the created key, shown until the feed
  * delivers the server's row. The key is `key(input)` or a fresh id; the call's transaction holds
- * it (read it with `HighAlch.created(transaction)`).
+ * it (read it with `LowAlch.created(transaction)`).
  */
 export const inserts = <
   C extends Domain.Command.Any,
@@ -493,7 +493,7 @@ const optionsOf = (spec: QuerySpec): DeclaredRead => {
   return { query: spec };
 };
 
-/** The defect a read started on a closing or closed HighAlch client fails with. */
+/** The defect a read started on a closing or closed LowAlch client fails with. */
 const closedRead = (name: string) => new Defect({ name, cause: Cause.die(closedClientError()) });
 
 /** A subset runs the query, its optional membership rule and its optional row selector. */
@@ -701,7 +701,7 @@ export const collection = <
 
     if (previous && !sameDeclaration(previous, options))
       throw new Error(
-        `HighAlch.collection: conflicting declarations of query ${query.queryName} for ${rows.entityName}`,
+        `LowAlch.collection: conflicting declarations of query ${query.queryName} for ${rows.entityName}`,
       );
 
     known.set(query.queryName, options);
@@ -835,7 +835,7 @@ export const command = <C extends Domain.Command.Any>(
       Option.match(literalOf(source), {
         onSome: (literal) => () => literal,
         onNone: () => {
-          throw new Error(`${source.tag}: declare \`target\` for HighAlch.command`);
+          throw new Error(`${source.tag}: declare \`target\` for LowAlch.command`);
         },
       }),
   });

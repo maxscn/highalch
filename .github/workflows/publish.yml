@@ -1,6 +1,6 @@
 name: Publish
 
-# Releases @highalch/tanstack-db and @highalch/story with Changesets and npm trusted publishing (OIDC): no
+# Releases @lowalch/tanstack-db and @highalch/story with Changesets and npm trusted publishing (OIDC): no
 # npm token exists anywhere.
 #
 # The jobs are split so that the right to publish never meets third-party code:
@@ -128,15 +128,15 @@ jobs:
             if (!ok) { console.error(`npm ${process.argv[1]} is older than 11.5.1`); process.exit(1); }
           ' "$(npm --version)"
 
-      # @highalch/tanstack-db first: @highalch/story depends on it. Lifecycle scripts stay off. A
+      # @lowalch/tanstack-db first: @highalch/story depends on it. Lifecycle scripts stay off. A
       # version with a prerelease suffix (a hyphen after the package prefix) goes to `next`.
       - name: Publish
         working-directory: ${{ runner.temp }}/release
         run: |
-          for package in tanstack-db story; do
-            for tarball in highalch-"$package"-*.tgz; do
+          for package in lowalch-tanstack-db highalch-story; do
+            for tarball in "$package"-*.tgz; do
               [ -e "$tarball" ] || continue
-              version="${tarball#highalch-"$package"-}"
+              version="${tarball#"$package"-}"
               tag=latest
               case "$version" in *-*) tag=next ;; esac
               npm publish "./$tarball" --tag "$tag" --ignore-scripts

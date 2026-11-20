@@ -13,8 +13,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { useLiveQuery } from "@tanstack/react-db";
 import { Deferred, Effect } from "effect";
-import * as HighAlch from "@highalch/tanstack-db";
-import { Provider } from "@highalch/tanstack-db/react";
+import * as LowAlch from "@lowalch/tanstack-db";
+import { Provider } from "@lowalch/tanstack-db/react";
 import { account, seed, tick, type Host } from "../../../fixtures/harness";
 import { host } from "../../../fixtures/notebook";
 import { notes } from "../../../fixtures/notes";
@@ -86,8 +86,8 @@ function List({ seen }: { seen: Probe }) {
 
   return counted(seen, () => (
     <p>
-      {HighAlch.match(result).on({
-        Loading: HighAlch.Suspend,
+      {LowAlch.match(result).on({
+        Loading: LowAlch.Suspend,
         Retrying: ({ data }) => `retrying:${data.length}`,
         Ready: ({ data }) => `list:${data.map((note) => note.title).join(",")}`,
         QueryRefused: () => "refused",
@@ -104,8 +104,8 @@ function Book({ book, seen }: { book: string; seen: Probe }) {
 
   return counted(seen, () => (
     <p>
-      {HighAlch.match(result).on({
-        Loading: HighAlch.Suspend,
+      {LowAlch.match(result).on({
+        Loading: LowAlch.Suspend,
         Ready: ({ data }) => `${book}:${data.map((note) => note.title).join(",")}`,
         orElse: (state) => `other:${state._tag}`,
       })}
@@ -126,7 +126,7 @@ class Boundary extends Component<{ readonly children: ReactNode }, Caught> {
   override state: Caught = {};
 
   static getDerivedStateFromError(cause: Error) {
-    return { failed: cause instanceof HighAlch.Defect ? `Defect ${cause.name}` : cause.message };
+    return { failed: cause instanceof LowAlch.Defect ? `Defect ${cause.name}` : cause.message };
   }
 
   override render() {
@@ -569,8 +569,8 @@ describe("f(stock useLiveQuery result, match with Loading: Suspend)", () => {
   it("f(a Loading that is no live query's, Suspend) → a clear error, not a promise", () => {
     const tagged: { readonly _tag: "Loading" } = { _tag: "Loading" };
 
-    expect(() => HighAlch.match(tagged).on({ Loading: HighAlch.Suspend })).toThrow(
-      "HighAlch.Suspend handles only the Loading state of match(res) over a stock useLiveQuery result",
+    expect(() => LowAlch.match(tagged).on({ Loading: LowAlch.Suspend })).toThrow(
+      "LowAlch.Suspend handles only the Loading state of match(res) over a stock useLiveQuery result",
     );
   });
 });

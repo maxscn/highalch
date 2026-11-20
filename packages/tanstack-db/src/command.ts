@@ -54,7 +54,7 @@ export type Call<C extends Domain.Command.Any> = {
 };
 
 /** The `metadata` key under which a transaction holds the key of the row its call addresses. */
-export const createdKey = "@highalch/tanstack-db/key";
+export const createdKey = "@lowalch/tanstack-db/key";
 
 /** The transaction of an `inserts` command: its metadata holds the created row's key. */
 export type Created = Transaction & {
@@ -196,7 +196,7 @@ const persist = <A>(
   ).pipe(
     Effect.flatMap((answer) => {
       if (Option.isNone(answer))
-        return Effect.die(new Error("HighAlch client closed before the server replied"));
+        return Effect.die(new Error("LowAlch client closed before the server replied"));
 
       return Effect.succeed(answer.value);
     }),
@@ -267,7 +267,7 @@ const start = <A, E extends TaggedFailure>(
     try {
       react(exit, options);
     } catch (cause) {
-      Effect.runFork(Effect.logError("HighAlch: a command's reaction threw", Cause.die(cause)));
+      Effect.runFork(Effect.logError("LowAlch: a command's reaction threw", Cause.die(cause)));
     }
   };
 
@@ -306,7 +306,7 @@ const start = <A, E extends TaggedFailure>(
 
       if (hasEdits) Deferred.doneUnsafe(persisted, exit);
       else if (Exit.isSuccess(exit)) void transaction.commit().catch(none);
-      // SAFETY: Domain errors and HighAlch defects are Error instances.
+      // SAFETY: Domain errors and LowAlch defects are Error instances.
       else transaction.rollback({ error: Cause.squash(exit.cause) as Error });
 
       yield* Effect.exit(Deferred.await(outcome));
@@ -416,7 +416,7 @@ export const make = <C extends Domain.Command.Any>(
       const db = bound.client ?? Option.getOrElse(provided, current);
 
       return yield* start<A, E>(db, command, edit, input, bound).outcome;
-    }).pipe(Effect.withSpan(`HighAlch.command ${command.tag}`));
+    }).pipe(Effect.withSpan(`LowAlch.command ${command.tag}`));
 
   const options: CreateOptimisticActionsOptions<InputOf<C>> = {
     onMutate: (input) => {

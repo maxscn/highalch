@@ -1,15 +1,15 @@
 import { Cause, Data } from "effect";
 
-/** The errors a HighAlch read or command may fail with: tagged values, like `Schema.TaggedError` classes. */
+/** The errors a LowAlch read or command may fail with: tagged values, like `Schema.TaggedError` classes. */
 export type TaggedFailure = Readonly<Record<"_tag", string>>;
 
-export const clientClosedMessage = "HighAlch client is closing or closed";
+export const clientClosedMessage = "LowAlch client is closing or closed";
 
 /**
  * A failure that is not one of the operation's typed errors: a bug, an undecodable response or an
  * unexpected interruption. It is never a state; `match` throws it to the nearest error boundary.
  */
-export class Defect extends Data.TaggedError("HighAlch.Defect")<{
+export class Defect extends Data.TaggedError("LowAlch.Defect")<{
   readonly name: string;
   readonly cause: Cause.Cause<unknown>;
 }> {

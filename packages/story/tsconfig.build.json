@@ -4,7 +4,7 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    // Built against @highalch/tanstack-db as published (its dist), not its source.
+    // Built against @lowalch/tanstack-db as published (its dist), not its source.
     "paths": {}
   },
   "include": ["src"]

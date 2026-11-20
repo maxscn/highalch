@@ -3,7 +3,7 @@ import * as InMemory from "@alchemy.run/domain/InMemory";
 import type * as Aggregate from "@alchemy.run/domain/Aggregate";
 import * as Model from "@alchemy.run/domain/Model";
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Option, Predicate } from "effect";
-import type { TaggedFailure } from "@highalch/tanstack-db";
+import type { TaggedFailure } from "@lowalch/tanstack-db";
 
 /** The Api client of an Api, as its `Client` service yields it. */
 export type ClientOf<A extends Domain.Api.Any> =

@@ -1,15 +1,15 @@
 import type { Collection, CollectionOptions, DbClient, NonSingleResult } from "@tanstack/db";
 import { Effect, Layer, Predicate, Schedule } from "effect";
-import * as HighAlch from "@highalch/tanstack-db";
+import * as LowAlch from "@lowalch/tanstack-db";
 import { address, host, NotesApi, type Note } from "./notebook";
 
 export type Host = Awaited<ReturnType<typeof host>>;
 
 /** Retries a transport failure once after 20 ms; anything else fails at once. */
-export const retryTransport = (delay: number, times: number): HighAlch.Retry =>
+export const retryTransport = (delay: number, times: number): LowAlch.Retry =>
   Schedule.spaced(delay).pipe(
     Schedule.upTo({ times }),
-    Schedule.while(({ input }: { input: HighAlch.TaggedFailure | HighAlch.Defect }) =>
+    Schedule.while(({ input }: { input: LowAlch.TaggedFailure | LowAlch.Defect }) =>
       Predicate.isTagged(input, "RpcClientError"),
     ),
   );
@@ -21,9 +21,9 @@ export const account = (
   server: Host,
   scope: string,
   cleanup: Array<() => Promise<void>>,
-  options: Partial<HighAlch.Config<typeof NotesApi>> = {},
+  options: Partial<LowAlch.Config<typeof NotesApi>> = {},
 ) => {
-  const db = HighAlch.make({
+  const db = LowAlch.make({
     api: NotesApi,
     layer: Layer.succeed(NotesApi.Client, server.wire.client),
     scope,
@@ -33,7 +33,7 @@ export const account = (
     ...options,
   });
 
-  cleanup.push(() => Effect.runPromise(HighAlch.close(db)));
+  cleanup.push(() => Effect.runPromise(LowAlch.close(db)));
 
   return db;
 };

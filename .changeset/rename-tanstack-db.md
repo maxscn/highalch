@@ -1,6 +1,6 @@
 ---
-"@highalch/tanstack-db": patch
+"@lowalch/tanstack-db": patch
 "@highalch/story": patch
 ---
 
-Rename `@highalch/db` to `@highalch/tanstack-db`. Imports change from `@highalch/db` (and its `/server`, `/react`, `/xstate`, `/internal` entries) to `@highalch/tanstack-db`; the API is unchanged.
+Move the core to the LowAlch scope: `@highalch/db` is now `@lowalch/tanstack-db` (with the same `/server`, `/react`, `/xstate` and `/internal` entries), and its namespace and error messages say `LowAlch` instead of `HighAlch`. `@highalch/story` keeps its name. The API is otherwise unchanged.

@@ -3,7 +3,7 @@ import type { DecideContext } from "@alchemy.run/domain/Aggregate";
 import type * as Model from "@alchemy.run/domain/Model";
 import { Context, Deferred, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { RpcMiddleware } from "effect/rpc";
-import * as HighAlch from "@highalch/tanstack-db";
+import * as LowAlch from "@lowalch/tanstack-db";
 
 /**
  * A Domain whose writes settle later, as writes through a policy do: a command records a decision
@@ -124,7 +124,7 @@ export const session = (account: string) =>
 export class NotYours extends Domain.Rejection("NotYours") {}
 
 /** The guarded feed: one stream per account, readable by that account only. */
-export class LedgerChanges extends HighAlch.Feed("LedgerChanges", {
+export class LedgerChanges extends LowAlch.Feed("LedgerChanges", {
   scope: Schema.String,
   middleware: [ReadSession],
   rejects: [NotYours],
@@ -140,7 +140,7 @@ export const LedgerChangesLive = LedgerChanges.readers({
 });
 
 /** The entity: only stored changes, each delivering the command that recorded it. */
-export class EntryRows extends HighAlch.Rows("EntryRows", {
+export class EntryRows extends LowAlch.Rows("EntryRows", {
   feed: LedgerChanges,
   row: Entry,
   key: "EntryId",
@@ -152,14 +152,14 @@ export class EntryRows extends HighAlch.Rows("EntryRows", {
     EntrySettled: (event) => {
       if (!event.stored) return undefined;
 
-      if (event.remove) return HighAlch.removed(event.entry.EntryId);
+      if (event.remove) return LowAlch.removed(event.entry.EntryId);
 
-      return HighAlch.upserted(event.entry);
+      return LowAlch.upserted(event.entry);
     },
   },
 }) {}
 
-export class LedgerWriter extends HighAlch.Projection("LedgerChanges", {
+export class LedgerWriter extends LowAlch.Projection("LedgerChanges", {
   feed: LedgerChanges,
   entities: [EntryRows],
 }) {}
@@ -245,19 +245,19 @@ export class Ledgers extends Domain.Model("Ledgers", {
 export class LedgerApi extends Domain.Api("LedgerApi", { model: Ledgers }) {}
 
 /** The declarations under test: wrapped list rows, nested command inputs, deferred settlement. */
-export const entries = HighAlch.collection(EntryRows, {
+export const entries = LowAlch.collection(EntryRows, {
   queries: {
-    list: HighAlch.read(Entries)
+    list: LowAlch.read(Entries)
       .rows((answer) => answer.Items)
       .all(),
   },
   commands: {
-    save: HighAlch.updates(SaveEntry, {
+    save: LowAlch.updates(SaveEntry, {
       key: (input) => input.value.EntryId ?? "",
       fields: (input) => input.value,
       input: (row: Partial<Entry>) => ({ value: { EntryId: row.EntryId, text: row.text ?? "" } }),
     }),
-    drop: HighAlch.deletes(DropEntry, { key: (input) => input.value.EntryId }),
+    drop: LowAlch.deletes(DropEntry, { key: (input) => input.value.EntryId }),
   },
 });
 

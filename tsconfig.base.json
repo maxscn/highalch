@@ -14,11 +14,11 @@
     "esModuleInterop": true,
     "types": ["node"],
     "paths": {
-      "@highalch/tanstack-db": ["./packages/tanstack-db/src/index.ts"],
-      "@highalch/tanstack-db/server": ["./packages/tanstack-db/src/server.ts"],
-      "@highalch/tanstack-db/react": ["./packages/tanstack-db/src/react.tsx"],
-      "@highalch/tanstack-db/xstate": ["./packages/tanstack-db/src/xstate/index.ts"],
-      "@highalch/tanstack-db/internal": ["./packages/tanstack-db/src/internal.ts"],
+      "@lowalch/tanstack-db": ["./packages/tanstack-db/src/index.ts"],
+      "@lowalch/tanstack-db/server": ["./packages/tanstack-db/src/server.ts"],
+      "@lowalch/tanstack-db/react": ["./packages/tanstack-db/src/react.tsx"],
+      "@lowalch/tanstack-db/xstate": ["./packages/tanstack-db/src/xstate/index.ts"],
+      "@lowalch/tanstack-db/internal": ["./packages/tanstack-db/src/internal.ts"],
       "@highalch/story": ["./packages/story/src/index.ts"],
       "@highalch/story/xstate": ["./packages/story/src/xstate/index.ts"],
       "@highalch/story/screen": ["./packages/story/src/screen/index.ts"]

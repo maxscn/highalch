@@ -1,4 +1,4 @@
-# @highalch/tanstack-db
+# @lowalch/tanstack-db
 
 Makes an [alchemy Domain](https://alchemy.run/domain) sync into TanStack DB 1.0 collections, with
 typed errors taken from the Domain definitions and no plumbing at call sites. Reads are stock
@@ -6,21 +6,21 @@ TanStack DB `useLiveQuery`; writes are native TanStack DB transactions; states a
 `match`. The package knows nothing about the application: the Api, its transport and the scope
 (an account, say) are supplied by the app.
 
-| Entry point                      | What                                                                                    |
-| -------------------------------- | --------------------------------------------------------------------------------------- |
-| `@highalch/tanstack-db`          | The whole client-side API, React-free. Import it as `HighAlch`.                         |
-| `@highalch/tanstack-db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect     |
-| `@highalch/tanstack-db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                          |
-| `@highalch/tanstack-db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`   |
-| `@highalch/tanstack-db/internal` | Unstable seams for `@highalch/story` (clock, connection, state constructors); no semver |
+| Entry point                     | What                                                                                    |
+| ------------------------------- | --------------------------------------------------------------------------------------- |
+| `@lowalch/tanstack-db`          | The whole client-side API, React-free. Import it as `LowAlch`.                          |
+| `@lowalch/tanstack-db/server`   | `Feed`, `Rows`, `Projection`, `upserted`, `removed`: only alchemy Domain and Effect     |
+| `@lowalch/tanstack-db/react`    | `Provider`: the scope's client for `useLiveQuery` and commands                          |
+| `@lowalch/tanstack-db/xstate`   | `invoke(command)`, `mark`, `commandOf`, `Runner`; needs `xstate` and `@xstate/effect`   |
+| `@lowalch/tanstack-db/internal` | Unstable seams for `@highalch/story` (clock, connection, state constructors); no semver |
 
 ```ts
-import * as HighAlch from "@highalch/tanstack-db";
+import * as LowAlch from "@lowalch/tanstack-db";
 ```
 
 Peer dependencies: `effect` 4.1.4, `@alchemy.run/domain` 2.0.0-beta.87, `@tanstack/db` and
 `@tanstack/react-db` 1.0.0-rc.1.5, `react` 19.2.7; optional `xstate` 6.0.0-beta.3 and
-`@xstate/effect` 1.0.0-beta.2 (only for `@highalch/tanstack-db/xstate`).
+`@xstate/effect` 1.0.0-beta.2 (only for `@lowalch/tanstack-db/xstate`).
 
 ## Server: one feed per scope, one entity per row type, one projection
 
@@ -29,10 +29,10 @@ account), a keyed, replayable, append-only log, written by exactly one **`Domain
 One feed carries the row changes of several entities.
 
 ```ts
-import * as HighAlch from "@highalch/tanstack-db/server";
+import * as LowAlch from "@lowalch/tanstack-db/server";
 
 // The feed: one stream per account. Its reads are guarded like any stream's.
-export class RecordChanges extends HighAlch.Feed("RecordChanges", {
+export class RecordChanges extends LowAlch.Feed("RecordChanges", {
   scope: AccountKey, // a string Schema: the stream's (and its projection's) key
   middleware: [Session], // optional
   rejects: [NotMember], // optional: typed read rejections
@@ -45,7 +45,7 @@ export const RecordChangesLive = RecordChanges.readers({
 });
 
 // One entity on the feed.
-export class CustomerRows extends HighAlch.Rows("CustomerRows", {
+export class CustomerRows extends LowAlch.Rows("CustomerRows", {
   feed: RecordChanges,
   row: Customer, // the row schema
   key: "CustomerId", // its key field (a string)
@@ -53,14 +53,14 @@ export class CustomerRows extends HighAlch.Rows("CustomerRows", {
   scope: ({ event }) => event.account, // the feed (scope) an event belongs to
   target: (key, scope) => JSON.stringify([scope, key]), // optional: the aggregate a row's commands address
   on: {
-    CustomerCreated: (event) => HighAlch.upserted(event.customer),
-    CustomerChanged: (event) => HighAlch.upserted(event.customer),
-    CustomerDeleted: (event) => HighAlch.removed(event.CustomerId),
+    CustomerCreated: (event) => LowAlch.upserted(event.customer),
+    CustomerChanged: (event) => LowAlch.upserted(event.customer),
+    CustomerDeleted: (event) => LowAlch.removed(event.CustomerId),
   },
 }) {}
 
 // The feed's one writer, built from its entities: adding an entity is one line here.
-export class RecordChangesWriter extends HighAlch.Projection("RecordChanges", {
+export class RecordChangesWriter extends LowAlch.Projection("RecordChanges", {
   feed: RecordChanges,
   entities: [CustomerRows, MessageRows],
 }) {}
@@ -101,7 +101,7 @@ App.layer(Layer.mergeAll(handlers, RecordChangesWriter.layer, RecordChangesLive)
   projection's (`batch`, `version`). Every entity of the projection must be on its feed (a type
   error otherwise). A feed has exactly one writer: list one `Projection` per feed.
 - Serve the stream in the Api like any stream (`streams: ["RecordChanges"]`). A model's server
-  code imports these from `@highalch/tanstack-db/server`, which bundles no TanStack DB.
+  code imports these from `@lowalch/tanstack-db/server`, which bundles no TanStack DB.
 
 **Delivery.** Like every projection, it runs at least once per input, in order per scope; alchemy
 drops a repeated append for the same input. Entries are whole rows (or removed keys), so a
@@ -128,44 +128,44 @@ Declarations are module-level values. They are self-describing: their types come
 Domain definitions, not from an Api object.
 
 ```ts
-export const customers = HighAlch.collection(CustomerRows, {
+export const customers = LowAlch.collection(CustomerRows, {
   queries: {
-    list: HighAlch.read(Customers).all(),
+    list: LowAlch.read(Customers).all(),
     page: CustomersByName,
-    get: HighAlch.read(Customer).one((row, input) => row.CustomerId === input.CustomerId),
-    byProject: HighAlch.read(CustomersByProject).where(
+    get: LowAlch.read(Customer).one((row, input) => row.CustomerId === input.CustomerId),
+    byProject: LowAlch.read(CustomersByProject).where(
       (row, input) => row.ProjectId === input.ProjectId,
     ),
   },
   commands: {
-    create: HighAlch.inserts(CreateCustomer, {
+    create: LowAlch.inserts(CreateCustomer, {
       row: (input, key) => ({ CustomerId: key, Comments: [], ...input }),
     }),
-    update: HighAlch.updates(UpdateCustomer),
-    remove: HighAlch.deletes(DeleteCustomer),
-    addComment: HighAlch.edits(AddCustomerComment, {
+    update: LowAlch.updates(UpdateCustomer),
+    remove: LowAlch.deletes(DeleteCustomer),
+    addComment: LowAlch.edits(AddCustomerComment, {
       change: (draft, input) => {
         draft.Comments = [...draft.Comments, input.Comment];
       },
     }),
     registerEmail: RegisterCustomerEmail, // bare: no optimistic change
     // `{ CustomerId, IntoId }`: the row is `CustomerId`, the command addresses the other record.
-    merge: HighAlch.sends(MergeCustomers, {
+    merge: LowAlch.sends(MergeCustomers, {
       target: (input, scope) => JSON.stringify([scope, input.IntoId]),
     }),
   },
 });
 
-export const summary = HighAlch.query(DashboardSummary); // not an entity: one row, no feed
-export const refresh = HighAlch.command(RefreshSomething, {
+export const summary = LowAlch.query(DashboardSummary); // not an entity: one row, no feed
+export const refresh = LowAlch.command(RefreshSomething, {
   target: (_input, scope) => scope, // a command with no rows to edit declares its target
 });
 ```
 
 ### Entity reads
 
-Use `HighAlch.read(Query)` when the query decides which rows belong. A bare Domain query is
-equivalent. By default HighAlch reads a paged answer's `entries`, an array's elements or one
+Use `LowAlch.read(Query)` when the query decides which rows belong. A bare Domain query is
+equivalent. By default LowAlch reads a paged answer's `entries`, an array's elements or one
 row (none for `null`). For an answer that wraps its rows, such as `{ Items, Count }`, use
 `.rows((answer) => answer.Items)`. The selector receives the non-null answer.
 
@@ -186,7 +186,7 @@ row (none for `null`). For an answer that wraps its rows, such as `{ Items, Coun
   from the type, and calling it from JavaScript throws at declaration time.
 
 ```ts
-const byProject = HighAlch.read(WrappedCustomersByProject)
+const byProject = LowAlch.read(WrappedCustomersByProject)
   .rows((answer) => answer.Items)
   .where((row, input) => row.ProjectId === input.ProjectId);
 ```
@@ -195,7 +195,7 @@ Each `collection` query must return the entity's row type after selection. A pag
 accessor takes its page as the second argument, for example
 `customers.search(input, { after, take })`. Declare a Domain query with one membership rule
 and row selector per `Rows` entity. Repeating the same declaration is allowed. A conflicting
-declaration throws a HighAlch error naming the query and entity.
+declaration throws a LowAlch error naming the query and entity.
 
 **Which row a command addresses, and which aggregate.** A call passes only the command's input;
 the package resolves the rest from the declarations, in this order:
@@ -216,7 +216,7 @@ the package resolves the rest from the declarations, in this order:
 | `deletes(Cmd, { key?, target? }?)`                  | the row leaves every subset                                            |
 | `edits(Cmd, { change, key?, target? })`             | `change(draft, input)` edits a writable draft typed from the row       |
 | `sends(Cmd, { key?, target? }?)` or a bare `Cmd`    | no optimistic change; the command settles through the feed             |
-| `HighAlch.command(Cmd, { target })`                 | not an entity: no row key; `target(input, scope)` is required          |
+| `LowAlch.command(Cmd, { target })`                  | not an entity: no row key; `target(input, scope)` is required          |
 
 **Nested inputs.** When a command's input holds the row fields under another field
 (`{ value: { CustomerId, … } }`), `updates` declares `fields: (input) => input.value` (the fields a
@@ -229,7 +229,7 @@ fresh `crypto.randomUUID()`. The entity's `target(key, scope)` (or the command's
 `target(input, scope, key)`) addresses the new aggregate, so the server's row has the same key and
 the pending row is replaced in place.
 
-**`HighAlch.command` targets.** A command outside an entity has no row key, so it declares
+**`LowAlch.command` targets.** A command outside an entity has no row key, so it declares
 `target`. The one exception is a singleton aggregate whose target schema is one literal
 (`target: Schema.Literal("settings")`): that literal is the only possible target, so `target` may
 be omitted. Any other omission is a compile error (the declaration needs two arguments).
@@ -243,8 +243,8 @@ const res = useLiveQuery((q) =>
   q.from({ customer: customers.list({ account }) }).orderBy(({ customer }) => customer.Name),
 );
 
-return HighAlch.match(res).on({
-  [HighAlch.anyOf("Loading", "Retrying")]: () => <Skeleton />,
+return LowAlch.match(res).on({
+  [LowAlch.anyOf("Loading", "Retrying")]: () => <Skeleton />,
   Ready: ({ data, feed }) => <List rows={data} stale={Option.isSome(feed)} />,
   NotMember: (error, { retry }) => <NoAccess onRetry={retry} />,
   RpcClientError: (_error, { retry }) => <Offline onRetry={retry} />,
@@ -279,7 +279,7 @@ errors. Use `anyOf(...)` to share a handler across tags.
 
 ### Suspense
 
-`HighAlch.Suspend` is a `Loading` handler that suspends to the nearest `<Suspense>` instead of
+`LowAlch.Suspend` is a `Loading` handler that suspends to the nearest `<Suspense>` instead of
 rendering a placeholder. Everything else stays a branch: a typed rejection of the first load
 renders its own handler (it never reaches an error boundary), `Retrying`, `Ready` and `Missing`
 are unchanged, and a defect still throws to the error boundary.
@@ -287,8 +287,8 @@ are unchanged, and a defect still throws to the error boundary.
 ```tsx
 const res = useLiveQuery((q) => q.from({ note: notes.list({ account }) }));
 
-return HighAlch.match(res).on({
-  Loading: HighAlch.Suspend,
+return LowAlch.match(res).on({
+  Loading: LowAlch.Suspend,
   QueryRefused: () => <Refused />,
   RpcClientError: (_error, { retry }) => <Offline onRetry={retry} />,
   Retrying: ({ data }) => <NoteList notes={data} reconnecting />,
@@ -329,9 +329,9 @@ A field projection (`select(({ c }) => ({ id: c.CustomerId }))`) drops the marke
 case the app declares a floor once, by module augmentation:
 
 ```ts
-declare module "@highalch/tanstack-db" {
+declare module "@lowalch/tanstack-db" {
   interface Register {
-    readonly errors: HighAlch.ApiErrors<typeof AppApi>; // every read error of the Api
+    readonly errors: LowAlch.ApiErrors<typeof AppApi>; // every read error of the Api
   }
 }
 ```
@@ -384,7 +384,7 @@ customers.addComment({ CustomerId: id, Comment });
   await where there is no Effect: a React transition, a form's submit. It never rejects for a
   typed error; a defect rejects, as does a call on a closing or closed client. The optimistic
   edit is applied before it returns. Both forms use a bound client or the mounted provider;
-  `effect` also reads the `HighAlch.Client` service. A sent transaction settles even if its
+  `effect` also reads the `LowAlch.Client` service. A sent transaction settles even if its
   caller stops waiting.
 - `command.options`: `{ onMutate, mutationFn }` for `createOptimisticAction`. A call that edits
   no loaded row runs the command beside the (empty) transaction, which TanStack completes at once.
@@ -399,14 +399,14 @@ customers.addComment({ CustomerId: id, Comment });
 
 ### The created key
 
-An `inserts` call returns a `HighAlch.Created` transaction: its `metadata` holds the new row's key
-under `HighAlch.createdKey`, set before the call returns. Read it with `HighAlch.created`, for
+An `inserts` call returns a `LowAlch.Created` transaction: its `metadata` holds the new row's key
+under `LowAlch.createdKey`, set before the call returns. Read it with `LowAlch.created`, for
 example to navigate to the new record without awaiting the server:
 
 ```ts
 const tx = customers.create({ Name, Email });
 
-navigate({ to: "/customers/$id", params: { id: HighAlch.created(tx) } });
+navigate({ to: "/customers/$id", params: { id: LowAlch.created(tx) } });
 ```
 
 `created` only accepts an `inserts` transaction (a type error otherwise). Every entity call's
@@ -426,13 +426,13 @@ id, serialisable call); it is not integrated.
 ## Configuration
 
 ```tsx
-import { Provider } from "@highalch/tanstack-db/react";
+import { Provider } from "@lowalch/tanstack-db/react";
 
-const db = HighAlch.make({
+const db = LowAlch.make({
   api: AppApi,
   layer: AppApi.layerClientWebSocket(url).pipe(Layer.provide(clients)), // or `runtime: ...`
   scope: accountKey, // the scope (stream key) every feed reads
-  retry: HighAlch.transient, // optional; transport failures 3×, nothing else
+  retry: LowAlch.transient, // optional; transport failures 3×, nothing else
   settleTimeout: 10_000, // optional
 });
 
@@ -441,17 +441,17 @@ const db = HighAlch.make({
 
 `make` returns a TanStack `DbClient` holding the Domain connection as a dependency
 (`client.requireDependency(...)`); `Provider` renders TanStack's `DbProvider` with it. Give the
-client a `layer` (the connection builds and, on `HighAlch.close(db)`, disposes it) or a
+client a `layer` (the connection builds and, on `LowAlch.close(db)`, disposes it) or a
 `runtime` that already holds the Api client. Queries, commands, and stream `peek` and
 `events` run in that runtime's Effect context. The `clock` setting overrides its Clock
-for endpoint calls and supplies the clock for HighAlch's own waits.
+for endpoint calls and supplies the clock for LowAlch's own waits.
 
-Run `yield* HighAlch.close(db)` in an Effect or
-`await Effect.runPromise(HighAlch.close(db))` at a JavaScript boundary. When close begins,
+Run `yield* LowAlch.close(db)` in an Effect or
+`await Effect.runPromise(LowAlch.close(db))` at a JavaScript boundary. When close begins,
 new commands and paced transactions still waiting for their strategy fail immediately with
-`HighAlch client is closing or closed`. Pending optimistic edits roll back. A read that
+`LowAlch client is closing or closed`. Pending optimistic edits roll back. A read that
 starts syncing during or after close is a bug in the caller: its collection fails immediately
-with a `HighAlch.Defect` whose cause says the client is closing or closed, which `match` throws
+with a `LowAlch.Defect` whose cause says the client is closing or closed, which `match` throws
 to the error boundary, and it registers no subset or feed. A subscriber that throws while its
 transaction rolls back does not stop the shutdown; its error is logged. Every caller of `close`
 waits for the same shutdown, so do not await `close` from inside a collection's own cleanup: it
@@ -461,31 +461,31 @@ Close keeps the collections and feeds available while admitted commands settle. 
 rejection rolls back with the original error. A reply received before the deadline gets the
 full feed confirmation timeout and settles as `Committed` or `Unconfirmed`. A reply still
 outstanding `settleTimeout` milliseconds after close began fails with
-`HighAlch client closed before the server replied` and rolls back. HighAlch requests
+`LowAlch client closed before the server replied` and rolls back. LowAlch requests
 interruption and ignores any later reply. Close waits for collection cleanup and feed
 finalizers, then disposes the runtime it built. Concurrent and repeated calls share one
 close operation. The caller owns a supplied runtime.
 
-Use `HighAlch.layer(config)` to give an Effect application a client scoped to its layer.
-It provides the TanStack client as `HighAlch.Client` and closes it when the scope exits,
-including failure and interruption. HighAlch's own waits use the ambient Clock by default
+Use `LowAlch.layer(config)` to give an Effect application a client scoped to its layer.
+It provides the TanStack client as `LowAlch.Client` and closes it when the scope exits,
+including failure and interruption. LowAlch's own waits use the ambient Clock by default
 in a scoped layer.
 Pass the layer to `Atom.runtime` or compose it with your application's layers.
 
 ```ts
-const customersLayer = HighAlch.layer({
+const customersLayer = LowAlch.layer({
   api: AppApi,
   layer: AppApi.layerClientWebSocket(url).pipe(Layer.provide(clients)),
   scope: accountKey,
 });
 
 const refresh = Effect.gen(function* () {
-  const db = yield* HighAlch.Client;
-  HighAlch.reload(db, CustomerRows);
+  const db = yield* LowAlch.Client;
+  LowAlch.reload(db, CustomerRows);
 }).pipe(Effect.provide(customersLayer));
 ```
 
-`HighAlch.reload(db, Rows)` reloads every loaded subset of an entity in one client (one snapshot
+`LowAlch.reload(db, Rows)` reloads every loaded subset of an entity in one client (one snapshot
 transaction each, no flicker; calls within `reloadDelay` reload once). Use it for a change the
 feed does not carry: a write through another path than the entity's commands, while that path
 exists. A client with `live: false` loads subsets on observation and on explicit reload.
@@ -493,7 +493,7 @@ It opens no feed and never re-asks automatically. For server rendering, make one
 per request, call `dehydrate()` on it, then `hydrate(state)` on the browser's client. The
 collection ids match because both clients derive them from the declaration, query and input.
 
-`retry` is an Effect `Schedule`. The default, `HighAlch.transient`, retries transport failures
+`retry` is an Effect `Schedule`. The default, `LowAlch.transient`, retries transport failures
 after 250, 500 and 1,000 ms. Use `Schedule.while` to select which typed failures to retry.
 Before a subset first becomes ready, exhausting the schedule fails the load. After readiness,
 a retry reports `failureReason` (`Retrying`), and a stopped retry keeps the rows (`Ready.feed`).
@@ -558,10 +558,10 @@ can leave adjacent pages overlapping or with a gap until those pages are loaded 
 Creates use client-chosen keys. If the server uses another key, the row appears
 through the rule or the reload.
 
-## XState: `@highalch/tanstack-db/xstate`
+## XState: `@lowalch/tanstack-db/xstate`
 
 A machine invokes a command through `invoke(command)` from
-`@highalch/tanstack-db/xstate` (production code imports it there, never from a testing entry;
+`@lowalch/tanstack-db/xstate` (production code imports it there, never from a testing entry;
 `story/xstate` re-exports it), registered as an actor and run with `@xstate/effect`'s
 `createEffectActor`:
 
@@ -584,7 +584,7 @@ const editor = setupEffect({ actors: { rename: invoke(notes.rename) }, schemas }
 
 It is `createEffectLogic` over `command.effect(input)`: the invoked actor's output is the
 `Settled` value. Its error reaches `onError` as `@xstate/effect`'s `EffectFailure` around the
-Effect's cause; `rejection(event.error)` (from `@highalch/tanstack-db/xstate`) answers the typed rejection
+Effect's cause; `rejection(event.error)` (from `@lowalch/tanstack-db/xstate`) answers the typed rejection
 inside, the original instance. The logic is marked with its command,
 which is what makes "the command it asked for" observable: XState 6's pure `transition` returns,
 for each invoked actor, an `@xstate.spawn` executable action holding the actor `logic`, its `id`
@@ -594,14 +594,14 @@ is registered under in `setup({ actors })`. Plain XState logic works the same on
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 
-## Seams for test kits: `@highalch/tanstack-db/internal`
+## Seams for test kits: `@lowalch/tanstack-db/internal`
 
 `@highalch/story` needs a few behaviour-preserving seams of the core, published as
-`@highalch/tanstack-db/internal` and **not covered by semver**. The story clock reads `waitKind` to
+`@lowalch/tanstack-db/internal` and **not covered by semver**. The story clock reads `waitKind` to
 distinguish retries, reload debounces and settle timeouts. The test kit also uses `connectionOf` and
 `Connection` (a client's feeds, each with a read-only `current`: caught up and not failed, and its
 materialised subsets), the constructors of `match`'s live states (`Live`, `fromLive`) and of
-`Settled`, and `keyOf`. Applications import `@highalch/tanstack-db`.
+`Settled`, and `keyOf`. Applications import `@lowalch/tanstack-db`.
 
 ## Deliberately not done
 
@@ -609,6 +609,6 @@ materialised subsets), the constructors of `match`'s live states (`Live`, `fromL
 - Offline: no persistence or queueing of transactions (the design leaves room for
   `@tanstack/offline-transactions`).
 - Accumulating pages (infinite lists): each page is its own subset.
-- Live refresh of `HighAlch.query` results: they have no feed; `retry` (or a remount after GC)
+- Live refresh of `LowAlch.query` results: they have no feed; `retry` (or a remount after GC)
   reloads them.
-- A command never edits a `HighAlch.query` row.
+- A command never edits a `LowAlch.query` row.

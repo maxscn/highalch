@@ -1,15 +1,19 @@
 # HighAlch
 
-HighAlch syncs an [alchemy Domain](https://alchemy.run/domain) into TanStack DB 1.0 collections.
-Typed errors come from the Domain definitions. Reads use stock `useLiveQuery`, writes are native
-TanStack DB transactions, and `match` renders each state. A story kit tests what a client shows
-and how its commands settle. It can also screenshot a mounted component after every step without
-a browser.
+This repository holds two npm scopes:
 
-| Package                                                   | What                                                                                                                                                                                         |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@highalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
-| [`@highalch/story`](packages/story/README.md)             | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
+- **LowAlch** (`@lowalch/*`) converts [alchemy Domain](https://alchemy.run/domain) primitives
+  for other infrastructure. `@lowalch/tanstack-db` syncs a Domain into TanStack DB 1.0
+  collections. Typed errors come from the Domain definitions. Reads use stock `useLiveQuery`,
+  writes are native TanStack DB transactions, and `match` renders each state.
+- **HighAlch** (`@highalch/*`) verifies apps built on those primitives. `@highalch/story` tests
+  what a client shows and how its commands settle. It can also screenshot a mounted component
+  after every step without a browser.
+
+| Package                                                  | What                                                                                                                                                                                         |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@lowalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
+| [`@highalch/story`](packages/story/README.md)            | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
 
 Both packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
@@ -22,11 +26,11 @@ The example below follows a note list from the server to a screen story.
 ### Server: a feed, an entity and the feed's projection
 
 ```ts
-import * as HighAlch from "@highalch/tanstack-db/server"; // alchemy Domain and Effect only
+import * as LowAlch from "@lowalch/tanstack-db/server"; // alchemy Domain and Effect only
 
-export class NotebookChanges extends HighAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
+export class NotebookChanges extends LowAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
 
-export class NoteRows extends HighAlch.Rows("NoteRows", {
+export class NoteRows extends LowAlch.Rows("NoteRows", {
   feed: NotebookChanges,
   row: Note,
   key: "NoteId",
@@ -35,13 +39,13 @@ export class NoteRows extends HighAlch.Rows("NoteRows", {
     Predicate.isTagged(event, "NoteDeleted") ? event.account : event.note.account,
   target: (key, scope) => JSON.stringify([scope, key]), // the aggregate a row's commands address
   on: {
-    NoteCreated: (event) => HighAlch.upserted(event.note),
-    NoteChanged: (event) => HighAlch.upserted(event.note),
-    NoteDeleted: (event) => HighAlch.removed(event.NoteId),
+    NoteCreated: (event) => LowAlch.upserted(event.note),
+    NoteChanged: (event) => LowAlch.upserted(event.note),
+    NoteDeleted: (event) => LowAlch.removed(event.NoteId),
   },
 }) {}
 
-export class NotebookWriter extends HighAlch.Projection("NotebookChanges", {
+export class NotebookWriter extends LowAlch.Projection("NotebookChanges", {
   feed: NotebookChanges,
   entities: [NoteRows],
 }) {}
@@ -52,16 +56,16 @@ export class NotebookWriter extends HighAlch.Projection("NotebookChanges", {
 ### Client: a collection, a provider, a read and a command
 
 ```tsx
-import * as HighAlch from "@highalch/tanstack-db";
-import { Provider } from "@highalch/tanstack-db/react";
+import * as LowAlch from "@lowalch/tanstack-db";
+import { Provider } from "@lowalch/tanstack-db/react";
 import { useLiveQuery } from "@tanstack/react-db";
 
-export const notes = HighAlch.collection(NoteRows, {
-  queries: { list: HighAlch.read(Notes).all() },
-  commands: { rename: HighAlch.updates(RenameNote) },
+export const notes = LowAlch.collection(NoteRows, {
+  queries: { list: LowAlch.read(Notes).all() },
+  commands: { rename: LowAlch.updates(RenameNote) },
 });
 
-const db = HighAlch.make({
+const db = LowAlch.make({
   api: NotesApi,
   layer: NotesApi.layerClientWebSocket(url),
   scope: account,
@@ -76,8 +80,8 @@ export const App = () => (
 export function NoteList({ account }: { readonly account: string }) {
   const res = useLiveQuery((q) => q.from({ note: notes.list({ account }) }));
 
-  return HighAlch.match(res).on({
-    [HighAlch.anyOf("Loading", "Retrying")]: () => <p>Loading notes…</p>,
+  return LowAlch.match(res).on({
+    [LowAlch.anyOf("Loading", "Retrying")]: () => <p>Loading notes…</p>,
     Ready: ({ data }) => (
       <ul>
         {data.map((note) => (
@@ -94,9 +98,9 @@ export function NoteList({ account }: { readonly account: string }) {
 await notes.rename({ NoteId: "n1", title: "Ada Lovelace" }).when("settled");
 ```
 
-Effect applications can use `HighAlch.layer(config)` to provide the client as
-`HighAlch.Client` and close it with the scope. For a client created with `HighAlch.make`,
-run `yield* HighAlch.close(db)` when its owner shuts down.
+Effect applications can use `LowAlch.layer(config)` to provide the client as
+`LowAlch.Client` and close it with the scope. For a client created with `LowAlch.make`,
+run `yield* LowAlch.close(db)` when its owner shuts down.
 
 ### A story with a screen
 
@@ -134,14 +138,14 @@ and in the packages' `tests/`.
 
 ## This is opinionated
 
-HighAlch works only if a frontend is built one way. A story can show, assert and screenshot a
+LowAlch works only if a frontend is built one way. A story can show, assert and screenshot a
 state only when that state lives where the story can reach it. The rules:
 
 1. **Server state lives in collections.** Read it with stock `useLiveQuery` and render it with
    `match`. Write it with declared commands.
 2. **State you want a frame of lives in an XState machine.** That is anything that changes what a
    reviewer would look at, or decides which command is sent: a draft, a step, an open dialog, the
-   last error. A machine sends commands through `invoke(command)` from `@highalch/tanstack-db/xstate`.
+   last error. A machine sends commands through `invoke(command)` from `@lowalch/tanstack-db/xstate`.
 3. **`useState` is for what nobody reviews.** Focus, hover, scroll position, a headless library's
    popover. A story cannot seed, read or enumerate it, so it has no frame. If you want a frame of
    it, move it into the machine.
@@ -186,10 +190,10 @@ that lead there.
 A Vite+ (`vp`) pnpm workspace:
 
 ```
-packages/tanstack-db       @highalch/tanstack-db
-packages/story    @highalch/story
-fixtures/         example Domains and views shared by both packages' tests (not published)
-scripts/          check-patterns.ts: the packages' import boundaries
+packages/tanstack-db   @lowalch/tanstack-db
+packages/story         @highalch/story
+fixtures/              example Domains and views shared by both packages' tests (not published)
+scripts/               check-patterns.ts: the packages' import boundaries
 ```
 
 | Command                  | What                                                                      |
@@ -201,14 +205,14 @@ scripts/          check-patterns.ts: the packages' import boundaries
 | `vp check`               | Format, lint and type-aware lint                                          |
 | `vp test --maxWorkers=2` | All tests, run from source (no build needed)                              |
 
-Tests and type checks resolve `@highalch/*` to the packages' `src`: the aliases are in
+Tests and type checks resolve `@lowalch/*` and `@highalch/*` to the packages' `src`: the aliases are in
 `vite.config.ts` and the matching `paths` are in `tsconfig.base.json`. Published packages resolve
-through their `exports`, which point at `dist`. `@highalch/story` builds against `@highalch/tanstack-db`'s
+through their `exports`, which point at `dist`. `@highalch/story` builds against `@lowalch/tanstack-db`'s
 `dist`, so `vp run build` builds `db` first.
 
 ## Releasing
 
-Releases use [Changesets](https://github.com/changesets/changesets). `@highalch/tanstack-db` and
+Releases use [Changesets](https://github.com/changesets/changesets). `@lowalch/tanstack-db` and
 `@highalch/story` always share a version.
 
 1. With a change that should reach npm, run `vp run changeset`, choose the bump and write one

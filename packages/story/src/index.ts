@@ -1,9 +1,9 @@
 /**
- * Stories for data synced with `@highalch/tanstack-db` and the machines over it: given server
+ * Stories for data synced with `@lowalch/tanstack-db` and the machines over it: given server
  * history, when a client (or another one, or the world, or a machine) acts, then what each source
  * shows, in which read state, how each command settled and where each machine is. One runner
  * (`make`) runs every kind of step in any order: a hosted story hosts the consumer's Domain in
- * memory behind a wire it controls, with real `HighAlch` clients on a clock it controls; a hostless
+ * memory behind a wire it controls, with real `LowAlch` clients on a clock it controls; a hostless
  * story (`make()`) only steps machines purely. Machine steps come from
  * `@highalch/story/xstate`; this entry never imports XState. Test-runner agnostic: a story
  * is a promise to await inside your own test.

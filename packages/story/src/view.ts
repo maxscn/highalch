@@ -1,7 +1,7 @@
 import type { CollectionStatus, HealthNode, HealthProblem } from "@tanstack/db";
 import { Option, Predicate, type Data } from "effect";
-import type { ErrorsOf, Live as LiveStates, Source, TaggedFailure } from "@highalch/tanstack-db";
-import { Live as live, Settled as settled } from "@highalch/tanstack-db/internal";
+import type { ErrorsOf, Live as LiveStates, Source, TaggedFailure } from "@lowalch/tanstack-db";
+import { Live as live, Settled as settled } from "@lowalch/tanstack-db/internal";
 
 /**
  * The constructors of every state `match` gives a live query result: `Loading()`,

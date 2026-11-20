@@ -4,13 +4,13 @@ import type { AnyActorLogic } from "xstate";
 import type { TaggedFailure } from "../state";
 import type { Input } from "../values";
 
-/** A declared `HighAlch` command, as a mark holds it (to compare it with what a machine ran). */
+/** A declared `LowAlch` command, as a mark holds it (to compare it with what a machine ran). */
 export interface Marked {}
 
-/** Under this key, actor logic made from a `HighAlch` command holds that command. */
-const tag: unique symbol = Symbol.for("@highalch/tanstack-db/xstate/command");
+/** Under this key, actor logic made from a `LowAlch` command holds that command. */
+const tag: unique symbol = Symbol.for("@lowalch/tanstack-db/xstate/command");
 
-/** A `HighAlch` command as a machine invokes it: anything with `effect(input)`. */
+/** A `LowAlch` command as a machine invokes it: anything with `effect(input)`. */
 export type Invocable<I, A, E> = {
   readonly effect: (input: I) => Effect.Effect<A, E>;
 };
@@ -28,7 +28,7 @@ export class Runner extends Context.Service<
       input: I,
     ) => Effect.Effect<A, E>;
   }
->()("@highalch/tanstack-db/xstate/Runner") {}
+>()("@lowalch/tanstack-db/xstate/Runner") {}
 
 /** Marks actor logic as invoking `command`, so stories can see what a machine asked for. */
 export const mark = <L extends AnyActorLogic>(logic: L, command: Marked): L => {
@@ -46,7 +46,7 @@ export const commandOf = (logic: AnyActorLogic | undefined): Option.Option<Marke
   });
 
 /**
- * The actor logic a machine invokes a `HighAlch` command with: `@xstate/effect`'s
+ * The actor logic a machine invokes a `LowAlch` command with: `@xstate/effect`'s
  * `createEffectLogic` over `command.effect(input)`, so the invoked actor's output is the `Settled`
  * value and its error the command's typed rejection (`onError`'s `event.error` holds it inside an
  * `EffectFailure`; `rejection(event.error)` answers the original instance). It is
