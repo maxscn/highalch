@@ -50,11 +50,29 @@ const painter = (options: Options = {}): Painter => ({
   },
 });
 
+/** An element whose text is only whitespace (a title of `"\t"`): takumi lays out no box for it. */
+const blank = (node: Node) => node.type === "text" && node.text.trim() === "";
+
+/**
+ * A node's children as takumi boxed them: all of them when there are as many boxes, else without
+ * the blank ones it laid out no box for, when that leaves as many; otherwise none.
+ */
+const boxed = (children: ReadonlyArray<Node>, boxes: number): Option.Option<ReadonlyArray<Node>> =>
+  Option.liftPredicate(children, (all) => all.length === boxes).pipe(
+    Option.orElse(() =>
+      Option.liftPredicate(
+        children.filter((child) => !blank(child)),
+        (laid) => laid.length === boxes,
+      ),
+    ),
+  );
+
 /**
  * takumi's boxes for the node tree it was given. A node's measured children are its children's
- * boxes when there are as many; otherwise takumi made boxes of its own (inline content wrapped
- * among blocks, the text of an element laid out as a flex item, an inline-block), which belong to
- * no element: they keep no attributes, so the screen folds them into the nearest element.
+ * boxes when there are as many (blank elements aside); otherwise takumi made boxes of its own
+ * (inline content wrapped among blocks, the text of an element laid out as a flex item, an
+ * inline-block), which belong to no element: they keep no attributes, so the screen folds them
+ * into the nearest element.
  */
 const zip = (node: Option.Option<Node>, measured: MeasuredNode): Measured => {
   const [, , , , x, y] = measured.transform;
@@ -63,7 +81,7 @@ const zip = (node: Option.Option<Node>, measured: MeasuredNode): Measured => {
     Option.flatMap((container) => Option.fromUndefinedOr(container.children)),
     Option.getOrElse((): ReadonlyArray<Node> => []),
   );
-  const paired = children.length === measured.children.length;
+  const paired = boxed(children, measured.children.length);
 
   return {
     attributes: Option.match(node, {
@@ -77,7 +95,7 @@ const zip = (node: Option.Option<Node>, measured: MeasuredNode): Measured => {
     runs: measured.runs,
     children: measured.children.map((box, index) =>
       zip(
-        Option.filter(Option.fromUndefinedOr(children[index]), () => paired),
+        Option.flatMap(paired, (laid) => Option.fromUndefinedOr(laid[index])),
         box,
       ),
     ),

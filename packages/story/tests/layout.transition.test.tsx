@@ -52,7 +52,7 @@ const overflowOf = async (name: string, view: React.JSX.Element, sheet: string) 
 };
 
 describe("f(screen, layout engine) → every element's box, and what spills out of it", () => {
-  it("f(padding, inline content, clipping) → nothing; f(a long word, a wide child) → each, named", async () => {
+  it("f(padding, inline content, clipping, a blank element) → nothing; f(a long word, a wide child) → each, named", async () => {
     const sheet = `
       .box { display: block; width: 200px; margin: 0; }
       .padded { padding: 10px 40px; border: 4px solid #000; }
@@ -68,6 +68,19 @@ describe("f(screen, layout engine) → every element's box, and what spills out 
           <p className="box">
             Hello <b>bold</b> and <span>inline</span> text
           </p>
+          <p className="box clip">{"W".repeat(40)}</p>
+        </main>,
+        sheet,
+      ),
+    ).toEqual([]);
+
+    // takumi lays out no box for an element of whitespace (a title of "\t"): its siblings are
+    // still matched to theirs, so the clipping one still clips.
+    expect(
+      await overflowOf(
+        "layout blank",
+        <main>
+          <h1>{"\t"}</h1>
           <p className="box clip">{"W".repeat(40)}</p>
         </main>,
         sheet,
