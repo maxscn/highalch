@@ -5,7 +5,7 @@ import { Explore, ExploreFailure } from "@highalch/story";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
-import { approvedEditor, brokenEditor } from "../../../examples/swallowed-rejection";
+import { SwallowedRejection } from "@highalch/examples";
 import {
   address,
   NoteAggregate,
@@ -17,6 +17,8 @@ import {
   type Note,
 } from "../../../fixtures/notebook";
 import { notes } from "../../../fixtures/notes";
+
+const { approvedEditor, brokenEditor } = SwallowedRejection;
 
 const story = Story.make(LowAlchDb.memory({ api: NotesApi, layer: notebook, services: store }), {
   scope: "acc-1",
@@ -43,13 +45,19 @@ const remote = Explore.source("remote", {
 });
 
 /** The rule the broken editor breaks: it says Saved after its save was rejected. */
-const savedMeansCommitted = Explore.rule("an editor says Saved only after its save committed", {
-  at: "rest",
-  reads: { editor: Machine.snapshot(), commands: Db.commands() },
-  holds: ({ editor, commands }) =>
-    !editor?.matches("Saved") ||
-    ["Committed", "Unconfirmed"].includes(commands.at(-1)?.outcome ?? ""),
-});
+const savedMeansCommitted = Explore.rule(
+  "an editor says Saved only after its save committed",
+  function* () {
+    const editor = yield* Machine.snapshot();
+
+    if (!editor?.matches("Saved")) return true;
+
+    const commands = yield* Db.commands();
+
+    return ["Committed", "Unconfirmed"].includes(commands.at(-1)?.outcome ?? "");
+  },
+  { at: "rest" },
+);
 
 const explorationOf = (name: string, machine: typeof approvedEditor) => ({
   name,

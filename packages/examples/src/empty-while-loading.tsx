@@ -1,5 +1,5 @@
 import { useLiveQuery } from "@tanstack/react-db";
-import { notes } from "../fixtures/notes";
+import { notes } from "../../../fixtures/notes";
 
 /**
  * Example: **the list claims to be empty while it loads.**
@@ -31,4 +31,4 @@ export function BrokenNoteList({ account }: { readonly account: string }) {
   );
 }
 
-export { NoteList as ApprovedNoteList, css } from "../fixtures/note-list";
+export { NoteList as ApprovedNoteList, css } from "../../../fixtures/note-list";

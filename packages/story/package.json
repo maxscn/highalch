@@ -38,6 +38,18 @@
       "types": "./dist/lowalch.d.mts",
       "default": "./dist/lowalch.mjs"
     },
+    "./tanstack-form": {
+      "types": "./dist/tanstack-form.d.mts",
+      "default": "./dist/tanstack-form.mjs"
+    },
+    "./react-form": {
+      "types": "./dist/react-form.d.mts",
+      "default": "./dist/react-form.mjs"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.mts",
+      "default": "./dist/vite.mjs"
+    },
     "./xstate": {
       "types": "./dist/xstate.d.mts",
       "default": "./dist/xstate.mjs"
@@ -65,6 +77,7 @@
     "@lowalch/tanstack-db": "workspace:*",
     "@tanstack/db": "catalog:",
     "@tanstack/react-db": "catalog:",
+    "@tanstack/react-form": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
@@ -84,6 +97,7 @@
     "@lowalch/tanstack-db": "workspace:^",
     "@tanstack/db": "1.0.0-rc.1.5",
     "@tanstack/react-db": "1.0.0-rc.1.5",
+    "@tanstack/react-form": "1.33.5",
     "@xstate/effect": "1.0.0-beta.2",
     "effect": "^4.1.4",
     "happy-dom": "^20.11.1",
@@ -100,6 +114,9 @@
       "optional": true
     },
     "@tanstack/react-db": {
+      "optional": true
+    },
+    "@tanstack/react-form": {
       "optional": true
     },
     "@xstate/effect": {

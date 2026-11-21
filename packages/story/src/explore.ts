@@ -1,6 +1,6 @@
 import { Option } from "effect";
 import { pathOf, slug, type Place } from "./files";
-import { rule, type Rule } from "./rules";
+import { before, rule, type Rule } from "./rules";
 import { StoryFailure, type Story } from "./run";
 import { flatten, type Step, type Steps } from "./steps";
 import { json } from "./world";
@@ -147,9 +147,12 @@ const aboutOf = (failure: StoryFailure) => failure.reason.replace(/step \d+ \([^
 /** Runs one sequence quietly (nothing captured); its failure, if any. */
 const attempt = async (exploration: Exploration, sequence: ReadonlyArray<Move>) => {
   try {
-    await exploration.story.with({ rules: exploration.rules, capture: "off", trace: false })(
-      stepsOf(exploration, sequence),
-    );
+    await exploration.story.with({
+      rules: exploration.rules,
+      capture: "off",
+      trace: false,
+      name: exploration.name,
+    })(stepsOf(exploration, sequence));
 
     return Option.none<StoryFailure>();
   } catch (error) {
@@ -272,8 +275,9 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
 };
 
 /**
- * Rules and explorations: `Explore.rule(sentence, { at, reads, holds })` declares what must hold,
- * checked by stories (`story.with({ rules })`) and explorations alike; `Explore.source` declares
- * what can happen; `Explore.run` explores every sequence of it.
+ * Rules and explorations: `Explore.rule(sentence, function* () { … }, { at })` declares what must
+ * hold, reading what it yields (`yield* Db.rows(list)`; `yield* Explore.before(reader)` for its
+ * value at the previous check), checked by stories (`story.with({ rules })`) and explorations
+ * alike; `Explore.source` declares what can happen; `Explore.run` explores every sequence of it.
  */
-export const Explore = { rule, source, run } as const;
+export const Explore = { rule, before, source, run } as const;

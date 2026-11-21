@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain";
-import { Deferred, Effect, Predicate, Stream } from "effect";
+import { Deferred, Effect, Exit, Option, Predicate, Stream } from "effect";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import type { Answer, Input, Tagged } from "./values";
 
@@ -7,8 +7,20 @@ import type { Answer, Input, Tagged } from "./values";
 export const transport = (message = "socket closed") =>
   new RpcClientError({ reason: new RpcClientDefect({ message, cause: new Error(message) }) });
 
-/** A command one of the story's clients sent: its name, target and input. */
-export type Sent = { readonly name: string; readonly target: string; readonly input: Input };
+/** A command one of the story's clients sent: its name, target, input and command id. */
+export type Sent = {
+  readonly name: string;
+  readonly target: string;
+  readonly input: Input;
+  /** The id the client sent it with (a LowAlch command's transaction id), if any. */
+  readonly commandId: Option.Option<string>;
+};
+
+/** Who watches a wire's commands: told when one is sent and when its reply (or failure) arrives. */
+export type Watcher = {
+  readonly sent: (sent: Sent) => void;
+  readonly answered: (sent: Sent, exit: Exit.Exit<unknown, Tagged>) => void;
+};
 
 /** A command or query of an Api client. */
 type Call = (...args: ReadonlyArray<never>) => Effect.Effect<Answer | null, Tagged>;
@@ -49,6 +61,8 @@ export const isFeed = (endpoint: Call | Feed | undefined): endpoint is Feed =>
 export class Wire {
   /** Requests running and not held. */
   inflight = 0;
+  /** Replies and answers held at a gate now (a command's reply until the story settles). */
+  held = 0;
   /** Feed connections open now. */
   open = 0;
   /** Feed connections made. */
@@ -57,6 +71,8 @@ export class Wire {
   readonly sent: Array<Sent> = [];
   /** Queries asked, by name, in order. */
   readonly asked: Array<string> = [];
+  /** Who is told about every command sent through this wire. */
+  readonly watchers: Array<Watcher> = [];
   private down: RpcClientError | undefined;
   /** Whether the feed delivers nothing now (`mute`). */
   muted = false;
@@ -138,9 +154,17 @@ export class Wire {
 
       if (!closed) return Effect.void;
 
-      return Effect.sync(() => (this.inflight -= 1)).pipe(
+      return Effect.sync(() => {
+        this.inflight -= 1;
+        this.held += 1;
+      }).pipe(
         Effect.andThen(Deferred.await(closed)),
-        Effect.ensuring(Effect.sync(() => (this.inflight += 1))),
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.held -= 1;
+            this.inflight += 1;
+          }),
+        ),
       );
     });
 
@@ -214,16 +238,38 @@ export class Wire {
         if (!Predicate.isFunction(endpoint)) return [name, endpoint];
 
         const call: Call = (...args) => {
-          if (queries.has(name)) this.asked.push(name);
-          else
-            this.sent.push({
-              name,
-              target: String(args[0]),
-              // SAFETY: a command's second argument is its input.
-              input: (args[1] ?? {}) as Input,
-            });
+          if (queries.has(name)) {
+            this.asked.push(name);
 
-          return this.counted(name, endpoint(...args), queries.has(name), !queries.has(name));
+            return this.counted(name, endpoint(...args), true, false);
+          }
+
+          const options: unknown = args[2];
+
+          const sent: Sent = {
+            name,
+            target: String(args[0]),
+            // SAFETY: a command's second argument is its input.
+            input: (args[1] ?? {}) as Input,
+            commandId: Option.filter(
+              Option.fromUndefinedOr<unknown>(
+                Predicate.hasProperty(options, "commandId") ? options.commandId : undefined,
+              ),
+              Predicate.isString,
+            ),
+          };
+
+          this.sent.push(sent);
+
+          for (const watcher of this.watchers) watcher.sent(sent);
+
+          return this.counted(name, endpoint(...args), false, true).pipe(
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                for (const watcher of this.watchers) watcher.answered(sent, exit);
+              }),
+            ),
+          );
         };
 
         return [name, call];

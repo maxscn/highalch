@@ -1,18 +1,27 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
+import { Explore } from "@highalch/story";
+import { Screen } from "@highalch/story/screen";
+import { Takumi } from "@highalch/story/takumi";
+import { Form } from "@highalch/story/tanstack-form";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
-import { NoteLocked } from "../fixtures/notebook";
-import { notes } from "../fixtures/notes";
-import * as EmptyWhileLoading from "./empty-while-loading";
-import { ada, bob, exist, failureOf, list, screen, story } from "./shared";
-import * as StickyOptimistic from "./sticky-optimistic";
-import * as SwallowedRejection from "./swallowed-rejection";
+import {
+  EmptyWhileLoading,
+  OverflowingTitle,
+  Shared,
+  StickyOptimistic,
+  SwallowedRejection,
+} from "@highalch/examples";
+import { NoteLocked } from "../../../fixtures/notebook";
+import { notes } from "../../../fixtures/notes";
+
+const { ada, bob, exist, failureOf, list, screen, story } = Shared;
 
 /**
  * Each example runs one story against two variants of a view (or machine): the broken one, which
  * the story catches with a readable failure, and the approved one, which passes. Both variants'
- * frames are reviewed baselines under `examples/baselines/takumi/`, so the broken screen and the
+ * frames are reviewed baselines under `tests/baselines/takumi/`, so the broken screen and the
  * approved one sit side by side.
  */
 
@@ -107,4 +116,44 @@ describe("example: a rejected save says Saved", () => {
 
   it("approved: Failed with the typed rejection", () =>
     saved("swallowed rejection (approved)", SwallowedRejection.approvedEditing("n1")));
+});
+
+describe("example: a long title runs off its card", () => {
+  // Only this example's rule reads a layout, so only its screen has a layout engine.
+  const Card = screen(OverflowingTitle.css, 240).pipe(Takumi.layout());
+
+  const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+    const layout = yield* Card.layout();
+
+    return Screen.overflowing(layout).length === 0;
+  });
+
+  const renamed = (name: string, view: React.JSX.Element) =>
+    story.with({ name, rules: [...Db.rules, fits] })(
+      exist(ada),
+      Card.render(view),
+      Form.when(OverflowingTitle.titleForm, "title", "W".repeat(60)),
+      Form.submit(OverflowingTitle.titleForm),
+      Db.settled("Committed"),
+    );
+
+  it("broken: the heading runs off the card once the title shows", async () => {
+    const failure = await failureOf(
+      renamed(
+        "overflowing title (broken)",
+        <OverflowingTitle.BrokenNoteCard NoteId="n1" title="Ada" />,
+      ),
+    );
+
+    expect(failure?.step).toBe(4);
+    expect(failure?.message).toContain(
+      'main.page > section.card > h1.title: text \\"WWWWWWWWWWWW…\\" (60 characters) runs 788px past its right edge',
+    );
+  });
+
+  it("approved: the heading wraps inside the card", () =>
+    renamed(
+      "overflowing title (approved)",
+      <OverflowingTitle.ApprovedNoteCard NoteId="n1" title="Ada" />,
+    ));
 });

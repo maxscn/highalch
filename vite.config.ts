@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
+import { highalch } from "./packages/story/src/vite";
 
 const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
@@ -26,6 +27,7 @@ const workspace = [
     find: /^@lowalch\/tanstack-db\/internal$/,
     replacement: source("./packages/tanstack-db/src/internal.ts"),
   },
+  { find: /^@highalch\/examples$/, replacement: source("./packages/examples/src/index.ts") },
   { find: /^@highalch\/story$/, replacement: source("./packages/story/src/index.ts") },
   {
     find: /^@highalch\/story\/tanstack-db$/,
@@ -34,6 +36,14 @@ const workspace = [
   {
     find: /^@highalch\/story\/lowalch$/,
     replacement: source("./packages/story/src/lowalch/index.ts"),
+  },
+  {
+    find: /^@highalch\/story\/tanstack-form$/,
+    replacement: source("./packages/story/src/tanstack-form/index.ts"),
+  },
+  {
+    find: /^@highalch\/story\/react-form$/,
+    replacement: source("./packages/story/src/tanstack-form/react-form.ts"),
   },
   {
     find: /^@highalch\/story\/takumi$/,
@@ -50,6 +60,8 @@ const workspace = [
 ];
 
 export default defineConfig({
+  // Stories find the forms the app mounts (see @highalch/story/vite).
+  plugins: [highalch()],
   oxc: { jsx: { runtime: "automatic" } },
   fmt: {
     ignorePatterns: ["**/dist/**", "**/artifacts/**", "pnpm-lock.yaml"],
@@ -65,7 +77,7 @@ export default defineConfig({
     dedupe: ["effect", "react", "react-dom"],
   },
   test: {
-    include: ["packages/*/tests/**/*.test.{ts,tsx}", "examples/**/*.test.{ts,tsx}"],
+    include: ["packages/*/tests/**/*.test.{ts,tsx}"],
   },
   run: {
     cache: true,

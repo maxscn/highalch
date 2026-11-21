@@ -10,8 +10,8 @@ import {
   notebook,
   store,
   type Note,
-} from "../fixtures/notebook";
-import { notes } from "../fixtures/notes";
+} from "../../../fixtures/notebook";
+import { notes } from "../../../fixtures/notes";
 
 /**
  * The examples' story runner: the Notebook Domain in memory with LowAlch clients, one account.
@@ -49,20 +49,18 @@ export const exist = (...seeded: ReadonlyArray<Note>) =>
 export const list = notes.list({ account: "acc-1" });
 
 /**
- * A screen for the examples: frames compared with the reviewed baselines under
+ * A screen for the examples, with frames compared with the reviewed baselines under
  * `examples/baselines/<painter>/<story>/`, both variants' frames; the run's filmstrips go to
  * `examples/artifacts/` (ignored). `UPDATE_SCREENS=1` writes baselines.
  */
-export const screen = (css: string) =>
-  Screen.make({
-    css,
-    width: 360,
-    height: 200,
-    painter: Takumi.layer(),
-    baselines: new URL("./baselines/", import.meta.url),
-    output: new URL("./artifacts/", import.meta.url),
-    update: process.env.UPDATE_SCREENS === "1",
-  });
+export const screen = (css: string, height = 200) =>
+  Screen.make({ css, width: 360, height }).pipe(
+    Takumi.frames({
+      baselines: new URL("../tests/baselines/", import.meta.url),
+      output: new URL("../artifacts/", import.meta.url),
+      update: process.env.UPDATE_SCREENS === "1",
+    }),
+  );
 
 /** A story's failure, or `undefined` when it passed. */
 export const failureOf = (run: Promise<void>) =>

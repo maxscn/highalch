@@ -16,7 +16,7 @@ import type { TaggedFailure } from "@lowalch/tanstack-db";
 import type { Answer, Input } from "@lowalch/tanstack-db/internal";
 import { commandOf, Runner, type Invocable, type Marked } from "@lowalch/tanstack-db/xstate";
 import { registryOf, stageOf } from "../atoms";
-import type { Reader } from "../rules";
+import { reader, type Reader } from "../rules";
 import { CurrentStage, Mismatch, type Stage } from "../stage";
 import { partial, staged, type Step } from "../steps";
 import { clients, type Clients, type Run, type Source } from "../tanstack-db/state";
@@ -734,8 +734,8 @@ const failed = (command: Marked, error: TaggedFailure, options: Addressed = {}):
  * The machine's snapshot now, as a rule reads it (the named machine, or the one introduced
  * last): `snapshot?.matches("Saving")`, `snapshot?.context`; `undefined` before it entered.
  */
-const snapshot = (options: Addressed = {}): Reader<AnyMachineSnapshot | undefined> => ({
-  read: async (stage) => {
+const snapshot = (options: Addressed = {}): Reader<AnyMachineSnapshot | undefined> =>
+  reader(`machine ${options.machine ?? "latest"}`, async (stage) => {
     const machines = await machinesOf(stage);
 
     const name = Option.orElse(Option.fromUndefinedOr(options.machine), () => machines.latest);
@@ -746,8 +746,7 @@ const snapshot = (options: Addressed = {}): Reader<AnyMachineSnapshot | undefine
         snapshotOf,
       ),
     );
-  },
-});
+  });
 
 /**
  * Machine steps, run by the one story runner beside data steps, in any order. A machine enters a

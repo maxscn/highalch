@@ -6,14 +6,16 @@ given server history, when a client, another client or the world acts, then what
 shows, its read state and how each command settled. Optional screen steps paint a filmstrip of a
 mounted React component without a browser.
 
-| Entry point                   | What                                                                                                |
-| ----------------------------- | --------------------------------------------------------------------------------------------------- |
-| `@highalch/story`             | The story runner, the Domain's steps (history, other clients, transport faults, time)               |
-| `@highalch/story/tanstack-db` | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)       |
-| `@highalch/story/lowalch`     | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, feed rules, view helpers |
-| `@highalch/story/xstate`      | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                 |
-| `@highalch/story/screen`      | Screen steps: a mounted component's frames vs reviewed baselines; needs happy-dom                   |
-| `@highalch/story/takumi`      | `Takumi.layer()`: takumi's WASM renderer as a screen's painter; needs `takumi-js`                   |
+| Entry point                     | What                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `@highalch/story`               | The story runner, the Domain's steps (history, other clients, transport faults, time)                              |
+| `@highalch/story/tanstack-db`   | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)                      |
+| `@highalch/story/tanstack-form` | `Form`: type into and submit the app's own forms, readers, `Form.typing` for explorations                          |
+| `@highalch/story/vite`          | `highalch()`: the Vite plugin through which stories find the forms the app mounts                                  |
+| `@highalch/story/lowalch`       | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, feed rules, view helpers                |
+| `@highalch/story/xstate`        | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                                |
+| `@highalch/story/screen`        | Screen steps: a mounted component, its frames vs reviewed baselines, its layout for rules; needs happy-dom         |
+| `@highalch/story/takumi`        | `Takumi.frames()` and `Takumi.layout()`: takumi's WASM renderer as a screen's frames and layout; needs `takumi-js` |
 
 Peer dependencies: `effect`, `@alchemy.run/domain`, `@tanstack/db` and `react`; optional
 `@lowalch/tanstack-db` (for `/lowalch` and `/xstate`), `xstate` and `@xstate/effect` (for
@@ -255,23 +257,47 @@ delete and insert of a row in one batch is one change). When a story ends, or fa
 in flight, closing its clients (`LowAlch.close` waits for sent commands) lets the replies through
 and runs the clock's waits, so a failure is reported instead of hanging.
 
-**Rules.** `story.with({ rules })` checks rules, each at the moment it names. A rule is one
-declaration with a sentence for its name, which failures quote word for word:
+**Rules.** `story.with({ rules })` checks rules, each at the moment it names. A rule is a sentence
+for its name, which failures quote word for word, a generator that yields what it reads and returns
+whether it holds, and its settings last:
 
 ```ts
 import { Explore } from "@highalch/story";
 
-const listMatchesEditor = Explore.rule("the list matches the editor", {
-  at: "rest", // "step" (default) | "rest" | "end"
-  reads: { list: Db.rows(list), editor: Machine.snapshot() },
-  holds: ({ list, editor }) => list.get("n1")?.title === editor.context.draft,
-});
+const listMatchesEditor = Explore.rule(
+  "the list matches the editor",
+  function* () {
+    const rows = yield* Db.rows(list);
+    const editor = yield* Machine.snapshot();
 
-const rejectionLeavesNothingPending = Explore.rule("a rejection leaves nothing pending", {
-  reads: { list: Db.rows(list) },
-  holds: ({ step, list }) =>
-    step._tag !== "Rejected" || [...list.values()].every((row) => !row.$hasPendingWrites),
-});
+    return rows.get("n1")?.title === editor?.context.draft;
+  },
+  { at: "rest" }, // "step" (default) | "rest" | "end"
+);
+
+const rejectionLeavesNothingPending = Explore.rule(
+  "a rejection leaves nothing pending",
+  function* ({ step }) {
+    if (step._tag !== "Rejected") return true; // reads nothing on any other step
+
+    const rows = yield* Db.rows(list);
+
+    return [...rows.values()].every((row) => !row.$hasPendingWrites);
+  },
+);
+
+const titleOnlyChangesOnWrites = Explore.rule(
+  "a title changes only when something writes it",
+  function* ({ step }) {
+    const now = yield* Db.rows(list);
+    const was = yield* Explore.before(Db.rows(list)); // its value at the rule's previous check
+
+    return (
+      now.get("n1")?.title === was.get("n1")?.title ||
+      ["When", "Settled", "Remote"].includes(step._tag)
+    );
+  },
+);
 
 story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPending] });
 ```
@@ -279,13 +305,21 @@ story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPendi
 - `at`: `"step"` after every step (and at the end); `"rest"` whenever nothing is in flight (settled,
   every command ended, no feed held down), the end included; `"end"` once the story ran its course:
   what was in flight arrives and every timer on its clock fires before the rule is checked.
-- `reads` names the views `holds` destructures: `Db.rows(source, { as? })` (a source's rows by key,
-  with `$hasPendingWrites`), `Machine.snapshot({ machine? })`. `holds` also gets `step` (the step
-  that just ran: its `_tag`, the verb of its label, such as `When`, `Rejected`, `Remote`, `Send`;
-  its number and label) and `previous` (the reads and step at the rule's previous check), so a
-  transition rule is the same shape.
-- A rule that does not hold fails the story after the step it broke at, quoting its name and what it
-  read: `After step 3 (when …), "the title stays Ada" does not hold / it read {"list":{…}}`.
+- A rule reads what it yields, when it gets there: `yield* Db.rows(source, { as? })` (a source's
+  rows by key, with `$hasPendingWrites`), `yield* Db.commands()`, `yield* Machine.snapshot({
+  machine? })`, `yield* Form.state(form)`, `yield* Card.layout()`. A branch that returns first
+  reads nothing after it, so a costly read (a layout) happens only when the rule needs it.
+- It is given `step`, the step that just ran: its `_tag` (the verb of its label, such as `When`,
+  `Rejected`, `Remote`, `Send`), number and label. It may return a boolean without yielding:
+  `Explore.rule("…", ({ step }) => step._tag !== "Remote")`.
+- `yield* Explore.before(reader)` is the reader's value at the rule's previous check, for a rule
+  about a transition. From the first check that asks for it the reader is read at every check; at
+  that first one, before is now. Readers are told apart by their name.
+- The settings come last and are optional: `{ at }` (default `"step"`).
+- A rule that does not hold fails the story after the step it broke at, quoting its name and each
+  read it made, in order, by the reader's name:
+  `After step 3 (when …), "the title stays Ada" does not hold / it read rows NoteRows/…: {…}`.
+- An adapter's own reader is `reader(name, (stage) => …)` from `@highalch/story`.
 
 **Exploring.** `Explore.run` tries what can happen instead of one hand-written order: every
 sequence of up to `depth` moves of its sources (then seeded random walks), each a fresh story after
@@ -321,6 +355,40 @@ await Explore.run({
 - `Db.commands()` reads the commands the clients ran (label, who ran them, how they ended), for
   rules about outcomes: "an editor says Saved only after its save committed".
 
+**Forms.** A form is the app's own `formOptions({...})` object, which its components spread into
+stock `useForm`; the app wires nothing. Add the kit's plugin to the Vite (Vitest) config the stories
+run with, `plugins: [highalch()]` from `@highalch/story/vite`: stories then see every mounted form,
+in mount order (the plugin hands app imports of `@tanstack/react-form` a wrapper whose `useForm`
+registers the form while its component is mounted; everything else is the stock module).
+
+```ts
+import { Form } from "@highalch/story/tanstack-form";
+
+Form.when(renameForm, "title", "locked"), // types: the field's onChange validators run
+Form.submit(renameForm), // its onSubmit runs; a command it sends is recorded like any other
+Db.rejected(new NoteLocked({ title: "locked" })),
+Form.then(renameForm, { values: { title: "locked" } }),
+```
+
+- A mounted form is an instance of a declared one when every option the declaration has (but its
+  default values, which components often set per instance) is the very object in the mounted form's
+  options. A step addressing a form with several mounted instances fails, listing them
+  (`renameForm #1 (NoteId: "n1", title: "Ada"); renameForm #2 (…)`); pick one with
+  `Form.where(renameForm, (values) => values.NoteId === "n1")`. It never guesses.
+- Readers: `Form.state(target)` (one instance's state; `undefined` when none is mounted) and
+  `Form.all(form)` (every instance's, for rules that must hold of each).
+- `Form.typing(form, { fields?, values?, instances? })` is an exploration's source: every field
+  (or `fields`) with every value, typed into the first mounted instance (or the first
+  `instances`). Values come from `values`, or from the form's validator when it is an Effect
+  Schema struct (`Schema.toStandardSchemaV1(Struct)`): a string field's boundary first (its
+  longest accepted value, from `Schema.isMaxLength(n)`, as one unbreakable word), then values
+  sampled from it (seeded, the same on every run). Random samples stay short, so the boundary is
+  what reaches a field's declared edge. With any other validator the types require `values`.
+  Forms no source names do not join.
+- Commands the app sends itself (a form's `onSubmit`, a component's handler) are recorded as the
+  app's, so `Db.rejected`, `Db.commands()` and rest see them: pending until their reply arrives,
+  then `Committed` or `Rejected`.
+
 **Traces.** `story.with({ name, trace: true, traces, update })` keeps a text snapshot of the story:
 each step, then what every adapter shows after it (each observed source's rows, the commands and
 how they ended, each machine's state and context, the mounted screen's HTML), in
@@ -342,25 +410,36 @@ their connector adds (`Db.connected`, each checked at its own moment). With LowA
 ## Screens: a filmstrip of a story
 
 `@highalch/story/screen` adds steps that mount a real React component against the story's
-own client and capture a frame after every later step, painted by the screen's painter and
-compared with reviewed baselines. A story then yields a filmstrip: loading, ready, pending, settled
-or rolled back, retrying. The painter is a Layer: `Takumi.layer()` (`@highalch/story/takumi`)
-paints with takumi's WASM renderer, without a browser; another painter (a real browser) is another
-Layer providing `PainterOf`.
+own client. `Screen.make({ css, width, height })` mounts and checks it, and nothing more; a
+screen is piped the engines its stories use:
+
+- `Takumi.frames({ baselines, output, update?, fonts? })` captures a frame after every later step,
+  painted by takumi's WASM renderer (no browser) and compared with reviewed baselines. A story
+  then yields a filmstrip: loading, ready, pending, settled or rolled back, retrying. It adds
+  `render(element, { every })` and `shot`.
+- `Takumi.layout({ fonts? })` lays the screen out for rules that read it (`Card.layout()`, below).
+
+A screen without an engine has no step or reader of it: `List.shot()` without frames, or
+`Card.layout()` without a layout engine, does not compile. Another engine (a real browser) is a
+Layer providing `PainterOf` or `LayoutOf`, piped with `Screen.frames(painter, settings)` or
+`Screen.layout(engine)`.
 
 ```tsx
 import { Screen } from "@highalch/story/screen";
 import { Takumi } from "@highalch/story/takumi";
 
 const List = Screen.make({
-  css, // the compiled stylesheet(s) the markup is painted with
+  css, // the compiled stylesheet(s) the markup is styled with
   width: 360,
   height: 200,
-  painter: Takumi.layer({ fonts }), // fonts optional: takumi's built-in font otherwise
-  baselines: new URL("./baselines/", import.meta.url), // committed, reviewed PNGs
-  output: new URL("../artifacts/stories/", import.meta.url), // the run's report (ignored)
-  update: process.env.UPDATE_SCREENS === "1", // write baselines; never implicitly
-});
+}).pipe(
+  Takumi.frames({
+    baselines: new URL("./baselines/", import.meta.url), // committed, reviewed PNGs
+    output: new URL("../artifacts/stories/", import.meta.url), // the run's report (ignored)
+    update: process.env.UPDATE_SCREENS === "1", // write baselines; never implicitly
+    fonts, // optional: takumi's built-in font otherwise
+  }),
+);
 
 await story.with({ name: "rename is rejected" })(
   Story.given(n1, new NoteCreated({ note: ada })),
@@ -370,13 +449,13 @@ await story.with({ name: "rename is rejected" })(
 );
 ```
 
-- `List.render(element, { every? })` mounts the element with `react-dom/client` under the package's
+- `List.render(element)` mounts the element with `react-dom/client` under the package's
   `Provider` with the story's client (of the step's scope), so stock `useLiveQuery` reads story
   data, and under the story's atom registry, so atoms read there are the story's; React is
-  flushed with `act`. After this step and every later one, once the world is quiet
+  flushed with `act`. With frames, after this step and every later one, once the world is quiet
   (command replies still held, so a pending row stays pending) and React has flushed, the DOM is
-  serialised and painted. `every: false` captures only at `List.shot(label?)` steps. One screen per
-  story; it is unmounted when the story ends, passed or failed.
+  serialised and painted; `render(element, { every: false })` captures only at `List.shot(label?)`
+  steps. One screen per story; it is unmounted when the story ends, passed or failed.
 - `List.check(label, (container) => …)` asserts on the mounted DOM: it is given the container
   the element is mounted in, once the world is quiet and React has flushed, so it sees what a
   frame taken now would paint. Use it for what a picture does not say: that the title is an `h1`
@@ -385,9 +464,9 @@ await story.with({ name: "rename is rejected" })(
   it; do not use such a library's own `render`, which mounts outside the story's client.
 - A frame is named by its painter, the story's name and the step:
   `<painter>/<story>/<step>-<label>.png` under `baselines` (engines paint the same markup
-  differently, so each painter has its own baselines). A screen story
-  needs `story.with({ name })`; without one, and in a hostless story, `render` fails naming
-  itself. Screen steps compose with machine steps (a running editor's frames) like any other.
+  differently, so each painter has its own baselines). A story with frames
+  needs `story.with({ name })`; without one `render` fails naming itself, as it does in a
+  hostless story. Screen steps compose with machine steps (a running editor's frames) like any other.
 - Frames compare decoded pixels exactly, not PNG bytes. A missing or different baseline fails the
   step that captured it and writes the actual frame, the expected one and a diff (differing
   pixels red over the faded frame) to `output`. `update` writes baselines instead; review them
@@ -452,6 +531,51 @@ await story.with({ name: "editor is rejected" })(
 - A stepped machine (`Machine.given`) has no actor, so it has no frame: a screen shows running
   machines only.
 
+### Layout: what spills out of its box
+
+A screen piped a layout engine lets a rule read (yield) its layout: every element's box, laid out
+by the engine once the world is quiet, the way a frame is painted. `Screen.overflowing(layout)`
+lists what spills out of its box: an element's text running past its padding box, or a child
+reaching past it, unless that element clips (`overflow: hidden`, `clip`, `auto` or `scroll`; a
+form control scrolls its own text). The screen itself scrolls down, so only what runs off its
+sides counts there.
+
+```tsx
+import { Explore } from "@highalch/story";
+import { Screen } from "@highalch/story/screen";
+import { Takumi } from "@highalch/story/takumi";
+
+const Card = Screen.make({ css, width: 360, height: 240 }).pipe(
+  Takumi.frames({ baselines, output }), // only if its stories compare frames
+  Takumi.layout(), // the same engine as the frames: a rule judges what they show
+);
+
+const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+  const layout = yield* Card.layout(); // undefined until the screen renders
+
+  return Screen.overflowing(layout).length === 0;
+});
+```
+
+A failure names the element and the distance, not pixels:
+`main.page > section.card > h1.title: text "WWWWWWWWWWWW…" (60 characters) runs 788px past its right edge`.
+With `Form.typing` (whose values include a field's longest accepted value) an exploration finds
+a layout that breaks on long input without a value of yours
+(`packages/story/tests/layout.transition.test.tsx`, the `overflowing-title` example).
+
+- The painter and the layout engine are separate services (`PainterOf`, `LayoutOf`), piped
+  separately: a screen can paint with one engine and judge layout with another (a real
+  browser's `Layouter`), or have either alone.
+- Boxes are matched back to their elements through a `data-box` number on each element of the
+  laid-out markup. Where the engine made boxes of its own (inline content wrapped among blocks,
+  the text of an element laid out as a flex item, an inline-block), they belong to no element:
+  their text counts as the nearest element's, and an inline box without text is checked against
+  it. An element laid out inline has no box of its own.
+- Clipping, borders and padding come from the element's computed style in the story's DOM (the
+  screen's CSS is in the document); a length in anything but `px` counts as 0, so a missing
+  length can hide an overflow but never invent one.
+- Takumi sizes boxes by their border box (`box-sizing: border-box`), as its frames show.
+
 **What the takumi painter does and does not do.** Takumi paints HTML and CSS (flexbox, borders, radii,
 colours, text) and runs no script. Form controls are not painted, so `input`, `textarea` and
 `select` are serialised as `span`s with their attributes, `data-control` naming the control, and
@@ -479,8 +603,8 @@ and runs their finalizers when the story ends, before the host is disposed. The 
 their clients in `Db.clients` (its service, `Db.Clients`, is what `Db.check(label, (db) => …)`
 reads: `db.runs`, `db.observed()`, `db.connect()`; `LowAlchDb.entries(db)` the feed), the
 machine steps their
-machines, a screen its mounted component and its painter (`PainterOf`, provided by a painter
-entry's Layer). The runner knows nothing about TanStack DB, XState or React.
+machines, a screen its mounted component and the engines it was piped (`PainterOf` and
+`LayoutOf`, provided by an engine entry's Layer). The runner knows nothing about TanStack DB, XState or React.
 
 ## Built on alchemy's `Story`?
 

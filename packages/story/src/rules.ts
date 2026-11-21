@@ -34,35 +34,65 @@ export const due = (rule: Rule, moment: Moment) =>
     },
   );
 
-/** What a rule reads of the story when it is checked: an adapter's view of its state. */
-export type Reader<A> = { readonly read: (stage: Stage) => Promise<A> };
+/** What a rule asks for when it yields: a reader's value now, or at the rule's previous check. */
+export type Ask =
+  | { readonly _tag: "Now"; readonly reader: Reader<unknown> }
+  | { readonly _tag: "Before"; readonly reader: Reader<unknown> };
 
-type Readers = Readonly<Record<string, Reader<unknown>>>;
+/** Something a rule yields (`yield* Db.rows(list)`) for a value of the story. */
+export interface Yieldable<A> {
+  readonly [Symbol.iterator]: () => Generator<Ask, A, unknown>;
+}
 
-/** The values of a rule's readers, by name. */
-export type Read<R extends Readers> = {
-  readonly [K in keyof R]: R[K] extends Reader<infer A> ? A : never;
+/**
+ * What a rule reads of the story when it is checked: an adapter's view of its state, by a name
+ * that says what it is (`rows Notes…`, `machine editor`, `layout`). A rule yields it:
+ * `const rows = yield* Db.rows(list)`; it is read then, and only if the rule gets there.
+ */
+export interface Reader<A> extends Yieldable<A> {
+  readonly name: string;
+  readonly read: (stage: Stage) => Promise<A>;
+}
+
+/** A reader named `name` that reads with `read`, for an adapter's rule readers. */
+export const reader = <A>(name: string, read: (stage: Stage) => Promise<A>): Reader<A> => {
+  const self: Reader<A> = {
+    name,
+    read,
+    *[Symbol.iterator]() {
+      // SAFETY: the rule's runner answers a reader's ask with that reader's value.
+      return (yield { _tag: "Now", reader: self }) as A;
+    },
+  };
+
+  return self;
 };
+
+/**
+ * A reader's value at the rule's previous check, for a rule about a transition:
+ * `const was = yield* Explore.before(Db.rows(list))`. From the first check that asks for it, the
+ * reader is read at every check; at that first one, before is now. Readers are told apart by name.
+ */
+export const before = <A>(read: Reader<A>): Yieldable<A> => ({
+  *[Symbol.iterator]() {
+    // SAFETY: the rule's runner answers a before-ask with its reader's earlier value.
+    return (yield { _tag: "Before", reader: read }) as A;
+  },
+});
 
 /** The step a rule is checked after: its kind (`_tag`), number and label (`None` at the start). */
 export type StepOf = { readonly _tag: string; readonly number: number; readonly label: string };
 
 /**
- * What a rule's `holds` is given: its readers' values now, the step that just ran, and the same
- * at the rule's previous check (`previous`; at its first check, the values now).
+ * What must hold, given the step that just ran: a boolean, or a generator that yields what it
+ * reads (`yield* Db.rows(list)`, `yield* Explore.before(…)`) and returns whether it holds.
  */
-export type World<R extends Readers> = Read<R> & {
+export type Holds = (context: {
   readonly step: StepOf;
-  readonly previous: Read<R> & { readonly step: StepOf };
-};
+}) => boolean | Generator<Ask, boolean, unknown>;
 
-/** How `Explore.rule` declares a rule: what it reads, when it is checked, and what must hold. */
-export type Declaration<R extends Readers> = {
-  readonly at?: At;
-  /** The views the rule reads, by the names `holds` destructures: `{ list: Db.rows(list) }`. */
-  readonly reads?: R;
-  readonly holds: (world: World<R>) => boolean | Promise<boolean>;
-};
+/** A rule's settings: when it is checked (default: after every step). */
+export type Settings = { readonly at?: At };
 
 const clip = (text: string, max = 400) => {
   if (text.length <= max) return text;
@@ -70,40 +100,103 @@ const clip = (text: string, max = 400) => {
   return `${text.slice(0, max - 1)}…`;
 };
 
+/** What a rule's reads were at a check, by reader name, and the readers it asked before of. */
+type Memory = {
+  readonly values: Map<string, unknown>;
+  readonly tracked: Map<string, Reader<unknown>>;
+};
+
 /**
- * A rule, declared as a sentence and what must hold: `Explore.rule("the list matches the editor",
- * { at: "rest", reads: { list: Db.rows(list), editor: Machine.snapshot() }, holds: ({ list,
- * editor }) => … })`. A transition rule is the same shape: `holds` reads `previous` and `step`.
- * When it does not hold, the failure names the rule and shows what it read.
+ * A rule, declared as a sentence, what must hold, and when it is checked:
+ *
+ * ```ts
+ * Explore.rule("a rejected rename keeps what you typed", function* () {
+ *   const commands = yield* Db.commands();
+ *   if (commands.at(-1)?.outcome !== "Rejected") return true;
+ *
+ *   const form = yield* Form.state(renameForm);
+ *   const rows = yield* Db.rows(list);
+ *   return form?.values.title !== rows.get("n1")?.title;
+ * }, { at: "rest" });
+ * ```
+ *
+ * It reads only what it yields, when it gets there. When it does not hold, the failure names the
+ * rule by its sentence and shows what it read.
  */
-export const rule = <R extends Readers = {}>(name: string, declaration: Declaration<R>): Rule => {
-  const previous = new WeakMap<Stage, Read<R> & { readonly step: StepOf }>();
+export const rule = (name: string, holds: Holds, settings: Settings = {}): Rule => {
+  const memories = new WeakMap<Stage, Memory>();
 
   return {
     name,
-    at: declaration.at ?? "step",
+    at: settings.at ?? "step",
     check: async (stage) => {
-      const readers: Readers = declaration.reads ?? {};
-      const entries = await Promise.all(
-        Object.entries(readers).map(
-          async ([key, reader]) => [key, await reader.read(stage)] as const,
-        ),
-      );
+      const memory = memories.get(stage) ?? { values: new Map(), tracked: new Map() };
+      const now = new Map<string, unknown>();
+      const shown: Array<readonly [string, unknown]> = [];
 
-      // SAFETY: each value is its reader's, under the reader's own name.
-      const now = { ...Object.fromEntries(entries), step: stage.current } as Read<R> & {
-        readonly step: StepOf;
+      const read = async (asked: Reader<unknown>) => {
+        const value = await asked.read(stage);
+
+        now.set(asked.name, value);
+
+        return value;
       };
 
-      const before = previous.get(stage) ?? now;
+      const answer = async (ask: Ask) => {
+        if (ask._tag === "Now") {
+          const value = await read(ask.reader);
 
-      previous.set(stage, now);
+          shown.push([ask.reader.name, value]);
 
-      if (await declaration.holds({ ...now, previous: before })) return [];
+          return value;
+        }
 
-      const { step: _step, ...read } = now;
+        const { name: asked } = ask.reader;
+        const known = memory.tracked.has(asked) && memory.values.has(asked);
 
-      return [`it read ${clip(json(read))}`];
+        memory.tracked.set(asked, ask.reader);
+
+        const value = await Option.match(
+          Option.liftPredicate(asked, () => known),
+          {
+            // Asked before at the previous check too: its value then.
+            onSome: async () => memory.values.get(asked),
+            // Asked for the first time: before is now.
+            onNone: async () =>
+              Option.getOrElse(
+                Option.liftPredicate(now.get(asked), () => now.has(asked)),
+                () => read(ask.reader),
+              ),
+          },
+        );
+
+        shown.push([`before: ${asked}`, value]);
+
+        return value;
+      };
+
+      const result = holds({ step: stage.current });
+      let held: boolean;
+
+      if (typeof result === "boolean") held = result;
+      else {
+        let next = result.next();
+
+        while (!next.done) next = result.next(await answer(next.value));
+
+        held = next.value;
+      }
+
+      // What the rule asked the earlier value of is read every check, for the next one.
+      for (const tracked of memory.tracked.values())
+        if (!now.has(tracked.name)) await read(tracked);
+
+      memories.set(stage, { values: now, tracked: memory.tracked });
+
+      if (held) return [];
+
+      // What it read, in the order it read it: one line each.
+      return shown.map(([asked, value]) => `it read ${asked}: ${clip(json(value))}`);
     },
   };
 };

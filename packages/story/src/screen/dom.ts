@@ -79,10 +79,28 @@ const escape = (text: string) =>
  * the control) whose text is its current value (a password masked, a checkbox ☑/☐), since the
  * renderer paints no form controls and the attributes hold stale values. Scripts are dropped.
  */
-export const serialize = (root: Element): string => {
+export const serialize = (root: Element): string => copyOf(root, false).html;
+
+/**
+ * The same HTML with every element numbered (`data-box="3"`), and the live elements by number:
+ * what a layout engine's boxes are matched back to.
+ */
+export const numbered = (root: Element) => copyOf(root, true);
+
+const copyOf = (
+  root: Element,
+  number: boolean,
+): { readonly html: string; readonly elements: ReadonlyArray<Element> } => {
   const copy = root.cloneNode(true);
 
-  if (!(copy instanceof Element)) return "";
+  if (!(copy instanceof Element)) return { html: "", elements: [] };
+
+  const elements = [...root.querySelectorAll("*")];
+
+  if (number)
+    [...copy.querySelectorAll("*")].forEach((element, index) =>
+      element.setAttribute("data-box", String(index)),
+    );
 
   const live = [...root.querySelectorAll("input, textarea, select")];
   const cloned = [...copy.querySelectorAll("input, textarea, select")];
@@ -101,7 +119,7 @@ export const serialize = (root: Element): string => {
 
   for (const script of copy.querySelectorAll("script")) script.remove();
 
-  return copy.innerHTML;
+  return { html: copy.innerHTML, elements };
 };
 
 const valueOf = (control: Element | undefined): string => {

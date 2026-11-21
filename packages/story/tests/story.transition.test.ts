@@ -430,7 +430,7 @@ describe("f(deferred settlement, command) as stories", () => {
         const run = db.runs.at(-1);
         const feed = await LowAlchDb.entries(db);
 
-        expect(feed.at(-1)?.commandId).toBe(run?.transaction.id);
+        expect(feed.at(-1)?.commandId).toBe(run?.commandId);
       }),
     );
   });

@@ -5,8 +5,8 @@ import { Layer, Match, Predicate } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { types, type SnapshotFrom } from "xstate";
 import { invoke, rejection } from "@lowalch/tanstack-db/xstate";
-import type { Editing } from "../fixtures/editor";
-import { notes } from "../fixtures/notes";
+import type { Editing } from "../../../fixtures/editor";
+import { notes } from "../../../fixtures/notes";
 
 /**
  * Example: **a rejected save says "Saved".**
@@ -153,4 +153,4 @@ export function EditorView({ atoms }: { readonly atoms: ReturnType<typeof approv
   );
 }
 
-export { css } from "../fixtures/note-editor";
+export { css } from "../../../fixtures/note-editor";

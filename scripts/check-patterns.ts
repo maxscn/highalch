@@ -9,11 +9,13 @@
  * - `@highalch/story`: XState only in its `xstate` entry;
  *   happy-dom, react-dom, `@effect/atom-react` and node files only in its `screen` entry (and
  *   the runner's own files: traces and explorations' replays, `node:fs`/`path`/`url`); takumi
- *   (and the node file reading its WASM) only in its `takumi` entry.
+ *   (and the node file reading its WASM) only in its `takumi` entry; TanStack Form only in its
+ *   `tanstack-form` entry.
  * - Neither reaches an XState, screen or takumi entry from outside it (type-only imports are
  *   erased); a painter entry (`takumi`) may reach the screen entry it paints for.
  * - `@lowalch/tanstack-db` never imports the story kit.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
+ * - No module exports `then`: `import()` would treat the module as a thenable and hang.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -50,6 +52,7 @@ const core = /^(?:effect|react|@alchemy\.run\/domain|@tanstack\/(?:db|react-db))
 const xstate = /^(?:xstate|@xstate\/effect)(?:\/|$)/;
 const screen = /^(?:happy-dom|react-dom|@effect\/atom-react|node:(?:fs|path|url|zlib))(?:\/|$)/;
 const takumi = /^(?:takumi-js|node:fs)(?:\/|$)/;
+const form = /^@tanstack\/(?:react-form|form-core)(?:\/|$)/;
 const effects = ["useEffect", "useLayoutEffect", "useInsertionEffect"];
 
 export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.url))) => {
@@ -71,6 +74,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
     const xstateEntry = inside(file, join(db, "xstate")) || inside(file, join(story, "xstate"));
     const screenEntry = inside(file, join(story, "screen"));
     const takumiEntry = inside(file, join(story, "takumi"));
+    const formEntry = inside(file, join(story, "tanstack-form"));
     const storyRoot = dirname(file) === story;
     const dbEntry = inside(file, join(story, "tanstack-db"));
     const lowalchAllowed =
@@ -102,6 +106,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         !(xstateEntry && xstate.test(module)) &&
         !(screenEntry && screen.test(module)) &&
         !(takumiEntry && takumi.test(module)) &&
+        !(formEntry && form.test(module)) &&
         !(storyRoot && /^node:(?:fs\/promises|path|url)$/.test(module))
       )
         report(
@@ -168,6 +173,19 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
       )
         report(node, "HighAlch does not use React effects");
     }
+
+    // A module that exports `then` is a thenable: `import()` of it waits on it and never settles.
+    const thenable = text.search(
+      /^export\s+(?:const|let|var|function|async\s+function)\s+then\b|^export\s*\{[^}]*\bas\s+then\b|^export\s*\{[^}]*(?:^|[\s,{])then\s*[,}]/m,
+    );
+
+    if (thenable >= 0)
+      problems.push({
+        file: relative(root, file),
+        line: lineOf(thenable),
+        message:
+          "a module must not export `then`: import() would treat it as a thenable and never settle (put `then` on a namespace object instead)",
+      });
 
     // A namespace import of React would reach effects without naming them in the import.
     if (/\bReact\.use(?:Layout|Insertion)?Effect\b/.test(text))

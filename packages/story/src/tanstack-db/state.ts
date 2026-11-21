@@ -2,7 +2,7 @@ import type { CollectionOptions, DbClient, NonSingleResult, Transaction } from "
 import { Cause, Context, Data, Effect, Exit, Layer, Option, Predicate } from "effect";
 import { CurrentStage, Mismatch } from "../stage";
 import type { Answer, Input, Tagged } from "../values";
-import type { Wire } from "../wire";
+import type { Sent, Watcher, Wire } from "../wire";
 import { json, macrotask, type Plain, type World } from "../world";
 import {
   Connect,
@@ -131,7 +131,10 @@ export type Run = {
   readonly by: string;
   /** The key of the row it addresses (empty for a command with no rows). */
   readonly key: string;
-  readonly transaction: Transaction;
+  /** The id it was sent with: the Domain's `commandId`, which the feed's entries name. */
+  readonly commandId: string;
+  /** Its transaction, when the story started it (a command the app sent itself has none here). */
+  readonly transaction: Option.Option<Transaction>;
   /** The command it called, when a step or machine called a declared command. */
   readonly command: Option.Option<Declared>;
   readonly input: Input;
@@ -176,14 +179,11 @@ export class Clients {
     if (known) return known;
 
     const db = await this.connector.connect(scope);
-    const client = {
-      scope,
-      db,
-      wire: this.world.wire(scope),
-      observed: new Map<string, Observed>(),
-    };
+    const wire = this.world.wire(scope);
+    const client = { scope, db, wire, observed: new Map<string, Observed>() };
 
     this.clients.set(scope, client);
+    wire.watchers.push(this.watcher(scope));
 
     return client;
   };
@@ -282,7 +282,8 @@ export class Clients {
       scope,
       by,
       key: this.connector.keyOf(transaction),
-      transaction,
+      commandId: transaction.id,
+      transaction: Option.some(transaction),
       command,
       input,
       tick,
@@ -298,6 +299,83 @@ export class Clients {
     this.runs.push(record);
 
     return record;
+  };
+
+  /**
+   * Records the commands a client sends that no story step started (a component's handler, a
+   * form's `onSubmit`): as the app's, pending until their reply arrives, then `Committed` (the
+   * reply; the feed's confirmation is the client's) or `Rejected` with the typed error.
+   */
+  private watcher = (scope: string): Watcher => {
+    const own = new Map<Sent, { readonly record: Run; readonly finish: () => void }>();
+    const world = this.world;
+    const runs = this.runs;
+
+    const started = (sent: Sent) =>
+      Option.match(sent.commandId, {
+        onNone: () => false,
+        onSome: (id) => runs.some((run) => run.commandId === id),
+      });
+
+    return {
+      // A story step's command is sent while the step is still in its call, before it records
+      // its run: decide whose it is once that call has returned.
+      sent: (sent) => queueMicrotask(() => record(sent)),
+      answered: (sent, exit) => queueMicrotask(() => answer(sent, exit)),
+    };
+
+    function record(sent: Sent) {
+      if (started(sent)) return;
+
+      let finish = () => {};
+
+      const record: Run = {
+        label: `${sent.name} ${json(sent.input)}`,
+        scope,
+        by: "app",
+        key: "",
+        commandId: Option.getOrElse(sent.commandId, () => ""),
+        transaction: Option.none(),
+        command: Option.none(),
+        input: sent.input,
+        tick: world.next(),
+        step: world.step,
+        before: new Map(),
+        outcome: Outcome.Pending(),
+        ended: -1,
+        done: new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+      };
+
+      own.set(sent, { record, finish });
+      runs.push(record);
+    }
+
+    function answer(sent: Sent, exit: Exit.Exit<unknown, Tagged>) {
+      const known = own.get(sent);
+
+      if (!known) return;
+
+      const { record, finish } = known;
+
+      own.delete(sent);
+      record.outcome = Exit.match(exit, {
+        onSuccess: () => Outcome.Committed({ value: Option.none() }),
+        onFailure: (cause) =>
+          Option.match(
+            Option.filter(Cause.findErrorOption(cause), (error) =>
+              Predicate.hasProperty(error, "_tag"),
+            ),
+            {
+              onSome: (error) => Outcome.Rejected({ error }),
+              onNone: () => Outcome.Died({ cause: Cause.die(Cause.squash(cause)) }),
+            },
+          ),
+      });
+      record.ended = world.next();
+      finish();
+    }
   };
 
   /** Why the clients are not quiet now (a live feed behind the server), or `None`. */
