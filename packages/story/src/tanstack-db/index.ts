@@ -22,9 +22,9 @@ import {
   nothingPending,
   rejectedRestores,
   subsetsAgree,
-} from "../invariants";
-import { historyOf, open, rejected, reload, settled, thenShows, when } from "../steps";
-import { Live, Settled, view } from "../view";
+} from "./invariants";
+import { check, historyOf, open, rejected, reload, settled, thenShows, when } from "./steps";
+import { Live, Settled, view } from "./view";
 
 /** The TanStack DB steps, invariants and view helpers. */
 export const Db = {
@@ -36,6 +36,7 @@ export const Db = {
   rejected,
   reload,
   historyOf,
+  check,
   view,
   Live,
   Settled,
@@ -46,6 +47,10 @@ export const Db = {
   rejectedRestores,
 } as const;
 
-export type { Acting, Callable, Expected, ReadState, ShownRow, Then } from "../steps";
+export { clients, Clients, DbClients, Observed, Outcome, plain, retryTransport } from "./state";
 
-export type { ViewResult, ViewState } from "../view";
+export type { Client, Entry, Observation, Run, Shown, Source, Watched } from "./state";
+
+export type { Acting, Callable, Expected, ReadState, ShownRow, Then } from "./steps";
+
+export type { ViewResult, ViewState } from "./view";

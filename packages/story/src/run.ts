@@ -71,14 +71,14 @@ const why = <E>(error: E) => {
 
 /** Checks every invariant; the violations as a failure of `number`. */
 const keep = async (
-  world: World,
+  stage: Stage,
   invariants: ReadonlyArray<Invariant>,
   steps: ReadonlyArray<Step>,
   number: number,
   final: boolean,
 ) => {
   for (const invariant of invariants) {
-    const violations = await invariant.check(world, { final });
+    const violations = await invariant.check(stage, { final });
 
     if (violations.length > 0)
       throw new StoryFailure(
@@ -115,7 +115,7 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
   });
 
   const kept = async (number: number, final: boolean) => {
-    if (Option.isSome(world)) await keep(world.value, invariants, steps, number, final);
+    if (Option.isSome(world)) await keep(stage, invariants, steps, number, final);
   };
 
   try {

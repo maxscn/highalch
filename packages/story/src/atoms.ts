@@ -1,13 +1,13 @@
-import { Option } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 import { AtomRegistry } from "effect/reactivity";
-import type { Stage } from "./stage";
-import type { Slot } from "./world";
-
-type Held = Slot & { readonly registry: AtomRegistry.AtomRegistry };
-
-const key: unique symbol = Symbol("@highalch/story/atoms");
+import { CurrentStage, type Stage } from "./stage";
 
 const stages = new WeakMap<AtomRegistry.AtomRegistry, Stage>();
+
+/** The story's atom registry, as an adapter's service. */
+export class Atoms extends Context.Service<Atoms, AtomRegistry.AtomRegistry>()(
+  "@highalch/story/Atoms",
+) {}
 
 /**
  * The story's atom registry (`effect/reactivity`), made on first use and disposed when the story
@@ -15,15 +15,24 @@ const stages = new WeakMap<AtomRegistry.AtomRegistry, Stage>();
  * reads through its atoms from it, so both see one actor. Each story run has its own, so no
  * actor outlives its story.
  */
-export const registryOf = (stage: Stage): AtomRegistry.AtomRegistry =>
-  stage.slot<Held>(key, () => {
-    const registry = AtomRegistry.make();
+export const atoms = {
+  service: Atoms,
+  layer: Layer.effect(
+    Atoms,
+    Effect.gen(function* () {
+      const stage = yield* CurrentStage;
+      const registry = AtomRegistry.make();
 
-    stages.set(registry, stage);
-    stage.end(async () => registry.dispose());
+      stages.set(registry, stage);
+      yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
 
-    return { registry };
-  }).registry;
+      return registry;
+    }),
+  ),
+};
+
+/** The story run's atom registry (made on first use). */
+export const registryOf = (stage: Stage): Promise<AtomRegistry.AtomRegistry> => stage.use(atoms);
 
 /** The story run a registry belongs to, if it is a story's. */
 export const stageOf = (registry: AtomRegistry.AtomRegistry): Option.Option<Stage> =>

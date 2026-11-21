@@ -31,7 +31,7 @@ parallel, and start no dev servers.
 - **Packages.** Two npm scopes in one workspace. LowAlch (`@lowalch/*`) converts alchemy
   Domain primitives for other infrastructure; HighAlch (`@highalch/*`) verifies apps built on
   them. `@lowalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
-  `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./xstate`, `./screen`). Shared
+  `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./xstate`, `./screen`, `./takumi`). Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy
@@ -45,8 +45,8 @@ parallel, and start no dev servers.
   native external-store subscriptions (`useSyncExternalStore`) and callback refs.
 - **Boundaries** (`vp run check:patterns`):
   - Only `@lowalch/tanstack-db/xstate` and `@highalch/story/xstate` import `xstate` and `@xstate/effect`.
-  - Only `@highalch/story/screen` imports `takumi-js`, `happy-dom`, `react-dom`,
-    `@effect/atom-react` and `node:` files.
+  - Only `@highalch/story/screen` imports `happy-dom`, `react-dom`, `@effect/atom-react` and
+    `node:` files; only `@highalch/story/takumi` (a screen painter) imports `takumi-js`.
   - `@lowalch/tanstack-db` never imports `@highalch/story`.
 - **Internals.** `@highalch/story` reaches core internals only through `@lowalch/tanstack-db/internal`.
   That entry is unstable and outside semver. Never import another package's `src` by a relative
@@ -73,7 +73,7 @@ parallel, and start no dev servers.
 - Tests run from source. The aliases in `vite.config.ts` and the `paths` in
   `tsconfig.base.json` point `@lowalch/*` and `@highalch/*` at `src`, so a test never needs a build. Keep the two
   lists in sync when adding an entry.
-- **Screen baselines** (`packages/story/tests/baselines`) are reviewed PNGs. Write them only with
+- **Screen baselines** (`packages/story/tests/baselines/<painter>/`) are reviewed PNGs. Write them only with
   `UPDATE_SCREENS=1 vp test packages/story/tests/screen.transition.test.tsx`, open the changed
   PNGs to review them, and keep them with the change. A normal run compares pixels exactly. The
   filmstrips go to `packages/story/artifacts/` (ignored).

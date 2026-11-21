@@ -1,5 +1,5 @@
 import { createEffectActor, EffectFailure, type EffectActor } from "@xstate/effect";
-import { Cause, Effect, Exit, Layer, Option, Predicate, Scope } from "effect";
+import { Cause, Context, Effect, Exit, Layer, Option, Predicate, Scope } from "effect";
 import { Atom, AtomRegistry, type AsyncResult } from "effect/reactivity";
 import {
   initialTransition,
@@ -17,8 +17,10 @@ import type { Answer, Input } from "@lowalch/tanstack-db/internal";
 import { commandOf, Runner, type Invocable, type Marked } from "@lowalch/tanstack-db/xstate";
 import { registryOf, stageOf } from "../atoms";
 import { Mismatch, type Stage } from "../stage";
-import { partial, staged, type Callable, type Step } from "../steps";
-import { json, type Run, type Source, type World } from "../world";
+import { partial, staged, type Step } from "../steps";
+import { clients, type Clients, type Run, type Source } from "../tanstack-db/state";
+import type { Callable } from "../tanstack-db/steps";
+import { json } from "../world";
 
 /** A command a machine's transition spawned, with its actor id, session and input. */
 type Spawned = {
@@ -58,6 +60,8 @@ type Running = {
   readonly machine: AnyStateMachine;
   readonly actor: EffectActor<AnyStateMachine>;
   readonly scope: string;
+  /** The story's clients its commands run on. */
+  readonly db: Clients;
   since: number;
 };
 
@@ -66,10 +70,18 @@ type Entered = Stepped | Running;
 /** The machines of one story run, by name, and the one introduced last. */
 type Machines = { readonly entered: Map<string, Entered>; latest: Option.Option<string> };
 
-const machinesKey: unique symbol = Symbol("@highalch/story/xstate/machines");
+/** The machines of a story run, as an adapter's service. */
+class MachinesOf extends Context.Service<MachinesOf, Machines>()(
+  "@highalch/story/xstate/Machines",
+) {}
 
-const machinesOf = (stage: Stage) =>
-  stage.slot<Machines>(machinesKey, () => ({ entered: new Map(), latest: Option.none() }));
+/** The machines adapter: the story run's machines, by name. */
+const machines = {
+  service: MachinesOf,
+  layer: Layer.sync(MachinesOf, (): Machines => ({ entered: new Map(), latest: Option.none() })),
+};
+
+const machinesOf = (stage: Stage) => stage.use(machines);
 
 /** Which machine a step addresses: the one of this name, else the one introduced last. */
 export type Addressed = { readonly machine?: string };
@@ -97,7 +109,8 @@ const readerOf =
   (stage: Stage, label: string): Read =>
   async <Row extends object>(source: Source<Row>, options: { readonly as?: string } = {}) => {
     const world = stage.hosted(label);
-    const { observed, opened } = await world.observe(source, options.as);
+    const db = await stage.use(clients);
+    const { observed, opened } = await db.observe(source, options.as);
 
     if (opened) await world.settle();
 
@@ -170,12 +183,11 @@ const snapshotOf = (machine: Entered) => {
 };
 
 /** The commands asked for since the last event: spawned (stepped) or run on the client (running). */
-const askedOf = (stage: Stage, machine: Entered, label: string): ReadonlyArray<Ask> => {
+const askedOf = (machine: Entered): ReadonlyArray<Ask> => {
   if (machine.mode === "stepped") return machine.asked;
 
-  return stage
-    .hosted(label)
-    .runs.filter((run) => run.by === byOf(machine.name) && run.tick > machine.since)
+  return machine.db.runs
+    .filter((run) => run.by === byOf(machine.name) && run.tick > machine.since)
     .flatMap((run) =>
       Option.match(run.command, {
         onNone: () => [],
@@ -202,16 +214,16 @@ const listed = (machine: Entered, asked: ReadonlyArray<Ask>) => {
 };
 
 /** What every machine failure lists: where the machine is and what it asked for. */
-const context = (stage: Stage, machine: Entered, label: string) => [
+const context = (machine: Entered) => [
   `machine ${where(machine)} is ${describe(snapshotOf(machine))}`,
-  `asked since its last event: ${listed(machine, askedOf(stage, machine, label))}`,
+  `asked since its last event: ${listed(machine, askedOf(machine))}`,
 ];
 
 const byOf = (name: string) => `machine:${name}`;
 
 /** The machine a step addresses: named, or the one introduced last. */
-const find = (stage: Stage, options: Addressed): Entered => {
-  const machines = machinesOf(stage);
+const find = async (stage: Stage, options: Addressed): Promise<Entered> => {
+  const machines = await machinesOf(stage);
 
   const name = Option.orElse(Option.fromUndefinedOr(options.machine), () => machines.latest);
 
@@ -230,8 +242,8 @@ const find = (stage: Stage, options: Addressed): Entered => {
   return found;
 };
 
-const enter = (stage: Stage, machine: Entered) => {
-  const machines = machinesOf(stage);
+const enter = async (stage: Stage, machine: Entered) => {
+  const machines = await machinesOf(stage);
 
   if (machines.entered.has(machine.name))
     throw new Mismatch(
@@ -243,8 +255,8 @@ const enter = (stage: Stage, machine: Entered) => {
 };
 
 /** Replaces a stepped machine's state after a pure step. */
-const store = (stage: Stage, machine: Stepped) => {
-  machinesOf(stage).entered.set(machine.name, machine);
+const store = async (stage: Stage, machine: Stepped) => {
+  (await machinesOf(stage)).entered.set(machine.name, machine);
 };
 
 const prefix = (options: Addressed) =>
@@ -266,7 +278,7 @@ type Owner = { readonly name: string; readonly label: string; readonly scope: st
  * recorded as the owner's (`asked` reads them; `settled`/`rejected` assert the last one).
  */
 const runnerOf = (
-  world: World,
+  db: Clients,
   owner: <I extends Input, A, E>(command: Invocable<I, A, E>, input: I) => Owner,
 ) =>
   Runner.of({
@@ -274,7 +286,7 @@ const runnerOf = (
       Effect.promise(() => {
         const { name, label, scope } = owner(command, input);
 
-        return world.start(
+        return db.start(
           label,
           scope,
           byOf(name),
@@ -334,8 +346,13 @@ const invokes = (running: Running, input: unknown) =>
  * a child with this very input; else the only mounted machine that registers the command.
  * A command of an actor the story never introduced (`Machine.mounted`) is recorded as `mounted`.
  */
-const mountedOwner = (stage: Stage, world: World, command: Marked, input: unknown): Owner => {
-  const candidates = [...machinesOf(stage).entered.values()].filter(
+const mountedOwner = (
+  machines: Machines,
+  scope: string,
+  command: Marked,
+  input: unknown,
+): Owner => {
+  const candidates = [...machines.entered.values()].filter(
     (each): each is Running => each.mode === "running" && each.mounted,
   );
 
@@ -347,7 +364,7 @@ const mountedOwner = (stage: Stage, world: World, command: Marked, input: unknow
   );
 
   return Option.match(Option.flatMap(found, Option.fromUndefinedOr), {
-    onNone: () => ({ name: unnamed, label: `${unnamed}: a command`, scope: world.scope }),
+    onNone: () => ({ name: unnamed, label: `${unnamed}: a command`, scope }),
     onSome: (running) => ownerOf(running, command),
   });
 };
@@ -366,13 +383,18 @@ Atom.runtime.addGlobalLayer(
         run: (command, input) =>
           Option.match(stageOf(registry), {
             onNone: () => command.effect(input),
-            onSome: (stage) => {
-              const world = stage.hosted("a mounted machine's command");
+            onSome: (stage) =>
+              Effect.promise(async () => {
+                stage.hosted("a mounted machine's command");
 
-              return runnerOf(world, (asked, given) =>
-                mountedOwner(stage, world, asked, given),
-              ).run(command, input);
-            },
+                return { db: await stage.use(clients), entered: await machinesOf(stage) };
+              }).pipe(
+                Effect.flatMap(({ db, entered }) =>
+                  runnerOf(db, (asked, given) =>
+                    mountedOwner(entered, db.world.scope, asked, given),
+                  ).run(command, input),
+                ),
+              ),
           }),
       }),
     ),
@@ -410,7 +432,7 @@ const given = (
       onSome: (value) => machine.resolveState({ value, context: from.context ?? initial.context }),
     });
 
-    enter(stage, { mode: "stepped", name, machine, snapshot: start, asked: [], invoked: [] });
+    await enter(stage, { mode: "stepped", name, machine, snapshot: start, asked: [], invoked: [] });
   });
 };
 
@@ -430,8 +452,9 @@ const start = (
 
   return staged(label, async (stage) => {
     const world = stage.hosted(label);
+    const db = await stage.use(clients);
 
-    await world.connect();
+    await db.connect();
 
     const scope = Effect.runSync(Scope.make());
     let entered = Option.none<Running>();
@@ -450,7 +473,7 @@ const start = (
       create.pipe(
         Effect.provideService(
           Runner,
-          runnerOf(world, (command) => ownerOf(current(), command)),
+          runnerOf(db, (command) => ownerOf(current(), command)),
         ),
         Effect.provideService(Scope.Scope, scope),
       ),
@@ -463,12 +486,14 @@ const start = (
       machine,
       actor,
       scope: world.scope,
+      db,
       since: world.next(),
     };
 
     entered = Option.some(running);
-    enter(stage, running);
-    world.releases.push(() => {
+    await enter(stage, running);
+    // Stopped before the clients close, as an unmounting component stops its actor.
+    db.releases.push(() => {
       actor.stop();
       Effect.runFork(Scope.close(scope, Exit.void));
     });
@@ -493,10 +518,11 @@ const mounted = <M extends AnyStateMachine>(atoms: Atoms<M>, options: Named = {}
 
   return staged(label, async (stage) => {
     const world = stage.hosted(label);
+    const db = await stage.use(clients);
 
-    await world.connect();
+    await db.connect();
 
-    const registry = registryOf(stage);
+    const registry = await registryOf(stage);
     const release = registry.mount(atoms.actor);
 
     stage.end(async () => release());
@@ -509,13 +535,14 @@ const mounted = <M extends AnyStateMachine>(atoms: Atoms<M>, options: Named = {}
       ]);
     });
 
-    enter(stage, {
+    await enter(stage, {
       mode: "running",
       mounted: true,
       name: options.name ?? actor.logic.id,
       machine: actor.logic,
       actor,
       scope: world.scope,
+      db,
       since: world.next(),
     });
     await world.settle(false);
@@ -538,7 +565,7 @@ const when = <E extends EventObject>(event: FromShown<E>, options: Addressed = {
   );
 
   return staged(label, async (stage) => {
-    const machine = find(stage, options);
+    const machine = await find(stage, options);
     const sent = await resolved(event, stage, label);
 
     if (machine.mode === "stepped") return store(stage, stepped(machine, sent));
@@ -556,7 +583,7 @@ const then = (expected: Expected, options: Addressed = {}): Step => {
   const label = `${prefix(options)}machine is ${json(expected.state)}`;
 
   return staged(label, async (stage) => {
-    const machine = find(stage, options);
+    const machine = await find(stage, options);
     const snapshot = snapshotOf(machine);
 
     if (snapshot.matches(expected.state) && partial(expected.context ?? {}, snapshot.context))
@@ -565,7 +592,7 @@ const then = (expected: Expected, options: Addressed = {}): Step => {
     throw new Mismatch(`${where(machine)} is not in the expected state`, [
       `expected ${json(expected.state)} ${json(expected.context ?? {})}`,
       `observed ${describe(snapshot)}`,
-      `asked since its last event: ${listed(machine, askedOf(stage, machine, label))}`,
+      `asked since its last event: ${listed(machine, askedOf(machine))}`,
     ]);
   });
 };
@@ -586,8 +613,8 @@ const asked = <I extends object>(
   })}`;
 
   return staged(label, async (stage) => {
-    const machine = find(stage, options);
-    const all = askedOf(stage, machine, label);
+    const machine = await find(stage, options);
+    const all = askedOf(machine);
 
     const holds = all.some(
       (each) => each.command === command && (input === undefined || partial(input, each.input)),
@@ -611,12 +638,12 @@ const askedNothing = (options: Addressed = {}): Step => {
   const label = `${prefix(options)}asked nothing`;
 
   return staged(label, async (stage) => {
-    const machine = find(stage, options);
-    const all = askedOf(stage, machine, label);
+    const machine = await find(stage, options);
+    const all = askedOf(machine);
 
     if (all.length === 0) return;
 
-    throw new Mismatch(`${where(machine)} asked for commands`, context(stage, machine, label));
+    throw new Mismatch(`${where(machine)} asked for commands`, context(machine));
   });
 };
 
@@ -670,9 +697,9 @@ const answer = (
  */
 const done = (command: Marked, output?: Answer, options: Addressed = {}): Step =>
   staged(`${prefix(options)}command done`, async (stage) => {
-    const machine = steppedOnly(find(stage, options), "Machine.done");
+    const machine = steppedOnly(await find(stage, options), "Machine.done");
 
-    store(stage, answer(machine, command, "done", output));
+    await store(stage, answer(machine, command, "done", output));
   });
 
 /**
@@ -681,9 +708,9 @@ const done = (command: Marked, output?: Answer, options: Addressed = {}): Step =
  */
 const failed = (command: Marked, error: TaggedFailure, options: Addressed = {}): Step =>
   staged(`${prefix(options)}command failed with ${error._tag}`, async (stage) => {
-    const machine = steppedOnly(find(stage, options), "Machine.failed");
+    const machine = steppedOnly(await find(stage, options), "Machine.failed");
 
-    store(stage, answer(machine, command, "error", error));
+    await store(stage, answer(machine, command, "error", error));
   });
 
 /**

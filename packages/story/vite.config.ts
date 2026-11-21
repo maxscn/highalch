@@ -7,6 +7,7 @@ export default defineConfig({
       "tanstack-db": "src/tanstack-db/index.ts",
       xstate: "src/xstate/index.ts",
       screen: "src/screen/index.ts",
+      takumi: "src/takumi/index.ts",
     },
     format: "esm",
     fixedExtension: true,

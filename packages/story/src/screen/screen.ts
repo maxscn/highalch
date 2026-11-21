@@ -2,17 +2,17 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RegistryContext } from "@effect/atom-react";
-import { Option, Schema } from "effect";
+import { Context, Layer, Option, Schema } from "effect";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { render as paint, type Font } from "takumi-js";
-import wasm from "takumi-js/wasm-url";
 import { Provider } from "@lowalch/tanstack-db/react";
 import { registryOf } from "../atoms";
 import { Mismatch, type Done, type Stage } from "../stage";
 import { staged, type Step } from "../steps";
+import { clients } from "../tanstack-db/state";
 import { macrotask, type World } from "../world";
 import { escape, install, serialize, type Installed } from "./dom";
+import { PainterOf, type Painter } from "./painter";
 import { compare, decode, encode, type Pixels } from "./png";
 
 /** Where a screen's files go: a path, or a `file:` URL (`new URL("./baselines/", import.meta.url)`). */
@@ -25,9 +25,12 @@ export type Options = {
   /** The viewport, in CSS pixels; every frame is this size. */
   readonly width: number;
   readonly height: number;
-  /** Fonts to paint with (local bytes); takumi's built-in font otherwise. */
-  readonly fonts?: ReadonlyArray<Font>;
-  /** Reviewed frames: `<baselines>/<story>/<step>-<label>.png`, committed. */
+  /**
+   * What paints the frames: a painter entry's Layer (`Takumi.layer()` from
+   * `@highalch/story/takumi`).
+   */
+  readonly painter: Layer.Layer<PainterOf>;
+  /** Reviewed frames: `<baselines>/<painter>/<story>/<step>-<label>.png`, committed. */
   readonly baselines: Place;
   /** The run's report: frames, diffs, a filmstrip page per story and a manifest (gitignored). */
   readonly output: Place;
@@ -54,12 +57,20 @@ type Mounted = {
   readonly container: HTMLElement;
   readonly dom: Installed;
   readonly every: boolean;
+  readonly painter: Painter;
   readonly frames: Array<Frame>;
 };
 
 type Screens = { mounted: Option.Option<Mounted> };
 
-const screensKey: unique symbol = Symbol("@highalch/story/screen");
+/** The story run's screen, as an adapter's service. */
+class ScreensOf extends Context.Service<ScreensOf, Screens>()("@highalch/story/screen/Screens") {}
+
+/** The screens adapter: the screen a story mounted (one per story). */
+const screens = {
+  service: ScreensOf,
+  layer: Layer.sync(ScreensOf, (): Screens => ({ mounted: Option.none() })),
+};
 
 const pathOf = (place: Place) => {
   if (place instanceof URL) return fileURLToPath(place);
@@ -75,11 +86,6 @@ const slug = (text: string) =>
     .slice(0, 60) || "step";
 
 const pad = (step: number) => String(step).padStart(2, "0");
-
-/** The wasm renderer's module bytes, loaded once: the same renderer binary on every platform. */
-let module: Promise<Uint8Array> | undefined;
-
-const moduleOf = () => (module ??= readFile(wasm));
 
 /**
  * Lets React finish: `act` flushes renders and effects scheduled by store changes. React's act
@@ -196,8 +202,8 @@ const index = async (output: string) => {
  * element under the package's `Provider` with the story's client (stock `useLiveQuery` reads the
  * story's data) in a happy-dom document, and captures a frame after it and after every later
  * step: once the world is quiet (command replies still held) and React has flushed, the DOM is
- * serialised (current control values) and painted by takumi's WASM renderer with `css`, then
- * compared pixel by pixel with its baseline. `List.shot(label?)` captures a frame on demand (with
+ * serialised (current control values) and painted by the screen's painter with `css` (takumi's
+ * WASM renderer with `Takumi.layer()`), then compared pixel by pixel with its painter's baseline. `List.shot(label?)` captures a frame on demand (with
  * `List.render(element, { every: false })`, only there). `List.check(label, run)` asserts on
  * the mounted DOM.
  */
@@ -213,19 +219,16 @@ export const make = (options: Options) => {
 
     const html = `<div data-screen style="width:${options.width}px;height:${options.height}px;display:flex;flex-direction:column">${serialize(mounted.container)}</div>`;
 
-    const raw = await paint(html, {
-      module: await moduleOf(),
+    const actual: Pixels = await mounted.painter.paint({
+      html,
+      css,
       width: options.width,
       height: options.height,
-      css,
-      fonts: options.fonts ? [...options.fonts] : undefined,
-      format: "raw",
     });
 
-    const actual: Pixels = { width: options.width, height: options.height, data: raw };
     const name = `${pad(done.step)}-${slug(done.label)}`;
     const file = `${name}.png`;
-    const baseline = join(baselines, story, file);
+    const baseline = join(baselines, mounted.painter.name, story, file);
     const target = join(output, story);
     const png = encode(actual);
 
@@ -296,18 +299,21 @@ export const make = (options: Options) => {
     const label = "render";
 
     return staged(label, async (stage) => {
-      const world = stage.hosted(label);
-      const screens = stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() }));
+      stage.hosted(label);
 
+      const screened = await stage.use(screens);
       const story = nameOf(stage, label);
 
-      if (Option.isSome(screens.mounted))
+      if (Option.isSome(screened.mounted))
         throw new Mismatch("this story already rendered a screen");
+
+      const painter = await stage.use({ service: PainterOf, layer: options.painter });
 
       // The story's report starts afresh: no frame or diff of an earlier run stays beside it.
       await rm(join(output, slug(story)), { recursive: true, force: true });
 
-      const client = await world.connect();
+      const client = await (await stage.use(clients)).connect();
+      const registry = await registryOf(stage);
       const dom = install(options.width, options.height);
       const container = document.createElement("div");
 
@@ -320,17 +326,18 @@ export const make = (options: Options) => {
         container,
         dom,
         every: settings.every ?? true,
+        painter,
         frames: [],
       };
 
-      screens.mounted = Option.some(mounted);
+      screened.mounted = Option.some(mounted);
       stage.end(finish(stage, mounted, label));
 
       await flush(() =>
         root.render(
           createElement(
             RegistryContext.Provider,
-            { value: registryOf(stage) },
+            { value: registry },
             createElement(Provider, { client: client.db }, element),
           ),
         ),
@@ -346,7 +353,7 @@ export const make = (options: Options) => {
   const shot = (label = "shot"): Step =>
     staged(`shot ${label}`, async (stage) => {
       const mounted = Option.getOrThrowWith(
-        stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
+        (await stage.use(screens)).mounted,
         () => new Mismatch("nothing is rendered yet: render(element) first"),
       );
 
@@ -362,7 +369,7 @@ export const make = (options: Options) => {
   const check = (label: string, run: (container: HTMLElement) => void | Promise<void>): Step =>
     staged(`check ${label}`, async (stage) => {
       const mounted = Option.getOrThrowWith(
-        stage.slot<Screens>(screensKey, () => ({ mounted: Option.none() })).mounted,
+        (await stage.use(screens)).mounted,
         () => new Mismatch("nothing is rendered yet: render(element) first"),
       );
 

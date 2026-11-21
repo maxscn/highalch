@@ -22,7 +22,8 @@
       "@highalch/story": ["./packages/story/src/index.ts"],
       "@highalch/story/tanstack-db": ["./packages/story/src/tanstack-db/index.ts"],
       "@highalch/story/xstate": ["./packages/story/src/xstate/index.ts"],
-      "@highalch/story/screen": ["./packages/story/src/screen/index.ts"]
+      "@highalch/story/screen": ["./packages/story/src/screen/index.ts"],
+      "@highalch/story/takumi": ["./packages/story/src/takumi/index.ts"]
     }
   }
 }

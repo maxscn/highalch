@@ -13,7 +13,7 @@ This repository holds two npm scopes:
 | Package                                                  | What                                                                                                                                                                                         |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`@lowalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
-| [`@highalch/story`](packages/story/README.md)            | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
+| [`@highalch/story`](packages/story/README.md)            | Stories: the runner and the Domain's steps; `./tanstack-db` (`Db`), `./xstate` (machine steps, `explore`), `./screen` (screenshots) and `./takumi` (the default painter)                     |
 
 Both packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
@@ -108,6 +108,7 @@ run `yield* LowAlch.close(db)` when its owner shuts down.
 import * as Story from "@highalch/story";
 import { Db } from "@highalch/story/tanstack-db";
 import { Screen } from "@highalch/story/screen";
+import { Takumi } from "@highalch/story/takumi";
 
 const story = Story.make(Story.memory({ api: NotesApi, layer: handlers, services: stores }), {
   scope: "acc-1",
@@ -117,6 +118,7 @@ const List = Screen.make({
   css,
   width: 360,
   height: 200,
+  painter: Takumi.layer(),
   baselines: new URL("./baselines/", import.meta.url),
   output: new URL("../artifacts/stories/", import.meta.url),
   update: process.env.UPDATE_SCREENS === "1",

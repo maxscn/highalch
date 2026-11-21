@@ -42,6 +42,10 @@
       "types": "./dist/screen.d.mts",
       "default": "./dist/screen.mjs"
     },
+    "./takumi": {
+      "types": "./dist/takumi.d.mts",
+      "default": "./dist/takumi.mjs"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {

@@ -96,7 +96,7 @@ describe("f(read declarations, feed burst) as stories", () => {
       Db.then(wrapped, initial),
       queryDecided.map((source) => Db.then(source, initial)),
       Story.check("each subset loads once", (world) => {
-        expect(world.client().wire.asked.toSorted()).toEqual([
+        expect(world.wire().asked.toSorted()).toEqual([
           "NoteById",
           "Notes",
           "NotesByBook",
@@ -114,7 +114,7 @@ describe("f(read declarations, feed burst) as stories", () => {
       Db.then(wrapped, added),
       queryDecided.map((source) => Db.then(source, patched)),
       Story.check("feed patches arrive before another query is sent", (world) => {
-        expect(world.client().wire.asked).toHaveLength(allSources.length);
+        expect(world.wire().asked).toHaveLength(allSources.length);
       }),
       Story.advance(10),
       queryDecided.map((source) => Db.then(source, added)),
@@ -122,7 +122,7 @@ describe("f(read declarations, feed burst) as stories", () => {
       Story.check(
         "each query-decided subset re-asks once and rule-based subsets send no query",
         (world) => {
-          expect(world.client().wire.asked.slice(allSources.length).toSorted()).toEqual([
+          expect(world.wire().asked.slice(allSources.length).toSorted()).toEqual([
             "NotesByCursor",
             "NotesByCursor",
             "NotesByTitle",
@@ -204,7 +204,7 @@ describe("f(ready subsets, command) as stories", () => {
       Db.settled(),
       Db.then(one, [{ title: "Ada 3", pinned: true, $hasPendingWrites: false }]),
       Story.check("one RenameNote sent for three paced calls", (world) => {
-        const sent = world.client().wire.sent.filter((each) => each.name === "RenameNote");
+        const sent = world.wire().sent.filter((each) => each.name === "RenameNote");
 
         expect(sent).toHaveLength(1);
       }),
@@ -292,7 +292,7 @@ describe("f(ready subsets, another client's change) as stories", () => {
       exist(ada),
       Db.then(book, [{ NoteId: "n1" }]),
       Story.check("count the queries", (world) => {
-        asked = world.client().wire.asked.length;
+        asked = world.wire().asked.length;
       }),
       Story.drop(),
       Db.then(book, { state: "Retrying", fields: { attempt: 2 } }),
@@ -305,7 +305,7 @@ describe("f(ready subsets, another client's change) as stories", () => {
       Db.then(book, { state: "Ready" }),
       Db.then(book, [{ NoteId: "n1" }, { NoteId: "n4", title: "Dee" }]),
       Story.check("resumed from its last seq: no reload, the rule placed n4", (world) => {
-        expect(world.client().wire.asked).toHaveLength(asked);
+        expect(world.wire().asked).toHaveLength(asked);
       }),
     );
   });
@@ -375,8 +375,8 @@ describe("f(change outside the feed, client close) as stories", () => {
       Db.reload(NoteRows),
       Db.then(list, [{ title: "Ada (imported)" }, { title: "Bob" }]),
       Db.then(one, [{ title: "Ada (imported)", $hasPendingWrites: false }]),
-      Story.check("each subset showed n1 once more, in one transaction", (world) => {
-        for (const observed of world.observed())
+      Db.check("each subset showed n1 once more, in one transaction", (db) => {
+        for (const observed of db.observed())
           expect(Db.historyOf(observed, "n1", ["title"])).toBe(
             '{"title":"Ada"} → {"title":"Ada (imported)"}',
           );
@@ -425,9 +425,9 @@ describe("f(deferred settlement, command) as stories", () => {
       // On the manual clock the settle timeout never passes: Committed is the feed's delivery.
       Db.settled("Committed"),
       Db.then(ledgerList, [{ text: "Ada 2", $hasPendingWrites: false }]),
-      Story.check("the entry names the command as its cause", async (world) => {
-        const run = world.runs.at(-1);
-        const feed = await world.entries();
+      Db.check("the entry names the command as its cause", async (db) => {
+        const run = db.runs.at(-1);
+        const feed = await db.entries();
 
         expect(feed.at(-1)?.commandId).toBe(run?.transaction.id);
       }),
@@ -469,8 +469,8 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
 
     return {
       call: (title: string, bound = true, applied = true) =>
-        Story.check(`result of rename to ${title}`, async (world) => {
-          const { db } = await world.connect();
+        Db.check(`result of rename to ${title}`, async (clients) => {
+          const { db } = await clients.connect();
           const shown = db.collection(one);
           let command = notes.rename;
           let release = () => {};
@@ -565,8 +565,8 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
     await story(
       exist(ada),
       Db.open(one),
-      Story.check("close the client", async (world) => {
-        const { db } = await world.connect();
+      Db.check("close the client", async (clients) => {
+        const { db } = await clients.connect();
 
         await Effect.runPromise(LowAlch.close(db));
       }),
@@ -602,8 +602,8 @@ describe("f(command.result, awaited in a plain function) as stories", () => {
       await story(
         exist(ada),
         Db.open(one),
-        Story.check("result of a rename with a throwing reaction", async (world) => {
-          const { db } = await world.connect();
+        Db.check("result of a rename with a throwing reaction", async (clients) => {
+          const { db } = await clients.connect();
 
           outcome = notes.rename
             .with({
