@@ -1,5 +1,5 @@
-import { Option } from "effect";
-import { pathOf, slug, type Place } from "./files";
+import { Option, Predicate } from "effect";
+import { pathOf, readText, slug, write, type Place } from "./files";
 import { before, rule, type Rule } from "./rules";
 import { StoryFailure, type Story } from "./run";
 import { flatten, type Step, type Steps } from "./steps";
@@ -37,6 +37,13 @@ export const source = <V = void>(name: string, declared: Declared<V>): Source<V>
   step: declared.step,
 });
 
+/** These lines when `condition` holds; none otherwise. */
+const onlyIf = <A>(condition: boolean, lines: () => ReadonlyArray<A>): ReadonlyArray<A> => {
+  if (condition) return lines();
+
+  return [];
+};
+
 /** One move of a sequence: a source and the value it is tried with. */
 type Move = { readonly source: AnySource; readonly value: unknown };
 
@@ -47,11 +54,14 @@ const codeOf = (move: Move) =>
     onSome: (value) => `${move.source.name}.step(${json(value)})`,
   });
 
+/** Random walks: how many, of up to how many moves. */
+export type Walks = { readonly count: number; readonly length?: number };
+
 /** What an exploration runs: the story, what can happen, the rules, and how far it looks. */
 export type Exploration = {
-  /** The name of the exploration: its replay and artifacts are named by it. */
+  /** The name of the exploration: its corpus, replay and artifacts are named by it. */
   readonly name: string;
-  /** The story runner each sequence runs on (a fresh world per sequence). */
+  /** The story runner each sequence runs on (a fresh world per sequence; its clock manual). */
   readonly story: Story;
   /** Steps before every sequence (history, a mounted screen, a running machine). */
   readonly setup?: Steps;
@@ -59,25 +69,56 @@ export type Exploration = {
   readonly sources: ReadonlyArray<AnySource>;
   /** Checked at their moments on every sequence. */
   readonly rules: ReadonlyArray<Rule>;
-  /** Every sequence of up to this many moves runs (default 2). */
+  /** Checked: every sequence of up to this many moves runs (default 2). */
   readonly depth?: number;
-  /** At most this many sequences run, in their deterministic order (default 2 000). */
+  /** At most this many checked sequences run, in their order (default 2 000). */
   readonly budget?: number;
   /**
-   * Longer sequences after the short ones: `count` walks of up to `length` moves picked at
-   * random from `seed`; the same seed picks the same walks (default: none).
+   * Sampled: longer sequences picked at random from a fixed `seed` (default 1), the same on every
+   * run. Deterministic, like the checked ones.
    */
-  readonly walks?: { readonly count: number; readonly length?: number; readonly seed?: number };
+  readonly sample?: Walks & { readonly seed?: number };
+  /**
+   * Discovery: walks from a fresh seed on this run (printed in the report), to find cases the
+   * fixed sequences do not. Not repeatable by design: keep it out of CI (`discover: false`, the
+   * default). A failing sequence it finds is added to the corpus, so every later run replays it.
+   * `seed` reruns a discovery run whose report printed it.
+   */
+  readonly discover?: boolean | (Walks & { readonly seed?: number });
+  /**
+   * Where the corpus is kept: `<corpus>/<name>.explore.txt`, one failing sequence per line,
+   * committed with the tests. Every run replays it first.
+   */
+  readonly corpus?: Place;
   /** Where a failure's replay writes its trace and frames (default `artifacts/explore`). */
   readonly artifacts?: Place;
+  /** What a run may leave undone and still pass. */
+  readonly allow?: {
+    /** Pass when the checked sequences stop at the budget before `depth`. */
+    readonly truncated?: boolean;
+    /** Rules (by name) that may never be judged: a rule nothing reached otherwise fails. */
+    readonly unjudged?: ReadonlyArray<string>;
+  };
 };
 
-/** What an exploration ran. */
+/** What an exploration covered. */
 export type Explored = {
-  readonly sequences: number;
-  readonly walks: number;
-  /** Whether it stopped at its budget before every sequence of `depth` moves ran. */
-  readonly truncated: boolean;
+  /** Every sequence of up to `depth` moves (`complete` unless the budget stopped it). */
+  readonly checked: {
+    readonly sequences: number;
+    readonly depth: number;
+    readonly complete: boolean;
+  };
+  /** The fixed-seed walks. */
+  readonly sampled: { readonly sequences: number; readonly seed: number };
+  /** The corpus's sequences, replayed first. */
+  readonly corpus: number;
+  /** The fresh-seed walks, when discovering. */
+  readonly discovered: Option.Option<{ readonly sequences: number; readonly seed: number }>;
+  /** How many times each rule was judged, by name. */
+  readonly judged: Readonly<Record<string, number>>;
+  /** The coverage as text: what is checked, sampled, replayed and discovered. */
+  readonly report: string;
 };
 
 /** Every move of the sources, in their order. */
@@ -122,10 +163,11 @@ const random = (seed: number) => {
 };
 
 /** `count` walks of 1 to `length` moves picked at random from `seed`. */
-const walksOf = (moves: ReadonlyArray<Move>, count: number, length: number, seed: number) => {
+const walksOf = (moves: ReadonlyArray<Move>, walks: Walks, seed: number) => {
   const next = random(seed);
+  const length = walks.length ?? 12;
 
-  return Array.from({ length: count }, () =>
+  return Array.from({ length: walks.count }, () =>
     Array.from({ length: 1 + Math.floor(next() * length) }, () => {
       // SAFETY: an index below the moves' length.
       return moves[Math.floor(next() * moves.length)] as Move;
@@ -137,26 +179,48 @@ const walksOf = (moves: ReadonlyArray<Move>, count: number, length: number, seed
 const stepsOf = (exploration: Exploration, sequence: ReadonlyArray<Move>): ReadonlyArray<Step> =>
   flatten([
     exploration.setup ?? [],
-    ...// SAFETY: each move's value is one of its own source's values.
-    sequence.map((move) => move.source.step(move.value as never)),
+    // SAFETY: each move's value is one of its own source's values.
+    ...sequence.map((move) => move.source.step(move.value as never)),
   ]);
 
 /** What a failure is about, so a shorter sequence counts as the same failure. */
-const aboutOf = (failure: StoryFailure) => failure.reason.replace(/step \d+ \([^)]*\)/gi, "step");
+const aboutOf = (failure: StoryFailure) =>
+  failure.reason.replace(/step \d+ \([^)]*\)/gi, "step").replace(/ at line \d+/g, "");
 
-/** Runs one sequence quietly (nothing captured); its failure, if any. */
-const attempt = async (exploration: Exploration, sequence: ReadonlyArray<Move>) => {
+/** Whether a failure is the world not settling (a timing limit, not a broken rule). */
+const unsettled = (failure: StoryFailure) => failure.reason.includes("did not settle");
+
+/** An exploration's rules, counting how often each is judged. */
+const counting = (rules: ReadonlyArray<Rule>, judged: Record<string, number>) =>
+  rules.map((each): Rule => ({
+    ...each,
+    check: async (stage, moment) => {
+      judged[each.name] = (judged[each.name] ?? 0) + 1;
+
+      return each.check(stage, moment);
+    },
+  }));
+
+/**
+ * Runs one sequence quietly (nothing captured); its failure, if any. A world that did not settle
+ * is tried once more: only one that never settles fails, as such.
+ */
+const attempt = async (
+  exploration: Exploration,
+  rules: ReadonlyArray<Rule>,
+  sequence: ReadonlyArray<Move>,
+  again = true,
+): Promise<Option.Option<StoryFailure>> => {
   try {
-    await exploration.story.with({
-      rules: exploration.rules,
-      capture: "off",
-      trace: false,
-      name: exploration.name,
-    })(stepsOf(exploration, sequence));
+    await exploration.story.with({ rules, capture: "off", trace: false, name: exploration.name })(
+      stepsOf(exploration, sequence),
+    );
 
-    return Option.none<StoryFailure>();
+    return Option.none();
   } catch (error) {
     if (!(error instanceof StoryFailure)) throw error;
+
+    if (again && unsettled(error)) return attempt(exploration, rules, sequence, false);
 
     return Option.some(error);
   }
@@ -165,6 +229,7 @@ const attempt = async (exploration: Exploration, sequence: ReadonlyArray<Move>) 
 /** Drops moves from a failing sequence while it still fails the same way. */
 const shrink = async (
   exploration: Exploration,
+  rules: ReadonlyArray<Rule>,
   sequence: ReadonlyArray<Move>,
   failure: StoryFailure,
 ) => {
@@ -177,7 +242,7 @@ const shrink = async (
 
     for (const index of best.sequence.keys()) {
       const shorter = best.sequence.filter((_, position) => position !== index);
-      const result = await attempt(exploration, shorter);
+      const result = await attempt(exploration, rules, shorter);
 
       if (Option.isSome(result) && aboutOf(result.value) === about) {
         best = { sequence: shorter, failure: result.value };
@@ -199,6 +264,107 @@ const pasteable = (sequence: ReadonlyArray<Move>) =>
     ");",
   ].join("\n");
 
+/** A sequence as one corpus line: each move's source and value. */
+const lineOf = (sequence: ReadonlyArray<Move>) =>
+  json(sequence.map((move) => [move.source.name, move.value ?? null]));
+
+/** The corpus file of an exploration, when it keeps one. */
+const corpusFile = (exploration: Exploration) =>
+  Option.map(
+    Option.fromUndefinedOr(exploration.corpus),
+    (place) => `${pathOf(place)}/${slug(exploration.name)}.explore.txt`,
+  );
+
+/** The corpus's sequences, by the sources' names; a name no source has fails the run. */
+const corpusOf = async (exploration: Exploration): Promise<ReadonlyArray<ReadonlyArray<Move>>> => {
+  const file = corpusFile(exploration);
+
+  if (Option.isNone(file)) return [];
+
+  const text = await readText(file.value);
+  const lines = Option.getOrElse(text, () => "")
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+
+  return lines.map((line) => {
+    const parsed: unknown = JSON.parse(line);
+
+    if (!Array.isArray(parsed))
+      throw new Error(`Explore corpus ${file.value}: not a sequence: ${line}`);
+
+    return parsed.map((move: unknown): Move => {
+      const [name, value] = Option.getOrElse(
+        Option.liftPredicate(move, (each): each is ReadonlyArray<unknown> => Array.isArray(each)),
+        (): ReadonlyArray<unknown> => [],
+      );
+      const found = exploration.sources.find((each) => each.name === name);
+
+      if (!found)
+        throw new Error(
+          `Explore corpus ${file.value} names a source "${String(name)}" the exploration does not have`,
+        );
+
+      return { source: found, value: Option.getOrUndefined(Option.fromNullishOr(value)) };
+    });
+  });
+};
+
+/** Adds a failing sequence to the corpus (once). */
+const remember = async (exploration: Exploration, sequence: ReadonlyArray<Move>) => {
+  const file = corpusFile(exploration);
+
+  if (Option.isNone(file)) return false;
+
+  const known = Option.getOrElse(await readText(file.value), () => "");
+  const line = lineOf(sequence);
+
+  if (known.split("\n").includes(line)) return false;
+
+  const separated = onlyIf(known !== "" && !known.endsWith("\n"), () => ["\n"]).join("");
+
+  await write(file.value, `${known}${separated}${line}\n`);
+
+  return true;
+};
+
+/** Where a sequence came from, as a failure names it. */
+type Origin = {
+  readonly kind: "corpus" | "checked" | "sampled" | "discovered";
+  readonly seed?: number;
+};
+
+const originOf = (origin: Origin) =>
+  Option.match(Option.fromUndefinedOr(origin.seed), {
+    onNone: () => `a ${origin.kind} sequence`,
+    onSome: (seed) => `a ${origin.kind} walk (seed ${seed})`,
+  });
+
+/** The checked sequences, as the report says them. */
+const checkedOf = (checked: Explored["checked"]) => {
+  if (checked.complete)
+    return `every one of the ${checked.sequences} sequence(s) of up to ${checked.depth} move(s)`;
+
+  return `the first ${checked.sequences} sequence(s) of up to ${checked.depth} move(s) (stopped at the budget)`;
+};
+
+/** The coverage as text. */
+const reportOf = (exploration: Exploration, explored: Omit<Explored, "report">) =>
+  [
+    `Explore "${exploration.name}":`,
+    `  Checked: ${checkedOf(explored.checked)}`,
+    `  Sampled: ${explored.sampled.sequences} walk(s) (seed ${explored.sampled.seed})`,
+    `  Corpus: ${explored.corpus} sequence(s) found before`,
+    ...Option.match(explored.discovered, {
+      onNone: () => [],
+      onSome: (found) => [
+        `  Discovered: ${found.sequences} walk(s) from a fresh seed (seed ${found.seed}; not repeatable)`,
+      ],
+    }),
+    `  Rules: ${Object.entries(explored.judged)
+      .map(([name, times]) => `"${name}" judged ${times} time(s)`)
+      .join("; ")}`,
+  ].join("\n");
+
 /** An exploration found a sequence that breaks a rule (or a step). */
 export class ExploreFailure extends Error {
   override readonly name = "ExploreFailure";
@@ -214,70 +380,211 @@ export class ExploreFailure extends Error {
 }
 
 /**
- * Explores what can happen: runs every sequence of up to `depth` moves of the sources (then the
- * seeded walks), each as a fresh story after `setup`, checking the rules at their moments, and
- * capturing nothing. When a sequence fails, it is shrunk to the shortest that fails the same
- * way and replayed once with everything captured: a text trace and the screens' frames under
- * `artifacts`. The failure lists the sequence as a story to paste into a test. Runs are
- * deterministic (the story's manual clock and wire, seeded walks), so the replay reproduces it.
+ * A failing sequence that does not fail the same way when replayed: the app or the kit is not
+ * deterministic there. Reported, never retried away.
+ */
+export class ExploreFlaky extends Error {
+  override readonly name = "ExploreFlaky";
+
+  constructor(
+    message: string,
+    readonly sequence: ReadonlyArray<string>,
+  ) {
+    super(message);
+  }
+}
+
+/** An exploration that left part of its check undone (a budget, a rule nothing reached). */
+export class ExploreIncomplete extends Error {
+  override readonly name = "ExploreIncomplete";
+
+  constructor(
+    message: string,
+    readonly explored: Explored,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Explores what can happen, deterministically: the corpus's sequences first, then every sequence
+ * of up to `depth` moves of the sources (checked), then fixed-seed walks (sampled), each a fresh
+ * story after `setup` with the rules at their moments, capturing nothing. With `discover`, walks
+ * from a fresh seed follow, to find what the fixed sequences do not. A failing sequence is shrunk
+ * to the shortest that fails the same way, replayed twice more to confirm it fails the same way
+ * (else `ExploreFlaky`), added to the corpus when discovered, and replayed once with everything
+ * captured; the `ExploreFailure` lists it as a story to paste. A run that checked less than it
+ * says (a budget hit, a rule never judged) fails as `ExploreIncomplete` unless `allow` names it.
  */
 export const run = async (exploration: Exploration): Promise<Explored> => {
-  const moves = movesOf(exploration.sources);
-  const { found, truncated } = sequencesOf(
-    moves,
-    exploration.depth ?? 2,
-    exploration.budget ?? 2_000,
+  const clock = Option.flatMap(exploration.story.options, (options) =>
+    Option.fromUndefinedOr(options.clock),
   );
 
-  const walks = Option.match(Option.fromUndefinedOr(exploration.walks), {
+  if (Option.contains(clock, "real"))
+    throw new Error(
+      `Explore "${exploration.name}" needs the story's manual clock: with the real clock, timing decides what happens and a run is not repeatable`,
+    );
+
+  const judged: Record<string, number> = Object.fromEntries(
+    exploration.rules.map((each) => [each.name, 0]),
+  );
+
+  const rules = counting(exploration.rules, judged);
+  const moves = movesOf(exploration.sources);
+  const depth = exploration.depth ?? 2;
+  const { found, truncated } = sequencesOf(moves, depth, exploration.budget ?? 2_000);
+  const sampleSeed = exploration.sample?.seed ?? 1;
+  const sampled = Option.match(Option.fromUndefinedOr(exploration.sample), {
     onNone: () => [],
-    onSome: (walks) => walksOf(moves, walks.count, walks.length ?? 12, walks.seed ?? 1),
+    onSome: (walks) => walksOf(moves, walks, sampleSeed),
   });
 
-  const all = [...found, ...walks];
+  const discovery = Option.map(
+    Option.filter(Option.fromUndefinedOr(exploration.discover), (each) => each !== false),
+    (each) => ({
+      walks: Option.getOrElse(
+        Option.liftPredicate(each, (given): given is Walks & { readonly seed?: number } =>
+          Predicate.isObject(given),
+        ),
+        (): Walks & { readonly seed?: number } => ({ count: 200 }),
+      ),
+    }),
+  );
 
-  for (const [index, sequence] of all.entries()) {
-    const result = await attempt(exploration, sequence);
+  const discovering = Option.map(discovery, ({ walks }) => ({
+    walks,
+    // A fresh seed unless given: discovery is meant to look where the fixed runs do not.
+    seed: walks.seed ?? Math.floor(Math.random() * 2_147_483_647),
+  }));
+
+  const discovered = Option.match(discovering, {
+    onNone: () => [],
+    onSome: ({ walks, seed }) => walksOf(moves, walks, seed),
+  });
+
+  const corpus = await corpusOf(exploration);
+
+  const all: ReadonlyArray<{ readonly sequence: ReadonlyArray<Move>; readonly origin: Origin }> = [
+    ...corpus.map((sequence) => ({ sequence, origin: { kind: "corpus" as const } })),
+    ...found.map((sequence) => ({ sequence, origin: { kind: "checked" as const } })),
+    ...sampled.map((sequence) => ({
+      sequence,
+      origin: { kind: "sampled" as const, seed: sampleSeed },
+    })),
+    ...Option.match(discovering, {
+      onNone: () => [],
+      onSome: ({ seed }) =>
+        discovered.map((sequence) => ({ sequence, origin: { kind: "discovered" as const, seed } })),
+    }),
+  ];
+
+  const covered = (): Omit<Explored, "report"> => ({
+    checked: { sequences: found.length, depth, complete: !truncated },
+    sampled: { sequences: sampled.length, seed: sampleSeed },
+    corpus: corpus.length,
+    discovered: Option.map(discovering, ({ seed }) => ({ sequences: discovered.length, seed })),
+    judged: { ...judged },
+  });
+
+  for (const [index, { sequence, origin }] of all.entries()) {
+    const result = await attempt(exploration, rules, sequence);
 
     if (Option.isNone(result)) continue;
 
-    const shortest = await shrink(exploration, sequence, result.value);
-    const name = `${exploration.name} (explored)`;
+    const shortest = await shrink(exploration, rules, sequence, result.value);
+    const codes = shortest.sequence.map(codeOf);
+
+    // A failure must reproduce: replayed twice more, it fails the same way each time.
+    for (const time of [1, 2]) {
+      const replay = await attempt(exploration, rules, shortest.sequence);
+      const same = Option.exists(
+        replay,
+        (failure) => aboutOf(failure) === aboutOf(shortest.failure),
+      );
+
+      if (!same)
+        throw new ExploreFlaky(
+          [
+            `Explore "${exploration.name}": a failing sequence did not fail the same way on replay ${time}: the app or the kit is not deterministic here`,
+            ...codes.map((code, at) => `    ${at + 1}. ${code}`),
+            `  first:  ${shortest.failure.reason}`,
+            `  replay: ${Option.match(replay, { onNone: () => "passed", onSome: (failure) => failure.reason })}`,
+          ].join("\n"),
+          codes,
+        );
+    }
+
+    const added = origin.kind === "discovered" && (await remember(exploration, shortest.sequence));
     const folder = `${pathOf(exploration.artifacts ?? "artifacts/explore")}/${slug(exploration.name)}`;
     const trace = `${folder}/trace.txt`;
 
     // The replay captures everything; it fails as the sequence did.
     await exploration.story
-      .with({ rules: exploration.rules, capture: "record", traceTo: trace, name })(
-        stepsOf(exploration, shortest.sequence),
-      )
+      .with({
+        rules,
+        capture: "record",
+        traceTo: trace,
+        name: `${exploration.name} (explored)`,
+      })(stepsOf(exploration, shortest.sequence))
       .catch(() => undefined);
 
     throw new ExploreFailure(
       [
         `Explore "${exploration.name}": ${shortest.failure.reason}`,
-        `  found in sequence ${index + 1} of ${all.length}, shrunk from ${sequence.length} to ${shortest.sequence.length} move(s):`,
-        ...shortest.sequence.map((move, at) => `    ${at + 1}. ${codeOf(move)}`),
+        `  found in ${originOf(origin)} (${index + 1} of ${all.length}), shrunk from ${sequence.length} to ${shortest.sequence.length} move(s), failing the same way on 2 replays:`,
+        ...codes.map((code, at) => `    ${at + 1}. ${code}`),
         ...shortest.failure.detail.map((line) => `  ${line}`),
         "  as a story:",
         ...pasteable(shortest.sequence)
           .split("\n")
           .map((line) => `    ${line}`),
+        ...onlyIf(added, () => [
+          `  added to the corpus: ${Option.getOrElse(corpusFile(exploration), () => "")}`,
+        ]),
         `  replayed with everything captured: ${trace} (and the screens' frames under their output)`,
+        reportOf(exploration, covered()),
       ].join("\n"),
-      shortest.sequence.map(codeOf),
+      codes,
       shortest.failure,
       trace,
     );
   }
 
-  return { sequences: found.length, walks: walks.length, truncated };
+  const explored = covered();
+  const report = reportOf(exploration, explored);
+  const unjudged = Object.entries(explored.judged).flatMap(([name, times]) =>
+    onlyIf(times === 0 && !(exploration.allow?.unjudged ?? []).includes(name), () => [name]),
+  );
+
+  const undone = [
+    ...onlyIf(truncated && !exploration.allow?.truncated, () => [
+      `the checked sequences stopped at the budget before ${depth} move(s) (allow: { truncated: true } to accept it)`,
+    ]),
+    ...unjudged.map(
+      (name) =>
+        `"${name}" was never judged: no sequence reached a moment it is checked at (allow: { unjudged: [${json(name)}] } to accept it)`,
+    ),
+  ];
+
+  if (undone.length > 0)
+    throw new ExploreIncomplete(
+      [
+        `Explore "${exploration.name}" left part of its check undone:`,
+        ...undone.map((line) => `  ${line}`),
+        report,
+      ].join("\n"),
+      { ...explored, report },
+    );
+
+  return { ...explored, report };
 };
 
 /**
  * Rules and explorations: `Explore.rule(sentence, function* () { … }, { at })` declares what must
  * hold, reading what it yields (`yield* Db.rows(list)`; `yield* Explore.before(reader)` for its
  * value at the previous check), checked by stories (`story.with({ rules })`) and explorations
- * alike; `Explore.source` declares what can happen; `Explore.run` explores every sequence of it.
+ * alike; `Explore.source` declares what can happen; `Explore.run` explores every sequence of it,
+ * deterministically.
  */
 export const Explore = { rule, before, source, run } as const;

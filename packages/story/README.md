@@ -321,9 +321,10 @@ story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPendi
   `After step 3 (when …), "the title stays Ada" does not hold / it read rows NoteRows/…: {…}`.
 - An adapter's own reader is `reader(name, (stage) => …)` from `@highalch/story`.
 
-**Exploring.** `Explore.run` tries what can happen instead of one hand-written order: every
-sequence of up to `depth` moves of its sources (then seeded random walks), each a fresh story after
-`setup`, with the rules checked at their moments.
+**Exploring.** `Explore.run` tries what can happen instead of one hand-written order. It is a test,
+not a fuzzer: every run tries the same sequences in the same order, so it passes or fails the same
+way every time. Finding new cases is a separate, explicit mode (`discover`), and what it finds is
+kept so every later run replays it.
 
 ```ts
 const edit = Explore.source("edit", {
@@ -333,25 +334,54 @@ const edit = Explore.source("edit", {
 const save = Explore.source("save", { step: () => Machine.when({ type: "Save" }) });
 const settle = Explore.source("settle", { step: () => Story.settle() });
 
-await Explore.run({
+const explored = await Explore.run({
   name: "rename editor",
   story,
   setup: [Story.given(n1, new NoteCreated({ note: ada })), Db.open(list), Machine.start(editor)],
   sources: [edit, save, settle],
   rules: [...Db.rules, savedMeansCommitted],
-  depth: 3, // every sequence of up to 3 moves
-  walks: { count: 50, length: 12, seed: 1 }, // optional: longer, seeded random sequences
+  depth: 3, // checked: every sequence of up to 3 moves
+  sample: { count: 50, length: 12, seed: 1 }, // sampled: longer walks from a fixed seed
+  corpus: new URL("./explore/", import.meta.url), // failing sequences found before, committed
+  discover: false, // true (or { count, length, seed }) looks somewhere new: keep it out of CI
 });
+// explored.report:
+// Explore "rename editor":
+//   Checked: every one of the 84 sequence(s) of up to 3 move(s)
+//   Sampled: 50 walk(s) (seed 1)
+//   Corpus: 1 sequence(s) found before
+//   Rules: "nothing is pending at rest" judged … time(s); …
 ```
 
+- **What a run covers, in order:** the corpus's sequences, then the **checked** sequences (every
+  sequence of up to `depth` moves, shortest first, within `budget`), then the **sampled** walks
+  (from `sample.seed`, 1 by default). All of it is the same on every run. Each sequence is a fresh
+  story after `setup`, on the story's manual clock: an exploration refuses `clock: "real"`, where
+  timing would decide what happens.
+- **Discovery** (`discover: true`, or `{ count, length, seed }`) adds walks from a fresh seed, which
+  the report and any failure print. A failing sequence it finds is added to the corpus file
+  (`<corpus>/<name>.explore.txt`, one sequence per line), so the deterministic runs replay it from
+  then on. Pass the printed seed back (`discover: { count, seed }`) to rerun a discovery. Turn it on
+  locally or in a scheduled job, not in the tests every change runs.
+- **A failure must reproduce.** A failing sequence is shrunk to the shortest that fails the same
+  way, then replayed twice more; if a replay passes or fails differently, the run throws
+  `ExploreFlaky` with both outcomes: the app or the kit is not deterministic there, and that is
+  reported, never retried away. Only a world that "did not settle" (a timing limit, not a rule) is
+  tried once more before it counts.
+- **No silent passes.** A run that checked less than it says throws `ExploreIncomplete`: checked
+  sequences stopped at the budget, or a rule no sequence ever judged. `allow: { truncated: true,
+  unjudged: ["…"] }` accepts them. The run returns its coverage (`checked`, `sampled`, `corpus`,
+  `discovered`, how often each rule was judged, and `report`).
 - While exploring nothing is captured: no frames are painted and no trace is kept (`capture: "off"`).
-- A failing sequence is shrunk to the shortest that fails the same way, then replayed once with
-  everything captured: a text trace (`<artifacts>/<name>/trace.txt`, default
-  `artifacts/explore`) and the screens' frames, recorded without comparing.
-- It throws an `ExploreFailure`: the broken rule, the moves (`edit.step("locked")`, `save.step()`,
-  `settle.step()`), the failure's detail, the same sequence as a story to paste into a test, and
-  where the replay wrote. Runs are deterministic (the manual clock, the controlled wire, seeded
-  walks), so the replay reproduces it.
+  The confirmed failure is replayed once with everything captured: a text trace
+  (`<artifacts>/<name>/trace.txt`, default `artifacts/explore`) and the screens' frames, recorded
+  without comparing. It throws an `ExploreFailure`: the broken rule, where the sequence came from
+  (corpus, checked, sampled or discovered, with its seed), the moves (`edit.step("locked")`,
+  `save.step()`, `settle.step()`), the failure's detail, the sequence as a story to paste into a
+  test, and the coverage so far.
+- Values sampled from a form's schema (`Form.typing`) are seeded by the form's and the field's
+  names, so adding a field changes no other field's values. Upgrading Effect may change them; the
+  corpus keeps what was found.
 - `Db.commands()` reads the commands the clients ran (label, who ran them, how they ended), for
   rules about outcomes: "an editor says Saved only after its save committed".
 

@@ -145,7 +145,7 @@ describe("f(Form.typing, rules) → explored", () => {
       explorationOf("approved form", <ApprovedRenameForm NoteId="n1" title="Ada" />),
     );
 
-    expect(explored.sequences).toBe(4 + 16 + 64);
+    expect(explored.checked).toEqual({ sequences: 4 + 16 + 64, depth: 3, complete: true });
   }, 300_000);
 
   it("f(broken form) → the reset found, shrunk to type, submit, settle", async () => {

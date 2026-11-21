@@ -262,6 +262,8 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
 export type Story = ((...steps: ReadonlyArray<Steps>) => Promise<void>) & {
   /** The same runner with other options (rules, clock, name); a hosted story's only. */
   readonly with: (options: Partial<StoryOptions>) => Story;
+  /** The runner's options (`None` for a hostless runner). */
+  readonly options: Option.Option<StoryOptions>;
 };
 
 const runner = (setup: Option.Option<Setup>): Story => {
@@ -278,7 +280,10 @@ const runner = (setup: Option.Option<Setup>): Story => {
         runner(Option.some({ ...hosted, options: { ...hosted.options, ...options } })),
     });
 
-  return Object.assign(story, { with: more });
+  return Object.assign(story, {
+    with: more,
+    options: Option.map(setup, (hosted) => hosted.options),
+  });
 };
 
 /**
