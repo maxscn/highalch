@@ -45,7 +45,7 @@ const opens = (socket: WebSocket) =>
 /** A page watching the relay: every message it received, decoded, frames by their SHA-256. */
 const watching = async (made: Relay) => {
   const socket = new WebSocket(socketUrl(made, "/v1/watch"), [subprotocol, bearer(made.view)], {
-    origin: "https://highalch.studio",
+    origin: "https://studio.highalch.dev",
   });
   const messages: Array<Watched> = [];
   const frames: Array<string> = [];
@@ -137,10 +137,10 @@ describe("f(request) → only this machine's processes stream, only the studio's
         }),
       );
 
-    expect(await watch(made.view, "https://highalch.studio")).toBe("open");
+    expect(await watch(made.view, "https://studio.highalch.dev")).toBe("open");
     expect(await watch(made.view, made.url)).toBe("open");
     expect(await watch(made.view, "https://evil.example")).toContain("403");
-    expect(await watch(made.ingest, "https://highalch.studio")).toContain("401");
+    expect(await watch(made.ingest, "https://studio.highalch.dev")).toContain("401");
 
     const opened = (await fetch(`${made.url}/v1/sessions`, {
       method: "POST",
@@ -160,10 +160,10 @@ describe("f(request) → only this machine's processes stream, only the studio's
     expect(await stream(opened.token)).toBe("open");
     expect(await stream(made.ingest)).toContain("401");
     // Pages watch; they never stream.
-    expect(await stream(opened.token, "https://highalch.studio")).toContain("403");
+    expect(await stream(opened.token, "https://studio.highalch.dev")).toContain("403");
 
     expect(made.link).toBe(
-      `https://highalch.studio/#connect=${encodeURIComponent(made.url)}&token=${made.view}`,
+      `https://studio.highalch.dev/#connect=${encodeURIComponent(made.url)}&token=${made.view}`,
     );
   });
 });

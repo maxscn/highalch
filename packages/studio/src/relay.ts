@@ -15,13 +15,13 @@ import {
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 
 /** The page a studio is viewed on: it connects to this machine, never to a server of ours. */
-export const studio = "https://highalch.studio";
+export const studio = "https://studio.highalch.dev";
 
 /** How a relay listens and whom it lets in. */
 export type Options = {
   /** The port on 127.0.0.1 (4983 by default; 0 picks a free one). */
   readonly port?: number;
-  /** Origins whose pages may watch (`https://highalch.studio` by default, and the relay's own). */
+  /** Origins whose pages may watch (`https://studio.highalch.dev` by default, and the relay's own). */
   readonly origins?: ReadonlyArray<string>;
 };
 
@@ -34,7 +34,7 @@ export type Relay = {
   readonly url: string;
   readonly ingest: string;
   readonly view: string;
-  /** `https://highalch.studio/#connect=…&token=…`: the fragment never leaves the browser. */
+  /** `https://studio.highalch.dev/#connect=…&token=…`: the fragment never leaves the browser. */
   readonly link: string;
   readonly close: () => Promise<void>;
 };
@@ -108,7 +108,7 @@ const decodeOpen = Schema.decodeUnknownSync(Open);
  * and stream to it as they would to the console (`HIGHALCH_STREAM_URL` and
  * `HIGHALCH_STREAM_TOKEN` set to its `url` and `ingest`); pages watch it over a WebSocket
  * (`/v1/watch`), and get everything kept so far, then everything as it arrives. Nothing leaves
- * this machine: the page at highalch.studio connects here from the browser.
+ * this machine: the page at studio.highalch.dev connects here from the browser.
  *
  * It listens on 127.0.0.1 only, answers only requests addressed to it by that name or `localhost`
  * (a page can't reach it by rebinding another name to 127.0.0.1), lets only its origins watch, and

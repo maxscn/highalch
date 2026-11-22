@@ -42,7 +42,7 @@ const studio = async () => {
   const page = new WebSocket(
     `${made.url.replace(/^http/, "ws")}/v1/watch`,
     [subprotocol, bearer(made.view)],
-    { origin: "https://highalch.studio" },
+    { origin: "https://studio.highalch.dev" },
   );
   const sessions: Array<Session> = [];
   const frames = new Set<string>();

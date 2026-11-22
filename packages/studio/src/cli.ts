@@ -13,7 +13,7 @@ export type Asked = {
 
 const usage = `usage: highalch studio [--port 4983] [--concurrency 1] [--exit] [-- <test command>]
 
-Starts the studio's relay on 127.0.0.1 and prints the link that opens https://highalch.studio on
+Starts the studio's relay on 127.0.0.1 and prints the link that opens https://studio.highalch.dev on
 it. With a test command, runs it (as --concurrency shards) streaming to the relay.`;
 
 /** The command line, read: `studio [--port n] [--concurrency n] [--exit] [-- command…]`. */
