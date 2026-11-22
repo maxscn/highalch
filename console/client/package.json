@@ -1,0 +1,26 @@
+{
+  "name": "@highalch/console-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HighAlch Console's CI client: ConsoleApi over HTTP with an API key or GitHub OIDC, the upload flow (runs, artifacts, results, story reports) and the offline .highalch/ writer.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./Results": "./src/Results.ts",
+    "./StoryReport": "./src/StoryReport.ts",
+    "./testing": "./src/testing.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@alchemy.run/domain": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@highalch/console-domain": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

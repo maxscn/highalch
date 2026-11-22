@@ -7,9 +7,10 @@ const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 /**
  * Tests and type checks run from source: these aliases (mirrored by `paths` in
  * `tsconfig.base.json`) point the workspace packages at their `src`, so no build is needed first.
- * Published packages resolve through their `exports`, which point at `dist`.
+ * Published packages resolve through their `exports`, which point at `dist`. The Console's
+ * projects (each `vite.config.ts` under `console/`) use the same aliases.
  */
-const workspace = [
+export const workspace = [
   { find: /^@lowalch\/tanstack-db$/, replacement: source("./packages/tanstack-db/src/index.ts") },
   {
     find: /^@lowalch\/tanstack-db\/server$/,
@@ -71,10 +72,10 @@ export default defineConfig({
   plugins: [highalch()],
   oxc: { jsx: { runtime: "automatic" } },
   fmt: {
-    ignorePatterns: ["**/dist/**", "**/artifacts/**", "pnpm-lock.yaml"],
+    ignorePatterns: ["**/dist/**", "**/artifacts/**", "pnpm-lock.yaml", "**/routeTree.gen.ts"],
   },
   lint: {
-    ignorePatterns: ["**/dist/**", "**/artifacts/**"],
+    ignorePatterns: ["**/dist/**", "**/artifacts/**", "**/routeTree.gen.ts"],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
@@ -84,7 +85,15 @@ export default defineConfig({
     dedupe: ["effect", "react", "react-dom"],
   },
   test: {
-    include: ["packages/*/tests/**/*.test.{ts,tsx}"],
+    projects: [
+      {
+        extends: true,
+        test: { name: "highalch", include: ["packages/*/tests/**/*.test.{ts,tsx}"] },
+      },
+      // HighAlch Console (private): each package's own config. Their end-to-end tests
+      // (`*.e2e.test.*`) run only with `vp run test:console-e2e`.
+      "console/*/vite.config.ts",
+    ],
   },
   run: {
     cache: true,

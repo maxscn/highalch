@@ -1,0 +1,51 @@
+{
+  "name": "@highalch/console-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HighAlch Console web app: TanStack Start, React, Tailwind and shadcn/ui on Base UI, data through @lowalch/tanstack-db.",
+  "type": "module",
+  "scripts": {
+    "dev": "node dev/runs/run.mjs --if-missing && vp dev",
+    "seed": "node dev/runs/run.mjs",
+    "build": "vp build"
+  },
+  "dependencies": {
+    "@alchemy.run/domain": "catalog:",
+    "@base-ui/react": "catalog:",
+    "@fontsource-variable/geist": "catalog:",
+    "@fontsource-variable/geist-mono": "catalog:",
+    "@highalch/console-client": "workspace:*",
+    "@highalch/console-domain": "workspace:*",
+    "@lowalch/tanstack-db": "workspace:*",
+    "@tanstack/db": "catalog:",
+    "@tanstack/react-db": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "better-auth": "catalog:",
+    "class-variance-authority": "catalog:",
+    "clsx": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tailwind-merge": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@highalch/console-fuzz": "workspace:*",
+    "@highalch/console-playwright": "workspace:*",
+    "@highalch/story": "workspace:*",
+    "@playwright/test": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "fast-check": "catalog:",
+    "happy-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "takumi-js": "catalog:",
+    "tw-animate-css": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

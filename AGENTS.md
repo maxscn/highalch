@@ -11,9 +11,11 @@ them. Docs: `node_modules/vite-plus/docs` (when shipped) or https://viteplus.dev
 overwrite built-ins, so `vp test` and `vp run test` may differ. The root scripts are:
 
 - `vp run build`: `vp pack` in each package (tsdown; ESM `.mjs` and `.d.mts` in `dist`)
-- `vp run typecheck`: `tsc` (TypeScript 7) over `packages/tanstack-db`, `packages/story` and the root project (`fixtures`, `scripts`)
+- `vp run typecheck`: `tsc` (TypeScript 7) over each package, each Console project (`console/*`) and the root project (`fixtures`, `scripts`)
 - `vp run check:patterns`: `scripts/check-patterns.ts`, the packages' import boundaries
-- `vp run test`: `vp test --maxWorkers=2`
+- `vp run test`: `vp test --maxWorkers=2` (the libraries and the Console, each Console package a
+  Vitest project of its own)
+- `vp run test:console-e2e`: the Console's end-to-end tests (`*.e2e.test.*`), left out of `vp test`
 
 ## Review checklist
 
@@ -71,6 +73,10 @@ parallel, and start no dev servers.
   `<Suspense>`; typed errors stay `match` branches. It is not a hook and needs no React import.
 - **Comments and errors** name the core as LowAlch (`LowAlch.Defect`, "No LowAlch client is
   active") and the story kit as HighAlch.
+
+- **HighAlch Console** (`console/`, private, see `console/README.md`) is an app on these
+  packages, not one of them: the libraries never import it, it reaches them only through their
+  public entries, and its browser code imports no node-only entry (`vp run check:patterns`).
 
 ## Tests
 

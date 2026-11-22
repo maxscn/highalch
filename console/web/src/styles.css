@@ -1,0 +1,222 @@
+/*
+ * HighAlch Console theme: the Foundations board (docs/design/Foundations.dc.html) as Tailwind
+ * tokens. Colours are CSS variables, redefined under `.dark`; type, spacing and radii are the
+ * board's scales and nothing else (Tailwind's default type scale is cleared).
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f7f7f4;
+  --bg-panel: #ffffff;
+  --bg-subtle: #f2f1ed;
+  --bg-selected: #ecebe6;
+  --border: rgba(38, 37, 30, 0.1);
+  --border-strong: rgba(38, 37, 30, 0.18);
+  --fg: #26251e;
+  --fg-muted: #57554d;
+  --fg-subtle: #6c6a62;
+  --ink: #26251e;
+  --ink-fg: #f7f7f4;
+  --ink-hover: #3a382f;
+  --accent: #2b5bd7;
+  --accent-subtle: #edf1fb;
+  --syntax-string: #9a3d12;
+  --syntax-number: #0f5e7a;
+  --avatar: #e3ded3;
+
+  --pass: #1a6e44;
+  --pass-dot: #3e9a68;
+  --pass-tint: #e6f1e9;
+  --fail: #b42318;
+  --fail-dot: #d2463a;
+  --fail-tint: #fae9e6;
+  --flaky: #8a5a00;
+  --flaky-dot: #e0a630;
+  --flaky-tint: #f9efd8;
+  --skipped: #57554d;
+  --skipped-dot: #b8b5ac;
+  --skipped-tint: #ecebe6;
+  --running: #0f6e8c;
+  --running-dot: #2f8fb4;
+  --running-tint: #e1eff3;
+
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #14120b;
+  --bg-panel: #1b1913;
+  --bg-subtle: #22201a;
+  --bg-selected: #2a2720;
+  --border: rgba(237, 236, 236, 0.1);
+  --border-strong: rgba(237, 236, 236, 0.18);
+  --fg: #edecec;
+  --fg-muted: #b4b2ab;
+  --fg-subtle: #8f8d86;
+  --ink: #edecec;
+  --ink-fg: #14120b;
+  --ink-hover: #d6d4cf;
+  --accent: #7aa2ff;
+  --accent-subtle: #1d2540;
+  --syntax-string: #e39a6e;
+  --syntax-number: #6fc3df;
+  --avatar: #3a362c;
+
+  --pass: #63c08a;
+  --pass-dot: #3f9a66;
+  --pass-tint: #16241a;
+  --fail: #f2897c;
+  --fail-dot: #d9493c;
+  --fail-tint: #2d1813;
+  --flaky: #e6b55a;
+  --flaky-dot: #d9a035;
+  --flaky-tint: #2a2110;
+  --skipped: #a3a19a;
+  --skipped-dot: #6a675f;
+  --skipped-tint: #22201a;
+  --running: #62b6d8;
+  --running-dot: #3893ba;
+  --running-tint: #122229;
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-bg: var(--bg);
+  --color-panel: var(--bg-panel);
+  --color-subtle: var(--bg-subtle);
+  --color-selected: var(--bg-selected);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-ink: var(--ink);
+  --color-ink-fg: var(--ink-fg);
+  --color-ink-hover: var(--ink-hover);
+  --color-accent: var(--accent);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-syntax-string: var(--syntax-string);
+  --color-syntax-number: var(--syntax-number);
+  --color-avatar: var(--avatar);
+  --color-pass: var(--pass);
+  --color-pass-dot: var(--pass-dot);
+  --color-pass-tint: var(--pass-tint);
+  --color-fail: var(--fail);
+  --color-fail-dot: var(--fail-dot);
+  --color-fail-tint: var(--fail-tint);
+  --color-flaky: var(--flaky);
+  --color-flaky-dot: var(--flaky-dot);
+  --color-flaky-tint: var(--flaky-tint);
+  --color-skipped: var(--skipped);
+  --color-skipped-dot: var(--skipped-dot);
+  --color-skipped-tint: var(--skipped-tint);
+  --color-running: var(--running);
+  --color-running-dot: var(--running-dot);
+  --color-running-tint: var(--running-tint);
+  /* The coin in the logo (brand art, not a token for UI). */
+  --color-coin: #e0a630;
+  --color-coin-edge: #8a5a00;
+  --color-flame: #e8742c;
+  --color-flame-edge: #9a3d12;
+}
+
+@theme {
+  --font-*: initial;
+  --font-sans:
+    "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Type scale (size / line height, weight, tracking): the board's nine styles. */
+  --text-*: initial;
+  --text-display: 32px;
+  --text-display--line-height: 40px;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 600;
+  --text-title: 24px;
+  --text-title--line-height: 32px;
+  --text-title--letter-spacing: -0.02em;
+  --text-title--font-weight: 600;
+  --text-heading: 20px;
+  --text-heading--line-height: 28px;
+  --text-heading--letter-spacing: -0.01em;
+  --text-heading--font-weight: 600;
+  --text-subheading: 16px;
+  --text-subheading--line-height: 24px;
+  --text-subheading--font-weight: 600;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-label: 13px;
+  --text-label--line-height: 20px;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+
+  --font-weight-*: initial;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* One 4px scale: p-1 = 4, p-2 = 8, p-3 = 12, p-4 = 16, p-6 = 24, p-8 = 32, p-12 = 48, p-16 = 64. */
+  --spacing: 4px;
+
+  --radius-*: initial;
+  --radius-control: 4px;
+  --radius-panel: 6px;
+  --radius-full: 999px;
+
+  /* Shell. */
+  --width-sidebar: 224px;
+  --height-topbar: 48px;
+  --container-content: 1216px;
+  --container-prose: 65ch;
+
+  --shadow-*: initial;
+  --shadow-selected: inset 2px 0 0 var(--accent);
+  --shadow-popover: 0 4px 16px rgba(20, 18, 11, 0.12);
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+  html {
+    background: var(--bg);
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 20px;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--fg);
+    text-decoration: underline;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}

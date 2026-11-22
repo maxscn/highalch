@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "vp run -r build",
-    "typecheck": "tsc -p packages/tanstack-db && tsc -p packages/story && tsc -p packages/stream && tsc -p packages/studio && tsc -p packages/explore && tsc -p packages/examples && tsc -p .",
+    "typecheck": "tsc -p packages/tanstack-db && tsc -p packages/story && tsc -p packages/stream && tsc -p packages/studio && tsc -p packages/explore && tsc -p packages/examples && tsc -p console/domain && tsc -p console/client && tsc -p console/playwright && tsc -p console/fuzz && tsc -p console/server && tsc -p console/web && tsc -p console/example && tsc -p .",
     "check:patterns": "node scripts/check-patterns.ts",
     "test": "vp test --maxWorkers=2",
+    "test:console-e2e": "node console/web/dev/runs/run.mjs --if-missing && HIGHALCH_CONSOLE_E2E=1 vp test --maxWorkers=1 --project console-server --project console-playwright --project console-web",
     "ready": "vp check && vp run check:patterns && vp run typecheck && vp run test && vp run build",
     "changeset": "changeset",
     "release:version": "changeset version && vp fmt"

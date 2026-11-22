@@ -1,0 +1,23 @@
+{
+  "name": "@highalch/console-domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HighAlch Console domain model on @alchemy.run/domain: organisations, projects, runs, artifacts and story reports; their HighAlch rows, feed and one Api.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./*": "./src/*.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@alchemy.run/domain": "catalog:",
+    "@lowalch/tanstack-db": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@highalch/story": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
