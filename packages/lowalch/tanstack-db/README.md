@@ -435,6 +435,41 @@ customers.addComment({ CustomerId: id, Comment });
   must be row fields; `input(row)` receives that partial row), under the id
   `<transaction id>:<row key>` (paced transactions cannot take a caller id).
 
+### Deciding a command before it is sent
+
+Opt in on the entity with `state`, and a command is decided on the client first with the
+aggregate's own `decide` and `evolve` (alchemy's `Aggregate.predict`):
+
+```ts
+class TaskRows extends LowAlch.Rows("TaskRows", {
+  feed: OwnerTaskChanges,
+  row: Task,
+  key: "TaskId",
+  from: [TaskAggregate],
+  on: { TaskChanged: (event) => LowAlch.upserted(event.task) /* … */ },
+  state: (task) => ({ task }), // the aggregate's state, from a row
+}) {}
+
+const db = LowAlch.make({ api, layer, scope, context: Context.make(Who, me) });
+```
+
+| `decide` answers                              | The call                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| a rejection                                   | is refused at once with that typed rejection: no optimistic edit, nothing sent                   |
+| events                                        | shows the rows its events give through the entity's own `on`, then is sent and settles as always |
+| nothing the client can know (`Unpredictable`) | behaves as without `state`: the declaration's edit, and the server decides                       |
+
+- The rule is written once, in `decide`. The server still judges every command, so the local
+  answer is only early; a stale or forged client changes nothing.
+- `context` is what the commands' middleware provides (a session), as a client-side
+  `Context`. Without it a command that reads one is `Unpredictable`.
+- `state` is available when `from` holds exactly one aggregate. The state is built from the
+  loaded row with the call's key; a create starts from the aggregate's `initial`; a command whose
+  row is not loaded is not decided here. `decide` sees `version: 0`.
+- The declaration's `row`, `change` and field copying remain the edit whenever nothing is
+  decided here, and for a call restored from the offline queue after a reload.
+- `createOptimisticAction` (`command.options`) and paced calls are not decided here.
+
 ### The created key
 
 An `inserts` call returns a `LowAlch.Created` transaction: its `metadata` holds the new row's key
@@ -691,6 +726,13 @@ is registered under in `setup({ actors })`. Plain XState logic works the same on
 `mark(createAsyncLogic({ run: ({ input }) => command.result(input) }), command)`. In production
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
+
+## Publishing declarations
+
+A package that emits `.d.ts` files can export a `Rows` entity with its inferred type: the types
+an entity's `writer` names (`Writer`, `WriterInput`, `WriterPayload`) are exported from the root
+and from `./server`. `fixtures/declarations.ts` is compiled with `declaration: true` in the
+typecheck, and fails with TS4020/TS4023 without them.
 
 ## Seams for test kits: `@lowalch/tanstack-db/internal`
 

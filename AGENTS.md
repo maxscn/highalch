@@ -99,7 +99,7 @@ parallel, and start no dev servers.
   frames as reviewed baselines (`packages/highalch/examples/tests/baselines/takumi/`). Other tests import
   its components, machines and forms by its package name as fixtures.
 - Shared example Domains and views live in `fixtures/` (`notebook.ts`, `ledger.ts`, `notes.ts`,
-  `tasks.ts`, `offline.ts`, `editor.ts`, `note-list.tsx`). They import `@lowalch/*` and `@highalch/*` like a consumer does.
+  `tasks.ts`, `predicted.ts`, `offline.ts`, `declarations.ts`, `editor.ts`, `note-list.tsx`). They import `@lowalch/*` and `@highalch/*` like a consumer does.
 - Tests run from source. The aliases in `vite.config.ts` and the `paths` in
   `tsconfig.base.json` point `@lowalch/*` and `@highalch/*` at `src`, so a test never needs a build. Keep the two
   lists in sync when adding an entry.

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { Collection, DbClient } from "@tanstack/db";
-import { Effect, Layer, Stream } from "effect";
+import { Context, Effect, Layer, Stream } from "effect";
 import * as LowAlch from "@lowalch/tanstack-db";
 import { calls } from "@lowalch/tanstack-db/offline";
 import { observe, until } from "../../../../fixtures/harness";
@@ -13,6 +13,7 @@ import {
   person,
   tasks,
   TasksApi,
+  Who,
   type Task,
 } from "../../../../fixtures/tasks";
 
@@ -38,6 +39,7 @@ const client = async (
   subject: string,
   on?: Device,
   release: Array<() => Promise<void>> = cleanup,
+  context?: Context.Context<never>,
 ) => {
   const db = LowAlch.make({
     api: TasksApi,
@@ -45,6 +47,7 @@ const client = async (
     scope: subject,
     reloadDelay: 5,
     settleTimeout: 2_000,
+    ...(context !== undefined && { context }),
     ...(on !== undefined && {
       offline: offline({
         storage: on.storage,
@@ -253,6 +256,58 @@ describe("f(reader, what is not theirs)", () => {
     expect(error).toBeInstanceOf(NotOwner);
     expect(titles(seen.bob)).toEqual(["Plan"]);
     expect(titles(seen.ada)).toEqual(["Plan"]);
+  });
+});
+
+describe("f(client that knows who it is, command)", () => {
+  it("f(the reader renames a task shared with them) → refused at once by decide; nothing shown, nothing sent", async () => {
+    const server = await open();
+    const ada = await client(server, "ada");
+    // SAFETY: the context a command's middleware provides: who is asking.
+    const who = Context.make(Who, person("bob")) as Context.Context<never>;
+    const bob = await client(server, "bob", undefined, cleanup, who);
+    const mine = visible(ada, "ada");
+    const theirs = visible(bob, "bob");
+
+    await ready(mine, theirs);
+
+    const TaskId = await created(ada, "Plan");
+
+    await share(ada, TaskId, "selected", [person("bob").email]);
+    await shows(theirs, ["Plan"], "Bob sees it");
+
+    const before = server.sent.length;
+    const tx = tasks.rename.with({ client: bob })({ TaskId, title: "Mine" });
+
+    // The aggregate's own decide ran here: no optimistic edit shows.
+    expect(titles(theirs)).toEqual(["Plan"]);
+
+    const error = await tx.when("settled").then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(NotOwner);
+    expect(server.sent.slice(before)).toEqual([]);
+  });
+
+  it("f(the owner renames their task) → accepted by decide; the row is the one its event carries", async () => {
+    const server = await open();
+    // SAFETY: as above.
+    const who = Context.make(Who, person("ada")) as Context.Context<never>;
+    const ada = await client(server, "ada", undefined, cleanup, who);
+    const mine = visible(ada, "ada");
+
+    await ready(mine);
+
+    const TaskId = await created(ada, "Plan");
+    const tx = tasks.rename.with({ client: ada })({ TaskId, title: "Plan B" });
+
+    expect(mine.get(TaskId)).toMatchObject({ title: "Plan B", $hasPendingWrites: true });
+
+    await tx.when("settled");
+
+    expect(titles(mine)).toEqual(["Plan B"]);
   });
 });
 

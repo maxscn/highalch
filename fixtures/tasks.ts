@@ -207,6 +207,8 @@ export class TaskRows extends LowAlch.Rows("TaskRows", {
     TaskChanged: (event) => LowAlch.upserted(event.task),
     TaskDeleted: (event) => LowAlch.removed(event.TaskId),
   },
+  // A client that knows who it is (`make({ context })`) decides its commands with `decide` first.
+  state: (task) => ({ task }),
 }) {}
 
 export class OwnerTaskWriter extends LowAlch.Projection("OwnerTaskChanges", {
@@ -447,6 +449,8 @@ export const host = async () => {
   const hosted = ManagedRuntime.make(model);
   const internals = await hosted.runPromise(Effect.context<Model.Internals>());
   const runtimes: Array<{ readonly dispose: () => Promise<void> }> = [];
+  /** Every command a reader's client sent, as `<subject> <command>`. */
+  const sent: Array<string> = [];
 
   const reader = async (subject: string) => {
     const runtime = ManagedRuntime.make(
@@ -458,11 +462,28 @@ export const host = async () => {
 
     runtimes.push(runtime);
 
-    return runtime.runPromise(TasksApi.Client);
+    const client = await runtime.runPromise(TasksApi.Client);
+
+    const counted =
+      <A extends ReadonlyArray<unknown>, R>(name: string, call: (...args: A) => R) =>
+      (...args: A) => {
+        sent.push(`${subject} ${name}`);
+
+        return call(...args);
+      };
+
+    return {
+      ...client,
+      CreateTask: counted("CreateTask", client.CreateTask),
+      RenameTask: counted("RenameTask", client.RenameTask),
+      ShareTask: counted("ShareTask", client.ShareTask),
+      DeleteTask: counted("DeleteTask", client.DeleteTask),
+    };
   };
 
   return {
     reader,
+    sent,
     dispose: async () => {
       for (const runtime of runtimes) await runtime.dispose();
 
