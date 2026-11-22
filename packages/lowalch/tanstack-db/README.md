@@ -197,6 +197,40 @@ accessor takes its page as the second argument, for example
 and row selector per `Rows` entity. Repeating the same declaration is allowed. A conflicting
 declaration throws a LowAlch error naming the query and entity.
 
+**Rows the feed cannot place: `.follows(view, key)`.** An entity's feed carries each row to its
+scope (an account, an owner). Rows a reader sees for another reason (a task shared with them,
+one visible to everyone) are not on their feed, and must not be: who may read a row is the query
+handler's decision, made with the caller's session. A read can instead follow any view or stream
+the Api serves, and ask its query again whenever that changes at the key an input names:
+
+```ts
+export const tasks = LowAlch.collection(TaskRows, {
+  queries: {
+    visible: LowAlch.read(VisibleTasks)
+      .follows(SharedTasks, (input) => input.email) // ids of tasks shared with this address
+      .follows(EveryoneTasks, () => "everyone"), // ids of tasks everyone may see
+  },
+});
+```
+
+- The followed read only says **when** to ask. The query's answer replaces the subset in one
+  step, so a row the reader lost is gone and one they gained is there. Nothing the reader may not
+  see is sent to them; a followed view can hold ids only.
+- The rule lives in one place, the query's handler (`tasks.filter((task) => canRead(task, who))`),
+  and the followed view's own Layer guards its read, as for any view.
+- The subset connects to what it follows before its first ask, so an answer is never older than
+  its baseline. A change while disconnected is noticed on reconnect. A transport failure is
+  retried on the client's `retry`; a failure for good is reported on the collection, and its rows
+  stay.
+- Rows are the entity's rows, so the entity's commands and their optimistic edits work on them. A
+  command the reader may not send is rejected by the aggregate's `decide`, typed, and rolls back.
+- It costs one more ask per change at the followed key, debounced by `reloadDelay`. Follow a key
+  as narrow as the audience (an address, a team), not one every reader shares, where you can.
+- A client with `live: false` follows nothing.
+
+`fixtures/tasks.ts` is the whole pattern: an owner's feed, two id-only views, one query, one
+`canRead`.
+
 **Which row a command addresses, and which aggregate.** A call passes only the command's input;
 the package resolves the rest from the declarations, in this order:
 
