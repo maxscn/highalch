@@ -141,8 +141,12 @@ export class NoteAggregate extends Domain.Aggregate("Note", {
   reply: { TouchNote: () => ({ touched: true }) },
 }) {}
 
+const NotebookChangesBase: ReturnType<
+  typeof LowAlch.Feed<"NotebookChanges", typeof Schema.String>
+> = LowAlch.Feed("NotebookChanges", { scope: Schema.String });
+
 /** The feed: one stream per account, carrying both entities' rows. */
-export class NotebookChanges extends LowAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
+export class NotebookChanges extends NotebookChangesBase {}
 
 /** The first entity on the feed: notes, whose commands address `[account, NoteId]`. */
 export class NoteRows extends LowAlch.Rows("NoteRows", {
@@ -223,10 +227,18 @@ export class BookRows extends LowAlch.Rows("BookRows", {
 }) {}
 
 /** The feed's one writer: both entities, one line each. */
-export class NotebookWriter extends LowAlch.Projection("NotebookChanges", {
+const NotebookWriterBase: ReturnType<
+  typeof LowAlch.Projection<
+    "NotebookChanges",
+    typeof NotebookChanges,
+    readonly [typeof NoteRows, typeof BookRows]
+  >
+> = LowAlch.Projection("NotebookChanges", {
   feed: NotebookChanges,
   entities: [NoteRows, BookRows],
-}) {}
+});
+
+export class NotebookWriter extends NotebookWriterBase {}
 
 /** The store the queries answer from, written by the `NoteIndex` and `BookIndex` projections. */
 export class NoteStore extends Context.Service<

@@ -225,15 +225,15 @@ export type Meta<RowSchema extends Schema.Top, KeyField extends string, Target e
 };
 
 /** A source event or source value, which the projection hands to `on` untouched. */
-interface Payload {}
+export interface WriterPayload {}
 
 /** One input of the feed's projection, as an entity reads it. */
-type Input = {
-  readonly event: Payload;
-  readonly source: Payload;
+export type WriterInput = {
+  readonly event: WriterPayload;
+  readonly source: WriterPayload;
   /** A view source's state after the event (`null` when deleted); nothing for an aggregate. */
   readonly state: unknown;
-  readonly envelope: Payload;
+  readonly envelope: WriterPayload;
 };
 
 /** What the feed's projection runs for one entity. */
@@ -242,11 +242,11 @@ export type Writer = {
   /** Whether the entity maps the event `tag` of the source named `source`. */
   readonly handles: (source: string, tag: string) => boolean;
   /** The scope an input belongs to, or `undefined`. */
-  readonly scope: (source: string, input: Input) => string | undefined;
+  readonly scope: (source: string, input: WriterInput) => string | undefined;
   /** The feed entries an input produces, each naming the entity. */
   readonly entries: (
     source: string,
-    input: Input,
+    input: WriterInput,
   ) => Effect.Effect<ReadonlyArray<Aggregate.InstanceOf<Domain.Event.Any>>>;
 };
 
@@ -256,7 +256,8 @@ export const nameOf = (source: ViewModule.Source): string =>
     ? String(source.aggregateName)
     : String(source.viewName);
 
-const tagOf = (event: Payload) => (Predicate.hasProperty(event, "_tag") ? String(event._tag) : "");
+const tagOf = (event: WriterPayload) =>
+  Predicate.hasProperty(event, "_tag") ? String(event._tag) : "";
 
 const list = <A>(answer: A | ReadonlyArray<A> | undefined): ReadonlyArray<A> => {
   if (answer === undefined) return [];
@@ -293,7 +294,8 @@ export const Rows = <
   const on = definition.on as Readonly<
     Record<
       string,
-      ((event: Payload, source: Omit<Input, "event">) => Answer<RowSchema["Type"]>) | undefined
+      | ((event: WriterPayload, source: Omit<WriterInput, "event">) => Answer<RowSchema["Type"]>)
+      | undefined
     >
   >;
 
@@ -303,7 +305,7 @@ export const Rows = <
   const sources = new Set(definition.from.map(nameOf));
 
   /** The `cause` field of the entries an event produces: present only when the entity names one. */
-  const causeOf = (event: Payload): { readonly cause?: string } =>
+  const causeOf = (event: WriterPayload): { readonly cause?: string } =>
     Option.match(
       Option.flatMap(Option.fromUndefinedOr(definition.cause), (of) =>
         // SAFETY: the projection hands the entity's own source events, which `cause` is typed for.
@@ -478,7 +480,7 @@ export const Projection = <
 
         return [
           route,
-          (input: Input) => {
+          (input: WriterInput) => {
             if (!entity.writer.handles(source, tagOf(input.event))) return undefined;
 
             return entity.writer.scope(source, input);

@@ -20,4 +20,7 @@ export type {
   RowOf,
   RowsDefinition,
   ScopeSchema,
+  Writer,
+  WriterInput,
+  WriterPayload,
 } from "./rows.ts";

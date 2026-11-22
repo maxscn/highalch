@@ -20,6 +20,9 @@ export type {
   RowOf,
   RowsDefinition,
   ScopeSchema,
+  Writer,
+  WriterInput,
+  WriterPayload,
 } from "./server";
 
 export {
