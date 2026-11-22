@@ -21,6 +21,17 @@
  * - `@highalch/story` imports neither `@highalch/explore` nor `@highalch/stream`.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
  * - No module exports `then`: `import()` would treat the module as a thenable and hang.
+ *
+ * HighAlch Console (`console/`, private):
+ *
+ * - The libraries (`packages/*`, sources and tests) never import the Console.
+ * - The Console reaches HighAlch only through its packages' public entries: never a library's
+ *   files by a relative path, never `@lowalch/tanstack-db/internal`.
+ * - The Console's browser code (the web app's `src`, the domain it shares with the Worker, and
+ *   the client's browser-safe entries `Results` and `StoryReport`) imports no node-only entry:
+ *   no `node:` modules, `@effect/platform-node`, the story kit, explorations, the studio, test
+ *   runners, the CI client's node entries (`.`, `./testing`), the reporters or the Worker's
+ *   platform. The client's browser-safe entries import only effect.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -59,6 +70,38 @@ const screen = /^(?:happy-dom|react-dom|@effect\/atom-react|node:(?:fs|path|url|
 const takumi = /^(?:takumi-js|node:fs)(?:\/|$)/;
 const form = /^@tanstack\/(?:react-form|form-core)(?:\/|$)/;
 const effects = ["useEffect", "useLayoutEffect", "useInsertionEffect"];
+/** What the Console's browser code may not import: node, the test kit and the CI side. */
+const nodeOnly =
+  /^(?:node:|@effect\/platform-node(?:\/|$)|@highalch\/(?:story|explore|studio|console-fuzz|console-playwright|console-server)(?:\/|$)|@highalch\/console-client(?:\/testing)?$|@playwright\/|happy-dom(?:\/|$)|takumi-js(?:\/|$)|ws$|alchemy(?:\/|$)|@alchemy\.run\/(?:cloudflare|better-auth|stripe)(?:\/|$)|better-auth$)/;
+
+/** Every source file below `directory`, tests included (dependencies and outputs left out). */
+const sources = (directory: string): Array<string> =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+
+    if (entry.isDirectory())
+      return ["node_modules", "dist", "artifacts"].includes(entry.name) ||
+        entry.name.startsWith(".")
+        ? []
+        : sources(path);
+
+    return /\.(?:tsx?|mts|mjs)$/.test(path) ? [path] : [];
+  });
+
+/** The module specifiers a file imports or re-exports, with the line of each. */
+const imports = (file: string) => {
+  const text = readFileSync(file, "utf8");
+  const { program } = parseSync(file, text);
+  const lineOf = (offset: number) => text.slice(0, offset).split("\n").length;
+
+  // SAFETY: oxc's program body; only the fields of `Declaration` are read.
+  return (program.body as unknown as ReadonlyArray<Declaration>).flatMap((node) =>
+    ["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type) &&
+    node.source
+      ? [{ module: node.source.value, line: lineOf(node.start) }]
+      : [],
+  );
+};
 
 export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.url))) => {
   const problems: Array<Problem> = [];
@@ -263,6 +306,60 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         line: lineOf(text.search(/\bReact\.use(?:Layout|Insertion)?Effect\b/)),
         message: "HighAlch does not use React effects",
       });
+  }
+
+  const libraries = join(root, "packages");
+  const consoleRoot = join(root, "console");
+  const consoleWeb = join(consoleRoot, "web/src");
+  const consoleDomain = join(consoleRoot, "domain/src");
+  const browserEntries = ["Results.ts", "StoryReport.ts"].map((file) =>
+    join(consoleRoot, "client/src", file),
+  );
+
+  for (const file of sources(libraries))
+    for (const { module, line } of imports(file)) {
+      const resolved = module.startsWith(".") ? join(dirname(file), module) : "";
+
+      if (module.startsWith("@highalch/console-") || inside(resolved, consoleRoot))
+        problems.push({
+          file: relative(root, file),
+          line,
+          message: `${module}: the libraries never import HighAlch Console`,
+        });
+    }
+
+  for (const file of sources(consoleRoot)) {
+    const browser =
+      inside(file, consoleWeb) || inside(file, consoleDomain) || browserEntries.includes(file);
+    const browserEntry = browserEntries.includes(file);
+
+    for (const { module, line } of imports(file)) {
+      const resolved = module.startsWith(".") ? join(dirname(file), module) : "";
+      const report = (message: string) =>
+        problems.push({ file: relative(root, file), line, message: `${module}: ${message}` });
+
+      if (inside(resolved, libraries) || inside(resolved, join(root, "fixtures")))
+        report("the Console reaches HighAlch through its packages' entries, never their files");
+
+      if (/^@lowalch\/tanstack-db\/internal$/.test(module))
+        report("the Console does not use LowAlch's unstable internals");
+
+      if (browser && nodeOnly.test(module))
+        report(
+          "the Console's browser code (web app, domain, the client's Results and StoryReport) imports no node-only entry",
+        );
+
+      if (
+        browser &&
+        inside(file, consoleWeb) &&
+        (inside(resolved, join(consoleRoot, "web/dev")) ||
+          inside(resolved, join(consoleRoot, "web/tests")))
+      )
+        report("the web app does not import its development backend or its tests");
+
+      if (browserEntry && !/^effect(?:\/|$)/.test(module) && !module.startsWith("."))
+        report("the client's browser-safe entries (Results, StoryReport) import only effect");
+    }
   }
 
   return problems;

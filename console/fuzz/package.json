@@ -1,0 +1,51 @@
+{
+  "name": "@highalch/console-fuzz",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Seeded fuzzing over fast-check: JSON Schema arbitraries, edge tagging, action traces and capture adapters.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./effect": "./src/effect.ts",
+    "./react": "./src/react.ts",
+    "./playwright": "./src/playwright.ts",
+    "./reporter": "./src/reporter.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@highalch/console-client": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@highalch/console-domain": "workspace:*",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "fast-check": "catalog:",
+    "happy-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.50",
+    "fast-check": "^4.10.2",
+    "react": ">=19",
+    "react-dom": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "@playwright/test": {
+      "optional": true
+    }
+  }
+}

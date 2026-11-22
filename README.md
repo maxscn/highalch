@@ -194,6 +194,12 @@ that lead there.
 empty while it loads, a rejected rename that stays on screen, a rejected save that says "Saved",
 a form that forgets your draft), each with the broken variant next to the approved one.
 
+## HighAlch Console
+
+[`console/`](console/README.md) holds HighAlch Console, the app explorations stream to and CI
+uploads stories, Playwright runs and fuzzing results to. It is built on these packages (LowAlch
+rows for its reads, stories for its tests) and is private: none of its packages is published.
+
 ## Repository
 
 A Vite+ (`vp`) pnpm workspace:
@@ -204,16 +210,18 @@ packages/story         @highalch/story
 packages/examples      @highalch/examples (private): bugs a story catches, broken vs approved
 fixtures/              example Domains and views shared by both packages' tests (not published)
 scripts/               check-patterns.ts: the packages' import boundaries
+console/               HighAlch Console (private): domain, client, fuzz, playwright, server, web, example
 ```
 
-| Command                  | What                                                                      |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `vp install`             | Install                                                                   |
-| `vp run build`           | `vp pack` each package to `dist` (ESM, `.mjs` and `.d.mts`)               |
-| `vp run typecheck`       | `tsc` over both packages (sources and tests) and the fixtures and scripts |
-| `vp run check:patterns`  | Import boundaries: XState, screen and story confinement, no React effects |
-| `vp check`               | Format, lint and type-aware lint                                          |
-| `vp test --maxWorkers=2` | All tests, run from source (no build needed)                              |
+| Command                   | What                                                                      |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `vp install`              | Install                                                                   |
+| `vp run build`            | `vp pack` each package to `dist` (ESM, `.mjs` and `.d.mts`)               |
+| `vp run typecheck`        | `tsc` over both packages (sources and tests) and the fixtures and scripts |
+| `vp run check:patterns`   | Import boundaries: XState, screen and story confinement, no React effects |
+| `vp check`                | Format, lint and type-aware lint                                          |
+| `vp test --maxWorkers=2`  | All tests, run from source (no build needed)                              |
+| `vp run test:console-e2e` | The Console's end-to-end tests (a local Worker, Playwright, screens)      |
 
 Tests and type checks resolve `@lowalch/*` and `@highalch/*` to the packages' `src`: the aliases are in
 `vite.config.ts` and the matching `paths` are in `tsconfig.base.json`. Published packages resolve

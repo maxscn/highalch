@@ -1,0 +1,5 @@
+artifacts/
+.output/
+.tanstack/
+.seed/
+dev/runs/fixture/test-results/

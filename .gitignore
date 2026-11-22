@@ -11,3 +11,8 @@ artifacts
 !.vscode/extensions.json
 .idea
 .claude/worktrees/
+
+# HighAlch Console: offline reporter output, Playwright output, alchemy state
+.highalch/
+test-results/
+.alchemy/
