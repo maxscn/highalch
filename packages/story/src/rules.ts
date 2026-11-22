@@ -70,7 +70,7 @@ export const reader = <A>(name: string, read: (stage: Stage) => Promise<A>): Rea
 
 /**
  * A reader's value at the rule's previous check, for a rule about a transition:
- * `const was = yield* Explore.before(Db.rows(list))`. From the first check that asks for it, the
+ * `const was = yield* Story.before(Db.rows(list))`. From the first check that asks for it, the
  * reader is read at every check; at that first one, before is now. Readers are told apart by name.
  */
 export const before = <A>(read: Reader<A>): Yieldable<A> => ({
@@ -85,7 +85,7 @@ export type StepOf = { readonly _tag: string; readonly number: number; readonly 
 
 /**
  * What must hold, given the step that just ran: a boolean, or a generator that yields what it
- * reads (`yield* Db.rows(list)`, `yield* Explore.before(…)`) and returns whether it holds.
+ * reads (`yield* Db.rows(list)`, `yield* Story.before(…)`) and returns whether it holds.
  */
 export type Holds = (context: {
   readonly step: StepOf;
@@ -110,7 +110,7 @@ type Memory = {
  * A rule, declared as a sentence, what must hold, and when it is checked:
  *
  * ```ts
- * Explore.rule("a rejected rename keeps what you typed", function* () {
+ * Story.rule("a rejected rename keeps what you typed", function* () {
  *   const commands = yield* Db.commands();
  *   if (commands.at(-1)?.outcome !== "Rejected") return true;
  *

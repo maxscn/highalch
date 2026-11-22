@@ -10,12 +10,14 @@ This repository holds two npm scopes:
   what a client shows and how its commands settle. It can also screenshot a mounted component
   after every step without a browser.
 
-| Package                                                  | What                                                                                                                                                                                                                  |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@lowalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal`                          |
-| [`@highalch/story`](packages/story/README.md)            | Stories: the runner and the Domain's steps; `./tanstack-db` (`Db`), `./lowalch` (`LowAlchDb`), `./xstate` (machine steps, `explore`), `./screen` (screenshots and layout) and `./takumi` (takumi's frames and layout) |
+| Package                                                  | What                                                                                                                                                                                                              |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@lowalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal`                      |
+| [`@highalch/story`](packages/story/README.md)            | Stories: the runner, rules and the Domain's steps; `./tanstack-db` (`Db`), `./lowalch` (`LowAlchDb`), `./xstate` (machine steps), `./screen` (screenshots and layout) and `./takumi` (takumi's frames and layout) |
+| [`@highalch/explore`](packages/explore/README.md)        | Explorations: every sequence of what can happen, deterministically, shrunk and replayed, sharded across processes; `./xstate` (`explore`: stories generated from a model)                                         |
+| [`@highalch/stream`](packages/stream/README.md)          | The stream explorations send to an app while they run: the protocol's schemas and the client that sends it, with its auth                                                                                         |
 
-Both packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
+The packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
 `@effect/atom-react` are optional peers, needed only by the entries that use them.
 
@@ -219,15 +221,15 @@ through their `exports`, which point at `dist`. `@highalch/story` builds against
 
 ## Releasing
 
-Releases use [Changesets](https://github.com/changesets/changesets). `@lowalch/tanstack-db` and
-`@highalch/story` always share a version.
+Releases use [Changesets](https://github.com/changesets/changesets). `@lowalch/tanstack-db`,
+`@highalch/story`, `@highalch/explore` and `@highalch/stream` always share a version.
 
 1. With a change that should reach npm, run `vp run changeset`, choose the bump and write one
    line for the changelog. Commit the file it adds under `.changeset/`.
 2. Merging to `main` opens or updates a "Version Packages" pull request with the new versions and
    changelogs.
 3. Merging that pull request packs the new versions and stops: the `publish` job waits in the
-   `npm` environment until its reviewer approves it in the Actions tab. Approval publishes both
+   `npm` environment until its reviewer approves it in the Actions tab. Approval publishes the
    packages through npm trusted publishing and tags the release.
 
 For a prerelease line, run `vp exec changeset pre enter next` before step 1 and

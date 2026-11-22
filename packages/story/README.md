@@ -10,12 +10,16 @@ mounted React component without a browser.
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `@highalch/story`               | The story runner, the Domain's steps (history, other clients, transport faults, time)                              |
 | `@highalch/story/tanstack-db`   | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)                      |
-| `@highalch/story/tanstack-form` | `Form`: type into and submit the app's own forms, readers, `Form.typing` for explorations                          |
+| `@highalch/story/tanstack-form` | `Form`: type into and submit the app's own forms, readers, `Form.typing` (a source for explorations)               |
 | `@highalch/story/vite`          | `highalch()`: the Vite plugin through which stories find the forms the app mounts                                  |
 | `@highalch/story/lowalch`       | `LowAlchDb`: LowAlch clients for `Db` steps, `reload(Rows)`, feed entries, feed rules, view helpers                |
-| `@highalch/story/xstate`        | Machine steps and generated stories (`explore`) for the same runner; needs `xstate`                                |
+| `@highalch/story/xstate`        | Machine steps for the same runner; needs `xstate`                                                                  |
 | `@highalch/story/screen`        | Screen steps: a mounted component, its frames vs reviewed baselines, its layout for rules; needs happy-dom         |
 | `@highalch/story/takumi`        | `Takumi.frames()` and `Takumi.layout()`: takumi's WASM renderer as a screen's frames and layout; needs `takumi-js` |
+
+Explorations (every sequence of what can happen, checked against the same rules) are
+[`@highalch/explore`](../explore/README.md); streaming them to an app is
+[`@highalch/stream`](../stream/README.md).
 
 Peer dependencies: `effect`, `@alchemy.run/domain`, `@tanstack/db` and `react`; optional
 `@lowalch/tanstack-db` (for `/lowalch` and `/xstate`), `xstate` and `@xstate/effect` (for
@@ -36,7 +40,7 @@ commands it asked for), and lists the steps (✓ passed, ✗ failed, blank not r
 import * as Story from "@highalch/story"; // the runner and the Domain's steps; never imports XState
 import { Db } from "@highalch/story/tanstack-db"; // data steps: what a client shows and its commands
 import { LowAlchDb } from "@highalch/story/lowalch"; // LowAlch clients for the data steps
-import { explore, Machine } from "@highalch/story/xstate"; // machine steps and generated stories
+import { Machine } from "@highalch/story/xstate"; // machine steps
 import { invoke } from "@lowalch/tanstack-db/xstate"; // production: how a machine invokes a command
 ```
 
@@ -228,20 +232,6 @@ is registered under in `setup({ actors })`. Plain XState logic works the same on
 the invoked command runs on the client the `Provider` registered; for a running machine in a story
 the `Runner` service the story provides runs it on the story's client.
 
-## Generated stories
-
-`explore` runs a model: a small XState machine models what can happen to an entity (its events,
-guarded by what it tracks); `steps(event, index)` maps each event to story steps, data steps or
-machine steps alike (an `EDIT` can be a running editor's `Machine.when(Edit)` and
-`Machine.when(Save)`); `explore` enumerates paths with XState's own graph utilities
-(`xstate/graph`'s `getShortestPaths` and `getSimplePaths`), keeps the longest of each prefix
-(every step is checked, so prefixes are), at most `maxLength` events and `maxPaths` paths, in a
-deterministic order, and runs each as a fresh story on the given runner (`before`, the events,
-`after`) with the rules checked at their moments. A failure is shrunk to a shorter failing
-path and reported as its event sequence (`A generated story failed (path 3 of 64): EDIT → DROP →
-REMOTE`) with the story's report. The model must be finite (bound it with a counter) and must
-record what distinguishes interleavings, since paths are simple paths through its states.
-
 ## How time and the network behave
 
 Steps that let the world move (`given`, `remote`, `open`, `settled`, `rejected`, `advance`,
@@ -262,9 +252,7 @@ for its name, which failures quote word for word, a generator that yields what i
 whether it holds, and its settings last:
 
 ```ts
-import { Explore } from "@highalch/story";
-
-const listMatchesEditor = Explore.rule(
+const listMatchesEditor = Story.rule(
   "the list matches the editor",
   function* () {
     const rows = yield* Db.rows(list);
@@ -275,7 +263,7 @@ const listMatchesEditor = Explore.rule(
   { at: "rest" }, // "step" (default) | "rest" | "end"
 );
 
-const rejectionLeavesNothingPending = Explore.rule(
+const rejectionLeavesNothingPending = Story.rule(
   "a rejection leaves nothing pending",
   function* ({ step }) {
     if (step._tag !== "Rejected") return true; // reads nothing on any other step
@@ -286,11 +274,11 @@ const rejectionLeavesNothingPending = Explore.rule(
   },
 );
 
-const titleOnlyChangesOnWrites = Explore.rule(
+const titleOnlyChangesOnWrites = Story.rule(
   "a title changes only when something writes it",
   function* ({ step }) {
     const now = yield* Db.rows(list);
-    const was = yield* Explore.before(Db.rows(list)); // its value at the rule's previous check
+    const was = yield* Story.before(Db.rows(list)); // its value at the rule's previous check
 
     return (
       now.get("n1")?.title === was.get("n1")?.title ||
@@ -311,8 +299,8 @@ story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPendi
   reads nothing after it, so a costly read (a layout) happens only when the rule needs it.
 - It is given `step`, the step that just ran: its `_tag` (the verb of its label, such as `When`,
   `Rejected`, `Remote`, `Send`), number and label. It may return a boolean without yielding:
-  `Explore.rule("…", ({ step }) => step._tag !== "Remote")`.
-- `yield* Explore.before(reader)` is the reader's value at the rule's previous check, for a rule
+  `Story.rule("…", ({ step }) => step._tag !== "Remote")`.
+- `yield* Story.before(reader)` is the reader's value at the rule's previous check, for a rule
   about a transition. From the first check that asks for it the reader is read at every check; at
   that first one, before is now. Readers are told apart by their name.
 - The settings come last and are optional: `{ at }` (default `"step"`).
@@ -320,106 +308,6 @@ story.with({ rules: [...Db.rules, listMatchesEditor, rejectionLeavesNothingPendi
   read it made, in order, by the reader's name:
   `After step 3 (when …), "the title stays Ada" does not hold / it read rows NoteRows/…: {…}`.
 - An adapter's own reader is `reader(name, (stage) => …)` from `@highalch/story`.
-
-**Exploring.** `Explore.run` tries what can happen instead of one hand-written order. It is a test,
-not a fuzzer: every run tries the same sequences in the same order, so it passes or fails the same
-way every time. Finding new cases is a separate, explicit mode (`discover`), and what it finds is
-kept so every later run replays it.
-
-```ts
-const edit = Explore.source("edit", {
-  values: ["Ada 2", "locked"],
-  step: (title: string) => Machine.when({ type: "Edit", title }),
-});
-const save = Explore.source("save", { step: () => Machine.when({ type: "Save" }) });
-const settle = Explore.source("settle", { step: () => Story.settle() });
-
-const explored = await Explore.run({
-  name: "rename editor",
-  story,
-  setup: [Story.given(n1, new NoteCreated({ note: ada })), Db.open(list), Machine.start(editor)],
-  sources: [edit, save, settle],
-  rules: [...Db.rules, savedMeansCommitted],
-  depth: 3, // checked: every sequence of up to 3 moves
-  sample: { count: 50, length: 12, seed: 1 }, // sampled: longer walks from a fixed seed
-  corpus: new URL("./explore/", import.meta.url), // failing sequences found before, committed
-  discover: false, // true (or { count, length, seed }) looks somewhere new: keep it out of CI
-});
-// explored.report:
-// Explore "rename editor":
-//   Checked: every one of the 84 sequence(s) of up to 3 move(s)
-//   Sampled: 50 walk(s) (seed 1)
-//   Corpus: 1 sequence(s) found before
-//   Rules: "nothing is pending at rest" judged … time(s); …
-```
-
-- **What a run covers, in order:** the corpus's sequences, then the **checked** sequences (every
-  sequence of up to `depth` moves, shortest first, within `budget`), then the **sampled** walks
-  (from `sample.seed`, 1 by default). All of it is the same on every run. Each sequence is a fresh
-  story after `setup`, on the story's manual clock: an exploration refuses `clock: "real"`, where
-  timing would decide what happens.
-- **Discovery** (`discover: true`, or `{ count, length, seed }`) adds walks from a fresh seed, which
-  the report and any failure print. A failing sequence it finds is added to the corpus file
-  (`<corpus>/<name>.explore.txt`, one sequence per line), so the deterministic runs replay it from
-  then on. Pass the printed seed back (`discover: { count, seed }`) to rerun a discovery. Turn it on
-  locally or in a scheduled job, not in the tests every change runs.
-- **A failure must reproduce.** A failing sequence is shrunk to the shortest that fails the same
-  way, then replayed twice more; if a replay passes or fails differently, the run throws
-  `ExploreFlaky` with both outcomes: the app or the kit is not deterministic there, and that is
-  reported, never retried away. Only a world that "did not settle" (a timing limit, not a rule) is
-  tried once more before it counts.
-- **No silent passes.** A run that checked less than it says throws `ExploreIncomplete`: checked
-  sequences stopped at the budget, or a rule no sequence ever judged. `allow: { truncated: true,
-  unjudged: ["…"] }` accepts them. The run returns its coverage (`checked`, `sampled`, `corpus`,
-  `discovered`, how often each rule was judged, and `report`).
-- While exploring nothing is captured: no frames are painted and no trace is kept (`capture: "off"`).
-  The confirmed failure is replayed once with everything captured: a text trace
-  (`<artifacts>/<name>/trace.txt`, default `artifacts/explore`) and the screens' frames, recorded
-  without comparing. It throws an `ExploreFailure`: the broken rule, where the sequence came from
-  (corpus, checked, sampled or discovered, with its seed), the moves (`edit.step("locked")`,
-  `save.step()`, `settle.step()`), the failure's detail, the sequence as a story to paste into a
-  test, and the coverage so far.
-- **Shards.** `shard: { index: 2, total: 4 }` (or `HIGHALCH_SHARD=2/4`) runs every 4th sequence,
-  starting with the 2nd. Every shard numbers the sequences the same way, so four CI jobs (or four
-  local processes) cover them all once. A shard leaves "every rule was judged" to the shards
-  together, and its report says what it ran.
-- **Streaming.** With `HIGHALCH_STREAM_URL` set, each exploration streams as it runs: the
-  exploration (its sequences, numbered across shards), every attempt of a sequence (`explore`,
-  then `shrink`, `confirm` and `replay` for a failure), each step with the frame its screen
-  showed, and how it ended. Every shard of a CI run streams to the same run, so an app can show
-  one exploration from all its shards as one grid of tiles. Tests change nothing.
-
-  ```yaml
-  strategy:
-    matrix:
-      shard: [1, 2, 3, 4]
-  steps:
-    - run: vp test
-      env:
-        HIGHALCH_SHARD: ${{ matrix.shard }}/4
-        HIGHALCH_STREAM_URL: https://app.example/stream
-        HIGHALCH_STREAM_TOKEN: ${{ secrets.HIGHALCH_STREAM_TOKEN }}
-  ```
-
-  - **Auth.** The ingest token (one project's, write-only) is sent once, to open a session; the
-    session's own short-lived token carries the events and frames. The kit removes the ingest
-    token from the environment once read, sends tokens only in the `Authorization` header, only
-    over HTTPS (plain HTTP only to `localhost`), never follows a redirect, and never prints them.
-    Without a stored secret, `HIGHALCH_STREAM_AUTH=github-oidc` sends the job's GitHub OIDC token
-    instead (the job needs `permissions: id-token: write`), for the app to verify. Pull requests
-    from forks get no secrets, so they stream nothing.
-  - **Frames.** Streaming paints a frame after every step (`HIGHALCH_STREAM_FRAMES=every`, the
-    default), which slows a run down; `replay` sends only the failure's replay, `none` none. Each
-    frame is sent once, named by its SHA-256; frames are dropped (the step is sent without one)
-    while more than 32 MB are in flight.
-  - **Never a failure.** A stream that fails (a refused token, an app that is down) turns itself
-    off with one warning; the tests run on.
-  - The receiving side, its endpoints and the event schemas to decode with are in
-    `@highalch/story/stream` (`Open`, `Opened`, `Envelope`, `Event`, …).
-
-- Values sampled from a form's schema (`Form.typing`) are seeded by the form's and the field's
-  names, so adding a field changes no other field's values. Upgrading Effect may change them; the
-  corpus keeps what was found.
 - `Db.commands()` reads the commands the clients ran (label, who ran them, how they ended), for
   rules about outcomes: "an editor says Saved only after its save committed".
 
@@ -609,7 +497,6 @@ form control scrolls its own text). The screen itself scrolls down, so only what
 sides counts there.
 
 ```tsx
-import { Explore } from "@highalch/story";
 import { Screen } from "@highalch/story/screen";
 import { Takumi } from "@highalch/story/takumi";
 
@@ -618,7 +505,7 @@ const Card = Screen.make({ css, width: 360, height: 240 }).pipe(
   Takumi.layout(), // the same engine as the frames: a rule judges what they show
 );
 
-const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+const fits = Story.rule("nothing on screen spills out of its box", function* () {
   const layout = yield* Card.layout(); // undefined until the screen renders
 
   return Screen.overflowing(layout).length === 0;

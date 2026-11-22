@@ -9,7 +9,7 @@
  *
  * Form.when(renameForm, "title", "Ada 2"), Form.submit(renameForm),
  * Form.then(renameForm, { values: { title: "Ada 2" }, isSubmitting: false }),
- * Explore.run({ …, sources: [Form.typing(renameForm, { fields: ["title"] })] })
+ * Explore.run({ …, sources: [Form.typing(renameForm, { fields: ["title"] })] }) // @highalch/explore
  * ```
  */
 import { all, state, submit, thenIs, typing, when, where } from "./form";

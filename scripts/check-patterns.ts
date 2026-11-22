@@ -14,6 +14,10 @@
  * - Neither reaches an XState, screen or takumi entry from outside it (type-only imports are
  *   erased); a painter entry (`takumi`) may reach the screen entry it paints for.
  * - `@lowalch/tanstack-db` never imports the story kit.
+ * - `@highalch/stream` imports only effect: the console decodes with it, without the test kit.
+ * - `@highalch/explore` imports effect, `@highalch/story`'s public entries, `@highalch/stream`
+ *   and the node files keeping its corpus; XState only in its `xstate` entry.
+ * - `@highalch/story` imports neither `@highalch/explore` nor `@highalch/stream`.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
  * - No module exports `then`: `import()` would treat the module as a thenable and hang.
  */
@@ -59,8 +63,54 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
   const problems: Array<Problem> = [];
   const db = join(root, "packages/tanstack-db/src");
   const story = join(root, "packages/story/src");
+  const stream = join(root, "packages/stream/src");
+  const explore = join(root, "packages/explore/src");
   const inside = (file: string, directory: string) =>
     file === directory || file.startsWith(`${directory}/`);
+
+  for (const file of [...files(stream), ...files(explore)]) {
+    const text = readFileSync(file, "utf8");
+    const { program } = parseSync(file, text);
+    const lineOf = (offset: number) => text.slice(0, offset).split("\n").length;
+    const inStream = inside(file, stream);
+    const exploreXstate = inside(file, join(explore, "xstate"));
+
+    // SAFETY: oxc's program body; only the fields of `Declaration` are read.
+    for (const node of program.body as unknown as ReadonlyArray<Declaration>) {
+      if (
+        !["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(
+          node.type,
+        ) ||
+        !node.source
+      )
+        continue;
+
+      const module = node.source.value;
+      const resolved = module.startsWith(".") ? join(dirname(file), module) : "";
+      const effect = /^effect(?:\/|$)/.test(module);
+
+      if (inStream && !effect && !inside(resolved, stream))
+        problems.push({
+          file: relative(root, file),
+          line: lineOf(node.start),
+          message: `${module}: @highalch/stream imports only effect, so the console can decode with it without the test kit`,
+        });
+
+      if (
+        !inStream &&
+        !effect &&
+        !/^@highalch\/(?:story|stream)$/.test(module) &&
+        !/^node:(?:fs\/promises|path|url)$/.test(module) &&
+        !(exploreXstate && xstate.test(module)) &&
+        !inside(resolved, explore)
+      )
+        problems.push({
+          file: relative(root, file),
+          line: lineOf(node.start),
+          message: `${module}: @highalch/explore imports effect, @highalch/story, @highalch/stream and node files (XState only in its xstate entry)`,
+        });
+    }
+  }
 
   for (const file of [...files(db), ...files(story)]) {
     const text = readFileSync(file, "utf8");
@@ -161,6 +211,9 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
           node,
           `${module}: @highalch/story/tanstack-db works on plain TanStack DB; LowAlch lives in @highalch/story/lowalch`,
         );
+
+      if (!inDb && /^@highalch\/(?:explore|stream)(?:\/|$)/.test(module))
+        report(node, `${module}: @highalch/story knows neither explorations nor the stream`);
 
       if (inDb && (/^@highalch\/story(?:\/|$)/.test(module) || inside(resolved, story)))
         report(node, "@lowalch/tanstack-db never imports the story kit");

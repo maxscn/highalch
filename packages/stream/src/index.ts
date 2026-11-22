@@ -7,7 +7,7 @@
  * receives with these schemas:
  *
  * ```ts
- * import { Envelope, Open } from "@highalch/story/stream";
+ * import { Envelope, Open } from "@highalch/stream";
  * import { Schema } from "effect";
  *
  * const open = Schema.decodeUnknownSync(Open)(await request.json());
@@ -34,5 +34,6 @@ export {
   Started,
   version,
 } from "./protocol";
-export { checkedUrl, connect, fromEnv, shardOf } from "./sink";
-export type { Auth, Frames, Settings, Sink } from "./sink";
+export { checkedUrl, connect, fromEnv, shardOf, streamed } from "./client";
+
+export type { Auth, Frames, Settings, Sink } from "./client";

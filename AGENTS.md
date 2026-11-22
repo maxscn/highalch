@@ -32,7 +32,9 @@ parallel, and start no dev servers.
   Domain primitives for other infrastructure; HighAlch (`@highalch/*`) verifies apps built on
   them. `@lowalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
   `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./lowalch`, `./tanstack-form`,
-  `./xstate`, `./screen`, `./takumi`, `./stream`, `./vite`, and the internal `./react-form`). Shared
+  `./xstate`, `./screen`, `./takumi`, `./vite`, and the internal `./react-form`);
+  `@highalch/explore` explores stories (`.`, `./xstate`), and `@highalch/stream` streams them to
+  an app (the protocol and its client; it imports only effect). Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy
@@ -75,7 +77,8 @@ parallel, and start no dev servers.
   machines over it, write them as stories: `Story.make(LowAlchDb.memory(...))` hosts the Domain in
   memory with real clients. Domain steps (`Story.given`, `Story.remote`, the transport's faults), data steps
   (`Db.when`, `Db.then`, `Db.settled`, `Db.rejected`, ...) and machine steps (`Machine.given` stepped purely, `Machine.start` running) compose in one
-  story. `explore` generates interleavings checked against `Db.rules`.
+  story, with rules (`Story.rule`) checked at their moments. `@highalch/explore` (`Explore.run`)
+  tries every sequence of what can happen, checked against the same rules.
 - `packages/examples` (`@highalch/examples`, private) holds bugs a story catches: each a broken
   and an approved variant of a view, machine or form, one story run against both, both variants'
   frames as reviewed baselines (`packages/examples/tests/baselines/takumi/`). Other tests import

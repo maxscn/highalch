@@ -1,7 +1,7 @@
 import type { AnyFormApi, AnyFormState } from "@tanstack/react-form";
 import { Effect, Option, Predicate, Schema } from "effect";
 import * as Arbitrary from "effect/Arbitrary";
-import type { AnySource } from "../explore";
+import type { AnySource } from "../sources";
 import { reader, type Reader } from "../rules";
 import { Mismatch, type Stage } from "../stage";
 import { partial, staged, type Step } from "../steps";

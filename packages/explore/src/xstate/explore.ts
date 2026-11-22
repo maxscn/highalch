@@ -1,9 +1,14 @@
 import { Option } from "effect";
 import type { AnyStateMachine, EventFromLogic } from "xstate";
 import { getShortestPaths, getSimplePaths } from "xstate/graph";
-import type { Rule } from "../rules";
-import { StoryFailure, type Story } from "../run";
-import { flatten, type Step, type Steps } from "../steps";
+import {
+  flatten,
+  StoryFailure,
+  type Rule,
+  type Runner as Story,
+  type Step,
+  type Steps,
+} from "@highalch/story";
 
 /** One path through a model: its events, in order. */
 export type Path<E> = ReadonlyArray<E>;

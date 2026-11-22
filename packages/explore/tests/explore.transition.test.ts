@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
-import { Explore, ExploreFailure, ExploreFlaky, ExploreIncomplete } from "@highalch/story";
+import { Explore, ExploreFailure, ExploreFlaky, ExploreIncomplete } from "@highalch/explore";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
@@ -46,7 +46,7 @@ const remote = Explore.source("remote", {
 });
 
 /** The rule the broken editor breaks: it says Saved after its save was rejected. */
-const savedMeansCommitted = Explore.rule(
+const savedMeansCommitted = Story.rule(
   "an editor says Saved only after its save committed",
   function* () {
     const editor = yield* Machine.snapshot();
@@ -183,7 +183,7 @@ describe("f(exploration) → useful, not random", () => {
   }, 300_000);
 
   it("f(rule never judged, budget hit) → ExploreIncomplete, unless allowed", async () => {
-    const neverAtEnd = Explore.rule(
+    const neverAtEnd = Story.rule(
       "nothing is ever deleted",
       function* () {
         yield* Db.rows(list);

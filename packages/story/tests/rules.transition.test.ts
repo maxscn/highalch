@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
-import { Explore, reader } from "@highalch/story";
+import { reader } from "@highalch/story";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
@@ -33,11 +33,11 @@ const list = notes.list({ account: "acc-1" });
  * A transition rule: it reads the step that just ran and the list before it. A title changes only
  * on a step that writes or settles a write.
  */
-const titlesChangeOnWrites = Explore.rule(
+const titlesChangeOnWrites = Story.rule(
   "a title changes only when something writes it",
   function* ({ step }) {
     const now = yield* Db.rows(list);
-    const was = yield* Explore.before(Db.rows(list));
+    const was = yield* Story.before(Db.rows(list));
 
     return (
       now.get("n1")?.title === was.get("n1")?.title ||
@@ -47,7 +47,7 @@ const titlesChangeOnWrites = Explore.rule(
 );
 
 /** A transition rule on the step alone: a rejection leaves nothing pending. */
-const rejectionLeavesNothingPending = Explore.rule(
+const rejectionLeavesNothingPending = Story.rule(
   "a rejection leaves nothing pending",
   function* ({ step }) {
     // Read only after a rejection: on any other step the rule holds without reading.
@@ -60,7 +60,7 @@ const rejectionLeavesNothingPending = Explore.rule(
 );
 
 /** A rest rule: only judged when nothing is in flight. */
-const nothingSavingAtRest = Explore.rule(
+const nothingSavingAtRest = Story.rule(
   "no title is saving at rest",
   function* () {
     const now = yield* Db.rows(list);
@@ -71,7 +71,7 @@ const nothingSavingAtRest = Explore.rule(
 );
 
 /** An end rule: the story ran its course, its replies arrived and its timers fired. */
-const everySaveEnds = Explore.rule(
+const everySaveEnds = Story.rule(
   "every save ends",
   function* () {
     const machine = yield* Machine.snapshot();
@@ -111,7 +111,7 @@ describe("f(story, rules) → each rule checked at its moment", () => {
   });
 
   it("f(a rule that breaks) → the failure names it by its sentence and shows what it read", async () => {
-    const titleIsAda = Explore.rule("the title stays Ada", function* () {
+    const titleIsAda = Story.rule("the title stays Ada", function* () {
       const now = yield* Db.rows(list);
 
       return [undefined, "Ada"].includes(now.get("n1")?.title);
@@ -162,7 +162,7 @@ describe("f(rule yielding its reads) → only what it reached is read, by name",
   it("f(a branch that returns first) → the reader after it is never read", () =>
     story.with({
       rules: [
-        Explore.rule("reads only on a rejection", function* ({ step }) {
+        Story.rule("reads only on a rejection", function* ({ step }) {
           if (step._tag !== "Rejected") return true;
 
           return (yield* untouchable) === "never";
@@ -170,10 +170,10 @@ describe("f(rule yielding its reads) → only what it reached is read, by name",
       ],
     })(Story.given(n1, new NoteCreated({ note: ada })), Db.open(list)));
 
-  it("f(a title that changes, Explore.before) → the failure shows the read and its value before", async () => {
-    const titleNeverChanges = Explore.rule("a title, once shown, never changes", function* () {
+  it("f(a title that changes, Story.before) → the failure shows the read and its value before", async () => {
+    const titleNeverChanges = Story.rule("a title, once shown, never changes", function* () {
       const now = yield* Db.rows(list);
-      const was = yield* Explore.before(Db.rows(list));
+      const was = yield* Story.before(Db.rows(list));
 
       return was.get("n1") === undefined || now.get("n1")?.title === was.get("n1")?.title;
     });

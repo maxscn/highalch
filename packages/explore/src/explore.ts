@@ -1,29 +1,18 @@
 import { Option, Predicate } from "effect";
+import {
+  flatten,
+  json,
+  StoryFailure,
+  type AnySource,
+  type Observer,
+  type Rule,
+  type Runner as Story,
+  type Source,
+  type Step,
+  type Steps,
+} from "@highalch/story";
+import { shardOf, streamed, type Kind, type Phase, type Shard, type Sink } from "@highalch/stream";
 import { pathOf, readText, slug, write, type Place } from "./files";
-import { before, rule, type Rule } from "./rules";
-import { StoryFailure, type Observer, type Story } from "./run";
-import type { Kind, Phase, Shard } from "./stream/protocol";
-import { shardOf, streamed, type Sink } from "./stream/sink";
-import { flatten, type Step, type Steps } from "./steps";
-import { json } from "./world";
-
-/**
- * Something that can happen in an exploration: a name, the values it is tried with, and the step
- * each value makes. `step(value)` makes the same step a story writes by hand, so a failing
- * sequence pastes as a story: `edit.step("locked")`.
- */
-export type Source<V = void> = {
-  readonly name: string;
-  readonly values: ReadonlyArray<V>;
-  readonly step: (value: V) => Steps;
-};
-
-/** Any source, whatever its values: what an exploration's `sources` hold. */
-export type AnySource = {
-  readonly name: string;
-  readonly values: ReadonlyArray<unknown>;
-  readonly step: (value: never) => Steps;
-};
 
 /** How `Explore.source` declares a source: its values (none: it takes no value) and its step. */
 export type Declared<V> = {
@@ -102,7 +91,7 @@ export type Exploration = {
    */
   readonly shard?: Shard;
   /**
-   * Where the exploration streams its sequences as they run (`@highalch/story/stream`): the
+   * Where the exploration streams its sequences as they run (`@highalch/stream`): the
    * process's stream from `HIGHALCH_STREAM_URL` by default, or none (`false`).
    */
   readonly stream?: Sink | false;
@@ -837,10 +826,7 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
 };
 
 /**
- * Rules and explorations: `Explore.rule(sentence, function* () { … }, { at })` declares what must
- * hold, reading what it yields (`yield* Db.rows(list)`; `yield* Explore.before(reader)` for its
- * value at the previous check), checked by stories (`story.with({ rules })`) and explorations
- * alike; `Explore.source` declares what can happen; `Explore.run` explores every sequence of it,
- * deterministically.
+ * Explorations: `Explore.source` declares what can happen; `Explore.run` explores every sequence
+ * of it, deterministically, checking the story's rules (`Story.rule`) at their moments.
  */
-export const Explore = { rule, before, source, run } as const;
+export const Explore = { source, run } as const;

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
-import { Explore } from "@highalch/story";
 import { Screen } from "@highalch/story/screen";
 import { Takumi } from "@highalch/story/takumi";
 import { Form } from "@highalch/story/tanstack-form";
@@ -122,7 +121,7 @@ describe("example: a long title runs off its card", () => {
   // Only this example's rule reads a layout, so only its screen has a layout engine.
   const Card = screen(OverflowingTitle.css, 240).pipe(Takumi.layout());
 
-  const fits = Explore.rule("nothing on screen spills out of its box", function* () {
+  const fits = Story.rule("nothing on screen spills out of its box", function* () {
     const layout = yield* Card.layout();
 
     return Screen.overflowing(layout).length === 0;

@@ -12,7 +12,6 @@ export default defineConfig({
       xstate: "src/xstate/index.ts",
       screen: "src/screen/index.ts",
       takumi: "src/takumi/index.ts",
-      stream: "src/stream/index.ts",
     },
     format: "esm",
     fixedExtension: true,
