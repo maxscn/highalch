@@ -56,24 +56,25 @@ const submit = Explore.source("submit", { step: () => Form.submit(renameForm) })
 
 const settle = Explore.source("settle", { step: () => Story.settle() });
 
-const explorationOf = (name: string, view: React.JSX.Element) => ({
-  name,
-  story,
-  setup: [exist(ada), Db.open(list), View.render(view)],
-  sources: [
-    Form.typing(renameForm, { fields: ["title"], values: { title: ["Ada 2", "locked"] } }),
-    submit,
-    settle,
-  ],
-  rules: [...Db.rules, keepsYourDraft],
-  depth: 3,
-  artifacts: new URL("../artifacts/explore/", import.meta.url),
-});
+/** A form's stories, and how they run. */
+const explorationOf = (name: string, view: React.JSX.Element) =>
+  [
+    Explore.stories(story.with({ name, rules: [...Db.rules, keepsYourDraft] }), {
+      setup: [exist(ada), Db.open(list), View.render(view)],
+      sources: [
+        Form.typing(renameForm, { fields: ["title"], values: { title: ["Ada 2", "locked"] } }),
+        submit,
+        settle,
+      ],
+      depth: 3,
+    }),
+    { artifacts: new URL("../artifacts/explore/", import.meta.url) },
+  ] as const;
 
 describe("f(Form.typing, rules) → explored", () => {
   it("f(approved form) → every sequence keeps the rules", async () => {
     const explored = await Explore.run(
-      explorationOf("approved form", <ApprovedRenameForm NoteId="n1" title="Ada" />),
+      ...explorationOf("approved form", <ApprovedRenameForm NoteId="n1" title="Ada" />),
     );
 
     expect(explored.checked).toEqual({ sequences: 4 + 16 + 64, depth: 3, complete: true });
@@ -81,7 +82,7 @@ describe("f(Form.typing, rules) → explored", () => {
 
   it("f(broken form) → the reset found, shrunk to type, submit, settle", async () => {
     const failure = await Explore.run(
-      explorationOf("broken form", <BrokenRenameForm NoteId="n1" title="Ada" />),
+      ...explorationOf("broken form", <BrokenRenameForm NoteId="n1" title="Ada" />),
     ).then(
       () => undefined,
       (error: ExploreFailure) => error,

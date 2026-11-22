@@ -2,7 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vite-plus/test";
 import * as Story from "@highalch/story";
-import { Explore, ExploreFailure, ExploreFlaky, ExploreIncomplete } from "@highalch/explore";
+import {
+  Explore,
+  ExploreFailure,
+  ExploreFlaky,
+  ExploreIncomplete,
+  type Generation,
+} from "@highalch/explore";
 import { LowAlchDb } from "@highalch/story/lowalch";
 import { Db } from "@highalch/story/tanstack-db";
 import { Machine } from "@highalch/story/xstate";
@@ -60,25 +66,60 @@ const savedMeansCommitted = Story.rule(
   { at: "rest" },
 );
 
-const explorationOf = (name: string, machine: typeof approvedEditor) => ({
-  name,
-  story,
-  setup: [
-    Story.given(n1, new NoteCreated({ note: ada })),
-    Db.open(list),
-    Machine.start(machine, { input: { NoteId: "n1" } }),
-  ],
-  sources: [edit, save, settle, remote],
-  rules: [...Db.rules, savedMeansCommitted],
-  depth: 3,
-  artifacts: new URL("../artifacts/explore/", import.meta.url),
+const artifacts = new URL("../artifacts/explore/", import.meta.url);
+
+/** An editor's stories: its runner (named, with the rules), setup, sources, up to 3 moves. */
+const storiesOf = (
+  name: string,
+  machine: typeof approvedEditor,
+  more: Partial<Generation> = {},
+  rules: ReadonlyArray<Story.Rule> = [...Db.rules, savedMeansCommitted],
+) =>
+  Explore.stories(story.with({ name, rules }), {
+    setup: [
+      Story.given(n1, new NoteCreated({ note: ada })),
+      Db.open(list),
+      Machine.start(machine, { input: { NoteId: "n1" } }),
+    ],
+    sources: [edit, save, settle, remote],
+    depth: 3,
+    ...more,
+  });
+
+describe("f(runner, sources) → stories, each a story of its own", () => {
+  it("f(approved editor) → a story per sequence of up to 3 moves, named by its moves, runnable alone", async () => {
+    const stories = storiesOf("approved editor", approvedEditor);
+    const third = stories.at(6);
+
+    // 5 moves: 5 + 25 + 125 stories, the shortest first.
+    expect(stories.size).toBe(155);
+    expect([...stories].map((each) => each.index)).toEqual([...Array(155).keys()]);
+    expect(third?.name).toBe('edit "Ada 2", edit "locked"');
+    expect(third?.moves).toEqual(['edit.step("Ada 2")', 'edit.step("locked")']);
+    expect(third?.origin).toEqual({ kind: "checked" });
+    expect(third?.code).toBe(
+      ["await story(", "  ...setup,", '  edit.step("Ada 2"),', '  edit.step("locked"),', ");"].join(
+        "\n",
+      ),
+    );
+    expect(third?.prompt()).toContain(
+      "Write a story an exploration generated as a hand-written story.",
+    );
+    expect(third?.prompt()).toMatch(
+      /made in packages\/explore\/tests\/explore\.transition\.test\.ts:\d+/,
+    );
+
+    // A generated story runs like a hand-written one, its rules checked.
+    await third?.();
+  }, 300_000);
 });
 
-describe("f(sources, rules) → every sequence explored, a broken rule shrunk and replayed", () => {
-  it("f(approved editor) → every sequence of up to 3 moves keeps the rules", async () => {
-    const explored = await Explore.run(explorationOf("approved editor", approvedEditor));
+describe("f(stories) → every one run, a broken rule shrunk and replayed", () => {
+  it("f(approved editor) → every story keeps the rules", async () => {
+    const explored = await Explore.run(storiesOf("approved editor", approvedEditor), {
+      artifacts,
+    });
 
-    // 5 moves: 5 + 25 + 125 sequences, all of them.
     expect(explored.checked).toEqual({ sequences: 155, depth: 3, complete: true });
     expect(explored.judged["an editor says Saved only after its save committed"]).toBeGreaterThan(
       0,
@@ -88,8 +129,10 @@ describe("f(sources, rules) → every sequence explored, a broken rule shrunk an
     );
   }, 300_000);
 
-  it("f(broken editor) → the shortest failing sequence, as a story, replayed with a trace", async () => {
-    const failure = await Explore.run(explorationOf("broken editor", brokenEditor)).then(
+  it("f(broken editor) → the shortest failing story: runnable, as code, and a prompt to pin it", async () => {
+    const failure = await Explore.run(storiesOf("broken editor", brokenEditor), {
+      artifacts,
+    }).then(
       () => undefined,
       (error: ExploreFailure) => error,
     );
@@ -100,6 +143,34 @@ describe("f(sources, rules) → every sequence explored, a broken rule shrunk an
       '"an editor says Saved only after its save committed" does not hold',
     );
     expect(failure?.message).toContain('    edit.step("locked"),');
+    expect(failure?.story.name).toBe('edit "locked", save, settle');
+
+    // The failing story, run alone, fails as the exploration's did.
+    const again = await failure?.story().then(
+      () => undefined,
+      (error: Error) => error,
+    );
+
+    expect(again?.message).toContain(
+      '"an editor says Saved only after its save committed" does not hold',
+    );
+
+    const prompt = failure?.prompt ?? "";
+
+    expect(prompt).toContain("Add a story that reproduces an exploration's failure");
+    expect(prompt).toMatch(/made in packages\/explore\/tests\/explore\.transition\.test\.ts:\d+/);
+    // The story to add, as the exploration's test writes it.
+    expect(prompt).toContain(
+      (failure?.code ?? "?")
+        .split("\n")
+        .map((line) => `  ${line}`)
+        .join("\n"),
+    );
+    expect(prompt).toContain(failure?.failure.reason ?? "?");
+    expect(prompt).toContain("packages/explore/artifacts/explore/broken-editor/trace.txt");
+    expect(readFileSync(failure?.trace.replace(/trace\.txt$/, "prompt.md") ?? "", "utf8")).toBe(
+      `${prompt}\n`,
+    );
 
     const trace = readFileSync(failure?.trace ?? "", "utf8");
 
@@ -109,11 +180,10 @@ describe("f(sources, rules) → every sequence explored, a broken rule shrunk an
   }, 300_000);
 
   it("f(sample) → walks from a fixed seed, reported with it", async () => {
-    const walked = await Explore.run({
-      ...explorationOf("walks", approvedEditor),
-      depth: 1,
-      sample: { count: 5, length: 6, seed: 7 },
-    });
+    const walked = await Explore.run(
+      storiesOf("walks", approvedEditor, { depth: 1, sample: { count: 5, length: 6, seed: 7 } }),
+      { artifacts },
+    );
 
     expect(walked.sampled).toEqual({ sequences: 5, seed: 7 });
     expect(walked.report).toContain("Sampled: 5 walk(s) (seed 7)");
@@ -127,15 +197,15 @@ describe("f(exploration) → useful, not random", () => {
 
     await rm(file, { force: true });
 
-    const discovering = {
-      ...explorationOf("broken editor discovered", brokenEditor),
-      depth: 1,
-      // A fixed seed so the test repeats; without one, each run would look somewhere new.
-      discover: { count: 200, length: 6, seed: 3 },
-      corpus,
-    };
-
-    const first = await Explore.run(discovering).then(
+    const first = await Explore.run(
+      storiesOf("broken editor discovered", brokenEditor, {
+        depth: 1,
+        // A fixed seed so the test repeats; without one, each run would look somewhere new.
+        discover: { count: 200, length: 6, seed: 3 },
+        corpus,
+      }),
+      { artifacts },
+    ).then(
       () => undefined,
       (error: ExploreFailure) => error,
     );
@@ -147,8 +217,12 @@ describe("f(exploration) → useful, not random", () => {
       /^\[\["edit","locked"\],\["save",null\],\["\w+",null\]\]\n$/,
     );
 
-    // Without discovering: deterministic, and the corpus sequence fails first.
-    const again = await Explore.run({ ...discovering, discover: false }).then(
+    // Without discovering: deterministic, and the corpus's story comes first.
+    const kept = storiesOf("broken editor discovered", brokenEditor, { depth: 1, corpus });
+
+    expect(kept.at(0)?.origin).toEqual({ kind: "corpus" });
+
+    const again = await Explore.run(kept, { artifacts }).then(
       () => undefined,
       (error: ExploreFailure) => error,
     );
@@ -164,16 +238,15 @@ describe("f(exploration) → useful, not random", () => {
         Story.step("flip a coin", async () => {
           calls += 1;
 
-          // Fails the first time only: the shrunk sequence's replays pass.
+          // Fails the first time only: the shrunk story's replays pass.
           if (calls === 1) throw new Error("heads");
         }),
     });
 
-    const failure = await Explore.run({
-      ...explorationOf("flaky", approvedEditor),
-      sources: [coin],
-      depth: 1,
-    }).then(
+    const failure = await Explore.run(
+      storiesOf("flaky", approvedEditor, { sources: [coin], depth: 1 }),
+      { artifacts },
+    ).then(
       () => undefined,
       (error: Error) => error,
     );
@@ -193,12 +266,13 @@ describe("f(exploration) → useful, not random", () => {
       { at: "end" },
     );
 
-    const incomplete = await Explore.run({
-      ...explorationOf("incomplete", approvedEditor),
-      rules: [savedMeansCommitted, neverAtEnd],
-      depth: 2,
-      budget: 6,
-    }).then(
+    const incomplete = await Explore.run(
+      storiesOf("incomplete", approvedEditor, { depth: 2, budget: 6 }, [
+        savedMeansCommitted,
+        neverAtEnd,
+      ]),
+      { artifacts },
+    ).then(
       () => undefined,
       (error: ExploreIncomplete) => error,
     );
@@ -206,25 +280,18 @@ describe("f(exploration) → useful, not random", () => {
     expect(incomplete).toBeInstanceOf(ExploreIncomplete);
     expect(incomplete?.message).toContain("stopped at the budget before 2 move(s)");
 
-    const allowed = await Explore.run({
-      ...explorationOf("incomplete allowed", approvedEditor),
-      depth: 2,
-      budget: 6,
-      allow: { truncated: true },
-    });
+    const allowed = await Explore.run(
+      storiesOf("incomplete allowed", approvedEditor, { depth: 2, budget: 6 }),
+      { artifacts, allow: { truncated: true } },
+    );
 
     expect(allowed.checked.complete).toBe(false);
   }, 300_000);
 
-  it("f(real clock) → refused: timing would decide what happens", async () => {
-    const refused = await Explore.run({
-      ...explorationOf("real clock", approvedEditor),
-      story: story.with({ clock: "real" }),
-    }).then(
-      () => undefined,
-      (error: Error) => error,
-    );
-
-    expect(refused?.message).toContain("needs the story's manual clock");
+  it("f(real clock, no name) → refused: timing would decide what happens; nothing names it", () => {
+    expect(() =>
+      Explore.stories(story.with({ name: "real clock", clock: "real" }), { sources: [edit] }),
+    ).toThrow("needs the story's manual clock");
+    expect(() => Explore.stories(story, { sources: [edit] })).toThrow("needs a named runner");
   });
 });

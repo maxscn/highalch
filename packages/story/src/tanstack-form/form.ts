@@ -350,5 +350,17 @@ export const typing = <F extends Declared>(form: F, options: Typing<F>): AnySour
     name: options.name ?? "typing",
     values: moves,
     step: (typed: Typed) => typeInto(form, typed),
+    // `title "Ada 2"`, and which instance when there are several.
+    label: (typed: Typed) => {
+      let value = JSON.stringify(typed.value) ?? String(typed.value);
+
+      if (value.length > 24) value = `${value.slice(0, 23)}…"`;
+
+      const shown = `${typed.field} ${value}`;
+
+      if ((options.instances ?? 1) > 1) return `${shown} (#${typed.instance + 1})`;
+
+      return shown;
+    },
   };
 };

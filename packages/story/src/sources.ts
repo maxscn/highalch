@@ -10,6 +10,8 @@ export type Source<V = void> = {
   readonly name: string;
   readonly values: ReadonlyArray<V>;
   readonly step: (value: V) => Steps;
+  /** A value as a story's name says it (`title "Ada 2"`); its JSON by default. */
+  readonly label?: (value: V) => string;
 };
 
 /** Any source, whatever its values: what an exploration's `sources` hold. */
@@ -17,4 +19,5 @@ export type AnySource = {
   readonly name: string;
   readonly values: ReadonlyArray<unknown>;
   readonly step: (value: never) => Steps;
+  readonly label?: (value: never) => string;
 };

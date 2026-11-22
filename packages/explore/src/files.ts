@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,3 +34,12 @@ export const readText = async (file: string) =>
     (text) => Option.some(text),
     () => Option.none<string>(),
   );
+
+/** A text file's content, read now, or `None` when there is none. */
+export const readTextSync = (file: string) => {
+  try {
+    return Option.some(readFileSync(file, "utf8"));
+  } catch {
+    return Option.none<string>();
+  }
+};

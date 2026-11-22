@@ -12,4 +12,13 @@
  */
 export { Explore, ExploreFailure, ExploreFlaky, ExploreIncomplete } from "./explore";
 
-export type { Declared, Exploration, Explored, Walks } from "./explore";
+export type {
+  Declared,
+  Explored,
+  Generated,
+  Generation,
+  Origin,
+  Running,
+  Stories,
+  Walks,
+} from "./explore";

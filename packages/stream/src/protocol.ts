@@ -131,14 +131,16 @@ export const Started = Schema.Struct({
 export type Started = typeof Started.Type;
 
 /**
- * A run of a sequence starts: an `attempt`, numbered in the session, of the sequence `sequence`
- * (its number in the grid), for a `phase`, with its moves as the story that replays them.
+ * A run of a generated story starts: an `attempt`, numbered in the session, of the story
+ * `sequence` (its number in the grid), for a `phase`, with its name and its moves as code.
  */
 export const Attempt = Schema.Struct({
   type: Schema.Literal("attempt"),
   exploration: Schema.String,
   attempt: Schema.Int,
   sequence: Schema.Int,
+  /** The story's name, from its moves: `edit "locked", save, settle`. */
+  name: Schema.String,
   kind: Kind,
   phase: Phase,
   moves: Schema.Array(Schema.String),
@@ -190,6 +192,8 @@ export const Finished = Schema.Struct({
       reason: Schema.String,
       detail: Schema.Array(Schema.String),
       story: Schema.String,
+      /** A prompt for a coding agent: pin the failure as a story, then fix the app. */
+      prompt: Schema.String,
     }),
   ),
   report: Schema.String,

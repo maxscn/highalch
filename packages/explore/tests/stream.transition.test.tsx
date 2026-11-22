@@ -129,20 +129,18 @@ const explorationOf = (
   view: React.JSX.Element,
   shard: Shard,
   sink: ReturnType<typeof connect>,
-) => ({
-  name,
-  story,
-  setup: [exist(ada), Db.open(list), Card.render(view)],
-  sources: [
-    Form.typing(titleForm, { fields: ["title"], values: { title: ["Ada 2", longest] } }),
-    Explore.source("submit", { step: () => Form.submit(titleForm) }),
-  ],
-  rules: [...Db.rules, fits],
-  depth: 2,
-  shard,
-  stream: sink,
-  artifacts: new URL("../artifacts/explore/", import.meta.url),
-});
+) =>
+  [
+    Explore.stories(story.with({ name, rules: [...Db.rules, fits] }), {
+      setup: [exist(ada), Db.open(list), Card.render(view)],
+      sources: [
+        Form.typing(titleForm, { fields: ["title"], values: { title: ["Ada 2", longest] } }),
+        Explore.source("submit", { step: () => Form.submit(titleForm) }),
+      ],
+      depth: 2,
+    }),
+    { shard, stream: sink, artifacts: new URL("../artifacts/explore/", import.meta.url) },
+  ] as const;
 
 const settingsOf = (url: string, shard: Shard, token: string): Settings => ({
   url,
@@ -171,7 +169,12 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
         const shard = { index, total: 2 };
         const sink = connect(settingsOf(app.url, shard, app.ingest));
         const explored = await Explore.run(
-          explorationOf("approved card", <ApprovedNoteCard NoteId="n1" title="Ada" />, shard, sink),
+          ...explorationOf(
+            "approved card",
+            <ApprovedNoteCard NoteId="n1" title="Ada" />,
+            shard,
+            sink,
+          ),
         );
 
         expect(explored.shard).toEqual(shard);
@@ -247,7 +250,7 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
       const shard = { index: 1, total: 1 };
       const sink = connect(settingsOf(app.url, shard, app.ingest));
       const failure = await Explore.run(
-        explorationOf("broken card", <BrokenNoteCard NoteId="n1" title="Ada" />, shard, sink),
+        ...explorationOf("broken card", <BrokenNoteCard NoteId="n1" title="Ada" />, shard, sink),
       ).then(
         () => undefined,
         (error: ExploreFailure) => error,
@@ -286,6 +289,11 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
       expect(finished?.failure?.sequence).toBe(failing?.sequence);
       expect(finished?.failure?.reason).toContain("nothing on screen spills out of its box");
       expect(finished?.failure?.story).toContain("submit.step(),");
+      // The console offers it to copy: a coding agent pins the failure as a story, then fixes it.
+      expect(finished?.failure?.prompt).toContain(
+        "Add a story that reproduces an exploration's failure",
+      );
+      expect(failing?.name).toBe('typing title "WWWWWWWWWWWWWWWWWWWWWW…", submit');
     } finally {
       await app.close();
     }
@@ -299,7 +307,7 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
       const shard = { index: 1, total: 4 };
       const sink = connect(settingsOf(app.url, shard, "hat_wrong"));
       const explored = await Explore.run(
-        explorationOf("refused card", <ApprovedNoteCard NoteId="n1" title="Ada" />, shard, sink),
+        ...explorationOf("refused card", <ApprovedNoteCard NoteId="n1" title="Ada" />, shard, sink),
       );
 
       expect(explored.ran).toBe(3);

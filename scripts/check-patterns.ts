@@ -16,7 +16,7 @@
  * - `@lowalch/tanstack-db` never imports the story kit.
  * - `@highalch/stream` imports only effect: the console decodes with it, without the test kit.
  * - `@highalch/explore` imports effect, `@highalch/story`'s public entries, `@highalch/stream`
- *   and the node files keeping its corpus; XState only in its `xstate` entry.
+ *   and the node files keeping its corpus (`node:fs`, `path`, `url`); XState only in its `xstate` entry.
  * - `@highalch/studio` (the relay on this machine) imports effect, `@highalch/stream`, `ws` and node.
  * - `@highalch/story` imports neither `@highalch/explore` nor `@highalch/stream`.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
@@ -116,7 +116,7 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         !inStudio &&
         !effect &&
         !/^@highalch\/(?:story|stream)$/.test(module) &&
-        !/^node:(?:fs\/promises|path|url)$/.test(module) &&
+        !/^node:(?:fs|fs\/promises|path|url)$/.test(module) &&
         !(exploreXstate && xstate.test(module)) &&
         !inside(resolved, explore)
       )

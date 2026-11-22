@@ -1,3 +1,5 @@
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Option, Predicate } from "effect";
 import {
   flatten,
@@ -12,12 +14,14 @@ import {
   type Steps,
 } from "@highalch/story";
 import { shardOf, streamed, type Kind, type Phase, type Shard, type Sink } from "@highalch/stream";
-import { pathOf, readText, slug, write, type Place } from "./files";
+import { pathOf, readText, readTextSync, slug, write, type Place } from "./files";
 
 /** How `Explore.source` declares a source: its values (none: it takes no value) and its step. */
 export type Declared<V> = {
   readonly values?: ReadonlyArray<V>;
   readonly step: (value: V) => Steps;
+  /** A value as a story's name says it (`"locked"`); its JSON, shortened, by default. */
+  readonly label?: (value: V) => string;
 };
 
 /** A source: `Explore.source("edit", { values: ["Ada 2", "locked"], step: (title) => … })`. */
@@ -26,6 +30,7 @@ export const source = <V = void>(name: string, declared: Declared<V>): Source<V>
   // SAFETY: a source without values takes none: it is tried once, with `undefined`.
   values: declared.values ?? [undefined as V],
   step: declared.step,
+  ...(declared.label !== undefined && { label: declared.label }),
 });
 
 /** These lines when `condition` holds; none otherwise. */
@@ -48,61 +53,107 @@ const codeOf = (move: Move) =>
 /** Random walks: how many, of up to how many moves. */
 export type Walks = { readonly count: number; readonly length?: number };
 
-/** What an exploration runs: the story, what can happen, the rules, and how far it looks. */
-export type Exploration = {
-  /** The name of the exploration: its corpus, replay and artifacts are named by it. */
-  readonly name: string;
-  /** The story runner each sequence runs on (a fresh world per sequence; its clock manual). */
-  readonly story: Story;
-  /** Steps before every sequence (history, a mounted screen, a running machine). */
+/** How `Explore.stories` makes an exploration's stories: what can happen, and how far it looks. */
+export type Generation = {
+  /** Steps before every story (history, a mounted screen, a running machine). */
   readonly setup?: Steps;
-  /** What can happen: every sequence is made of their moves. */
+  /** What can happen: every story is made of their moves. */
   readonly sources: ReadonlyArray<AnySource>;
-  /** Checked at their moments on every sequence. */
-  readonly rules: ReadonlyArray<Rule>;
-  /** Checked: every sequence of up to this many moves runs (default 2). */
+  /** Checked: every sequence of up to this many moves is a story (default 2). */
   readonly depth?: number;
-  /** At most this many checked sequences run, in their order (default 2 000). */
+  /** At most this many checked stories, in their order (default 2 000). */
   readonly budget?: number;
   /**
-   * Sampled: longer sequences picked at random from a fixed `seed` (default 1), the same on every
+   * Sampled: longer stories picked at random from a fixed `seed` (default 1), the same on every
    * run. Deterministic, like the checked ones.
    */
   readonly sample?: Walks & { readonly seed?: number };
   /**
    * Discovery: walks from a fresh seed on this run (printed in the report), to find cases the
-   * fixed sequences do not. Not repeatable by design: keep it out of CI (`discover: false`, the
-   * default). A failing sequence it finds is added to the corpus, so every later run replays it.
+   * fixed stories do not. Not repeatable by design: keep it out of CI (`discover: false`, the
+   * default). A failing story it finds is added to the corpus, so every later run replays it.
    * `seed` reruns a discovery run whose report printed it.
    */
   readonly discover?: boolean | (Walks & { readonly seed?: number });
   /**
-   * Where the corpus is kept: `<corpus>/<name>.explore.txt`, one failing sequence per line,
-   * committed with the tests. Every run replays it first.
+   * Where the corpus is kept: `<corpus>/<name>.explore.txt`, one failing story per line,
+   * committed with the tests. Its stories come first.
    */
   readonly corpus?: Place;
-  /** Where a failure's replay writes its trace and frames (default `artifacts/explore`). */
+};
+
+/** How `Explore.run` runs an exploration's stories. */
+export type Running = {
+  /** Where a failure's replay writes its trace, frames and prompt (default `artifacts/explore`). */
   readonly artifacts?: Place;
   /**
-   * Which shard of the exploration this process runs (`{ index: 2, total: 4 }`, the 2nd of 4;
-   * `HIGHALCH_SHARD=2/4` by default): every shard numbers the sequences the same way and runs
-   * every `total`-th, so shards on separate machines cover them all once. A shard leaves the
-   * check that every rule was judged to the shards together (the stream counts each shard's).
+   * Which shard runs here (`{ index: 2, total: 4 }`, the 2nd of 4; `HIGHALCH_SHARD=2/4` by
+   * default): every shard numbers the stories the same way and runs every `total`-th, so shards on
+   * separate machines run them all once. A shard leaves the check that every rule was judged to
+   * the shards together (the stream counts each shard's).
    */
   readonly shard?: Shard;
   /**
-   * Where the exploration streams its sequences as they run (`@highalch/stream`): the
-   * process's stream from `HIGHALCH_STREAM_URL` by default, or none (`false`).
+   * Where the run streams its stories as they run (`@highalch/stream`): the process's stream from
+   * `HIGHALCH_STREAM_URL` by default, or none (`false`).
    */
   readonly stream?: Sink | false;
   /** What a run may leave undone and still pass. */
   readonly allow?: {
-    /** Pass when the checked sequences stop at the budget before `depth`. */
+    /** Pass when the checked stories stop at the budget before `depth`. */
     readonly truncated?: boolean;
     /** Rules (by name) that may never be judged: a rule nothing reached otherwise fails. */
     readonly unjudged?: ReadonlyArray<string>;
   };
 };
+
+/** Where a story came from, as a failure names it. */
+export type Origin = {
+  readonly kind: Kind;
+  readonly seed?: number;
+};
+
+/**
+ * A story an exploration made: a hand-written story's equal. Call it to run it on the
+ * exploration's runner, its rules checked (its frames recorded, not compared: it has no reviewed
+ * baselines). `code` is the story to paste into a test; `prompt()` asks a coding agent to write it
+ * as one.
+ */
+export interface Generated {
+  (): Promise<void>;
+  /** Its moves, as a name: `edit "locked", save, settle`. */
+  readonly name: string;
+  /** Its number among the exploration's stories, across every shard. */
+  readonly index: number;
+  readonly origin: Origin;
+  /** Its moves as code: `edit.step("locked")`. */
+  readonly moves: ReadonlyArray<string>;
+  /** The setup's steps, then each move's. */
+  readonly steps: ReadonlyArray<Step>;
+  /** The story to paste into the exploration's test. */
+  readonly code: string;
+  /** A prompt for a coding agent: write this story as a hand-written one, with expectations. */
+  readonly prompt: () => string;
+}
+
+/**
+ * An exploration's stories, in the order they run: the corpus's, the checked ones, the sampled
+ * ones, then the discovered ones. Iterate them, take one (`at`), or run them all (`Explore.run`).
+ */
+export interface Stories extends Iterable<Generated> {
+  /** The exploration's name: its runner's (`story.with({ name })`). */
+  readonly name: string;
+  readonly size: number;
+  readonly at: (index: number) => Generated | undefined;
+}
+
+/** What an exploration is, inside: its stories and how it runs them. */
+type Exploration = Generation &
+  Running & {
+    readonly name: string;
+    readonly story: Story;
+    readonly rules: ReadonlyArray<Rule>;
+  };
 
 /** What an exploration covered. */
 export type Explored = {
@@ -252,6 +303,7 @@ const streaming = async <A>(
     exploration,
     attempt,
     sequence: tile.sequence,
+    name: nameOf(sequence),
     kind: tile.kind,
     phase: tile.phase,
     moves: sequence.map(codeOf),
@@ -372,14 +424,34 @@ const shrink = async (
   return best;
 };
 
-/** A failing sequence as a story to paste into a test. */
+/** A sequence as a story to paste into the exploration's test: its runner, its setup, the moves. */
 const pasteable = (sequence: ReadonlyArray<Move>) =>
-  [
-    "story.with({ rules })(",
-    "  ...setup,",
-    ...sequence.map((move) => `  ${codeOf(move)},`),
-    ");",
-  ].join("\n");
+  ["await story(", "  ...setup,", ...sequence.map((move) => `  ${codeOf(move)},`), ");"].join("\n");
+
+/** A move's value, short enough for a name. */
+const brief = (value: unknown) => {
+  const text = json(value);
+
+  if (text.length <= 32) return text;
+
+  return `${text.slice(0, 31)}…`;
+};
+
+/** A sequence as a story's name: `edit "locked", save, settle`. */
+const nameOf = (sequence: ReadonlyArray<Move>) =>
+  sequence
+    .map((move) =>
+      Option.match(Option.fromUndefinedOr(move.value), {
+        onNone: () => move.source.name,
+        onSome: (value) =>
+          Option.match(Option.fromUndefinedOr(move.source.label), {
+            onNone: () => `${move.source.name} ${brief(value)}`,
+            // SAFETY: a move's value is one of its own source's values.
+            onSome: (label) => `${move.source.name} ${label(value as never)}`,
+          }),
+      }),
+    )
+    .join(", ");
 
 /** A sequence as one corpus line: each move's source and value. */
 const lineOf = (sequence: ReadonlyArray<Move>) =>
@@ -393,12 +465,12 @@ const corpusFile = (exploration: Exploration) =>
   );
 
 /** The corpus's sequences, by the sources' names; a name no source has fails the run. */
-const corpusOf = async (exploration: Exploration): Promise<ReadonlyArray<ReadonlyArray<Move>>> => {
+const corpusOf = (exploration: Exploration): ReadonlyArray<ReadonlyArray<Move>> => {
   const file = corpusFile(exploration);
 
   if (Option.isNone(file)) return [];
 
-  const text = await readText(file.value);
+  const text = readTextSync(file.value);
   const lines = Option.getOrElse(text, () => "")
     .split("\n")
     .filter((line) => line.trim() !== "");
@@ -444,12 +516,6 @@ const remember = async (exploration: Exploration, sequence: ReadonlyArray<Move>)
   return true;
 };
 
-/** Where a sequence came from, as a failure names it. */
-type Origin = {
-  readonly kind: "corpus" | "checked" | "sampled" | "discovered";
-  readonly seed?: number;
-};
-
 const originOf = (origin: Origin) =>
   Option.match(Option.fromUndefinedOr(origin.seed), {
     onNone: () => `a ${origin.kind} sequence`,
@@ -485,7 +551,11 @@ const reportOf = (exploration: Exploration, explored: Omit<Explored, "report">) 
       .join("; ")}`,
   ].join("\n");
 
-/** An exploration found a sequence that breaks a rule (or a step). */
+/**
+ * An exploration found a story that breaks a rule (or a step): `story` is the shortest that fails
+ * so, runnable as is (`await failure.story()`); `code` is it to paste into a test; `prompt` asks a
+ * coding agent to pin it as a story and fix the app (also written beside the replay's trace).
+ */
 export class ExploreFailure extends Error {
   override readonly name = "ExploreFailure";
 
@@ -494,6 +564,9 @@ export class ExploreFailure extends Error {
     readonly sequence: ReadonlyArray<string>,
     readonly failure: StoryFailure,
     readonly trace: string,
+    readonly story: Generated,
+    readonly code: string,
+    readonly prompt: string,
   ) {
     super(message, { cause: failure });
   }
@@ -525,6 +598,258 @@ export class ExploreIncomplete extends Error {
     super(message);
   }
 }
+
+/** What `Explore.stories` planned: the exploration, its stories' sequences, and its coverage. */
+type Plan = {
+  readonly exploration: Exploration;
+  readonly all: ReadonlyArray<{ readonly sequence: ReadonlyArray<Move>; readonly origin: Origin }>;
+  readonly found: ReadonlyArray<ReadonlyArray<Move>>;
+  readonly truncated: boolean;
+  readonly sampled: ReadonlyArray<ReadonlyArray<Move>>;
+  readonly sampleSeed: number;
+  readonly discovering: Option.Option<{ readonly walks: Walks; readonly seed: number }>;
+  readonly discovered: ReadonlyArray<ReadonlyArray<Move>>;
+  readonly corpus: ReadonlyArray<ReadonlyArray<Move>>;
+  readonly depth: number;
+  /** Where the exploration was made (`tests/editor.test.ts:68`), for its prompts. */
+  readonly site: Option.Option<string>;
+};
+
+const plans = new WeakMap<Stories, Plan>();
+
+/** This module's folder: frames in it are the kit's, not the test's. */
+const here = dirname(fileURLToPath(import.meta.url));
+
+/** A stack frame's file, as a path. */
+const pathIn = (file: string) => {
+  if (file.startsWith("file://")) return fileURLToPath(file);
+
+  return file;
+};
+
+/** Where the caller of the kit is: the first frame of the stack outside it (`file:line`). */
+const siteOf = (): Option.Option<string> => {
+  for (const line of (new Error().stack ?? "").split("\n").slice(1)) {
+    const match = /((?:file:\/\/)?\/[^\s()]+?):(\d+):\d+\)?\s*$/.exec(line);
+
+    if (!match?.[1]) continue;
+
+    const file = pathIn(match[1]);
+
+    if (file.startsWith(here) || file.includes("/node_modules/")) continue;
+
+    return Option.some(`${relative(process.cwd(), file)}:${match[2]}`);
+  }
+
+  return Option.none();
+};
+
+/** Where to find the exploration, as a prompt says it. */
+const whereOf = (plan: Plan) =>
+  Option.match(plan.site, {
+    onNone: () =>
+      `The exploration: "${plan.exploration.name}" (search the tests for Explore.stories over a runner named so).`,
+    onSome: (site) =>
+      `The exploration: "${plan.exploration.name}", made in ${site} with Explore.stories.`,
+  });
+
+const indented = (text: string) =>
+  text
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+
+const terms = [
+  "Its runner (`story` below), setup and sources are defined there: use them, don't redefine them.",
+  'Each move is a source\'s step: `edit.step("locked")` is the step of the source named "edit" in',
+  "that exploration's `sources`.",
+].join("\n");
+
+/** The prompt that asks a coding agent to write a generated story as a hand-written one. */
+const writePrompt = (plan: Plan, index: number) => {
+  const { sequence, origin } = plan.all[index] ?? { sequence: [], origin: { kind: "checked" } };
+
+  return [
+    "Write a story an exploration generated as a hand-written story.",
+    "",
+    whereOf(plan),
+    terms,
+    "",
+    `The story (${originOf(origin)}, ${index + 1} of ${plan.all.length}):`,
+    "",
+    indented(pasteable(sequence)),
+    "",
+    "1. Add it as a test next to the exploration, named after the behaviour it shows, with",
+    "   expectations after the steps that matter (Db.then, Db.settled, Machine.then, Form.then), so",
+    "   it pins what the app does now, not only the rules.",
+    "2. Run it: it passes.",
+  ].join("\n");
+};
+
+/** How far a failing story shrank, as a prompt says it. */
+const shrunkOf = (from: number, to: number) => {
+  if (from === to) return `${to} move(s); none can be left out`;
+
+  return `shrunk from ${from} to ${to} move(s)`;
+};
+
+/** The prompt that asks a coding agent to pin an exploration's failure as a story and fix it. */
+const failurePrompt = (
+  plan: Plan,
+  shortest: { readonly sequence: ReadonlyArray<Move>; readonly failure: StoryFailure },
+  from: number,
+  trace: string,
+) =>
+  [
+    "Add a story that reproduces an exploration's failure, then make it pass by fixing the app.",
+    "",
+    whereOf(plan),
+    terms,
+    "",
+    `What broke: ${shortest.failure.reason}`,
+    ...shortest.failure.detail.map((line) => `  ${line}`),
+    "",
+    `The shortest story that fails this way (${shrunkOf(from, shortest.sequence.length)}; it failed the same way on 2 replays):`,
+    "",
+    indented(pasteable(shortest.sequence)),
+    "",
+    `Its replay: ${relative(process.cwd(), trace)} (every step and what each adapter showed),`,
+    "and its screens' frames under their output.",
+    "",
+    "1. Add the story above as a test next to the exploration, named after the behaviour it pins,",
+    "   with expectations for the right outcome after the steps that matter (Db.then, Db.rejected,",
+    "   Machine.then, Form.then), not only the rule.",
+    "2. Run it and check that it fails the way described above.",
+    "3. Fix the app (not the rule, the story or the exploration) until the story passes, then run",
+    "   the exploration again: it should pass.",
+  ].join("\n");
+
+/** A sequence of the exploration as a story of its own. */
+const generatedOf = (
+  plan: Plan,
+  index: number,
+  sequence: ReadonlyArray<Move>,
+  origin: Origin,
+): Generated => {
+  const exploration = plan.exploration;
+  const steps = stepsOf(exploration, sequence);
+  // A generated story has no reviewed baselines: its frames are recorded, not compared.
+  const story = () =>
+    exploration.story.with({ capture: "record", name: `${exploration.name} ${index + 1}` })(steps);
+
+  return Object.defineProperties(story, {
+    name: { value: nameOf(sequence) },
+    index: { value: index },
+    origin: { value: origin },
+    moves: { value: sequence.map(codeOf) },
+    steps: { value: steps },
+    code: { value: pasteable(sequence) },
+    prompt: { value: () => writePrompt(plan, index) },
+  }) as Generated;
+};
+
+/**
+ * An exploration's stories: every sequence of up to `depth` moves of the sources (checked), then
+ * fixed-seed walks (sampled), after the corpus's, and with `discover` walks from a fresh seed;
+ * each a story after `setup` on `story`, the runner, with its rules (`story.with({ name, rules })`:
+ * it needs a name, which names the corpus, replay and stream). The runner's clock must be manual:
+ * with the real clock, timing decides what happens and a run is not repeatable.
+ */
+export const stories = (story: Story, generation: Generation): Stories => {
+  const options = Option.getOrThrowWith(
+    story.options,
+    () =>
+      new Error(
+        "Explore.stories needs a hosted story runner (Story.make(hosting, options)): a story with no host has no rules to check",
+      ),
+  );
+  const name = Option.getOrThrowWith(
+    Option.fromUndefinedOr(options.name),
+    () =>
+      new Error(
+        'Explore.stories needs a named runner, story.with({ name: "rename editor" }): its corpus, replay and stream are named by it',
+      ),
+  );
+
+  if (options.clock === "real")
+    throw new Error(
+      `Explore "${name}" needs the story's manual clock: with the real clock, timing decides what happens and a run is not repeatable`,
+    );
+
+  const exploration: Exploration = { ...generation, name, story, rules: options.rules ?? [] };
+  const moves = movesOf(exploration.sources);
+  const depth = exploration.depth ?? 2;
+  const { found, truncated } = sequencesOf(moves, depth, exploration.budget ?? 2_000);
+  const sampleSeed = exploration.sample?.seed ?? 1;
+  const sampled = Option.match(Option.fromUndefinedOr(exploration.sample), {
+    onNone: () => [],
+    onSome: (walks) => walksOf(moves, walks, sampleSeed),
+  });
+  const discovering = Option.map(
+    Option.filter(Option.fromUndefinedOr(exploration.discover), (each) => each !== false),
+    (each) => {
+      const walks = Option.getOrElse(
+        Option.liftPredicate(each, (given): given is Walks & { readonly seed?: number } =>
+          Predicate.isObject(given),
+        ),
+        (): Walks & { readonly seed?: number } => ({ count: 200 }),
+      );
+
+      // A fresh seed unless given: discovery is meant to look where the fixed runs do not.
+      return { walks, seed: walks.seed ?? Math.floor(Math.random() * 2_147_483_647) };
+    },
+  );
+  const discovered = Option.match(discovering, {
+    onNone: () => [],
+    onSome: ({ walks, seed }) => walksOf(moves, walks, seed),
+  });
+  const corpus = corpusOf(exploration);
+  const all = [
+    ...corpus.map((sequence) => ({ sequence, origin: { kind: "corpus" as const } })),
+    ...found.map((sequence) => ({ sequence, origin: { kind: "checked" as const } })),
+    ...sampled.map((sequence) => ({
+      sequence,
+      origin: { kind: "sampled" as const, seed: sampleSeed },
+    })),
+    ...Option.match(discovering, {
+      onNone: () => [],
+      onSome: ({ seed }) =>
+        discovered.map((sequence) => ({ sequence, origin: { kind: "discovered" as const, seed } })),
+    }),
+  ];
+  const plan: Plan = {
+    exploration,
+    all,
+    found,
+    truncated,
+    sampled,
+    sampleSeed,
+    discovering,
+    discovered,
+    corpus,
+    depth,
+    site: siteOf(),
+  };
+
+  const made: Stories = {
+    name,
+    size: all.length,
+    at: (index) =>
+      Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(all[index]), ({ sequence, origin }) =>
+          generatedOf(plan, index, sequence, origin),
+        ),
+      ),
+    [Symbol.iterator]: function* () {
+      for (const [index, { sequence, origin }] of all.entries())
+        yield generatedOf(plan, index, sequence, origin);
+    },
+  };
+
+  plans.set(made, plan);
+
+  return made;
+};
 
 /** The exploration's shard: its own, else `HIGHALCH_SHARD`, else the only one. */
 const shardIn = (exploration: Exploration): Shard => {
@@ -558,68 +883,20 @@ const shardIn = (exploration: Exploration): Shard => {
  * captured; the `ExploreFailure` lists it as a story to paste. A run that checked less than it
  * says (a budget hit, a rule never judged) fails as `ExploreIncomplete` unless `allow` names it.
  */
-export const run = async (exploration: Exploration): Promise<Explored> => {
-  const clock = Option.flatMap(exploration.story.options, (options) =>
-    Option.fromUndefinedOr(options.clock),
+export const run = async (stories: Stories, running: Running = {}): Promise<Explored> => {
+  const plan = Option.getOrThrowWith(
+    Option.fromUndefinedOr(plans.get(stories)),
+    () => new Error("Explore.run runs the stories Explore.stories made"),
   );
-
-  if (Option.contains(clock, "real"))
-    throw new Error(
-      `Explore "${exploration.name}" needs the story's manual clock: with the real clock, timing decides what happens and a run is not repeatable`,
-    );
+  const exploration: Exploration = { ...plan.exploration, ...running };
+  const { all, found, truncated, sampled, sampleSeed, discovering, discovered, corpus, depth } =
+    plan;
 
   const judged: Record<string, number> = Object.fromEntries(
     exploration.rules.map((each) => [each.name, 0]),
   );
 
   const rules = counting(exploration.rules, judged);
-  const moves = movesOf(exploration.sources);
-  const depth = exploration.depth ?? 2;
-  const { found, truncated } = sequencesOf(moves, depth, exploration.budget ?? 2_000);
-  const sampleSeed = exploration.sample?.seed ?? 1;
-  const sampled = Option.match(Option.fromUndefinedOr(exploration.sample), {
-    onNone: () => [],
-    onSome: (walks) => walksOf(moves, walks, sampleSeed),
-  });
-
-  const discovery = Option.map(
-    Option.filter(Option.fromUndefinedOr(exploration.discover), (each) => each !== false),
-    (each) => ({
-      walks: Option.getOrElse(
-        Option.liftPredicate(each, (given): given is Walks & { readonly seed?: number } =>
-          Predicate.isObject(given),
-        ),
-        (): Walks & { readonly seed?: number } => ({ count: 200 }),
-      ),
-    }),
-  );
-
-  const discovering = Option.map(discovery, ({ walks }) => ({
-    walks,
-    // A fresh seed unless given: discovery is meant to look where the fixed runs do not.
-    seed: walks.seed ?? Math.floor(Math.random() * 2_147_483_647),
-  }));
-
-  const discovered = Option.match(discovering, {
-    onNone: () => [],
-    onSome: ({ walks, seed }) => walksOf(moves, walks, seed),
-  });
-
-  const corpus = await corpusOf(exploration);
-
-  const all: ReadonlyArray<{ readonly sequence: ReadonlyArray<Move>; readonly origin: Origin }> = [
-    ...corpus.map((sequence) => ({ sequence, origin: { kind: "corpus" as const } })),
-    ...found.map((sequence) => ({ sequence, origin: { kind: "checked" as const } })),
-    ...sampled.map((sequence) => ({
-      sequence,
-      origin: { kind: "sampled" as const, seed: sampleSeed },
-    })),
-    ...Option.match(discovering, {
-      onNone: () => [],
-      onSome: ({ seed }) =>
-        discovered.map((sequence) => ({ sequence, origin: { kind: "discovered" as const, seed } })),
-    }),
-  ];
 
   const shard = shardIn(exploration);
   const sink = Option.match(Option.fromUndefinedOr(exploration.stream), {
@@ -651,6 +928,7 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
       readonly moves: ReadonlyArray<string>;
       readonly failure: StoryFailure;
       readonly story: string;
+      readonly prompt: string;
     }>,
   ) => {
     if (Option.isNone(sink)) return;
@@ -670,6 +948,7 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
             reason: failed.failure.reason,
             detail: [...failed.failure.detail],
             story: failed.story,
+            prompt: failed.prompt,
           },
         }),
       }),
@@ -744,8 +1023,15 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
     }
 
     const added = origin.kind === "discovered" && (await remember(exploration, shortest.sequence));
-    const folder = `${pathOf(exploration.artifacts ?? "artifacts/explore")}/${slug(exploration.name)}`;
-    const trace = `${folder}/trace.txt`;
+    const folder = join(
+      pathOf(exploration.artifacts ?? "artifacts/explore"),
+      slug(exploration.name),
+    );
+    const trace = join(folder, "trace.txt");
+    const promptFile = join(folder, "prompt.md");
+    const prompt = failurePrompt(plan, shortest, sequence.length, trace);
+
+    await write(promptFile, `${prompt}\n`);
 
     // The replay captures everything; it fails as the sequence did.
     await streaming({ ...tile, phase: "replay" }, shortest.sequence, (observe) =>
@@ -771,6 +1057,7 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
         `  added to the corpus: ${Option.getOrElse(corpusFile(exploration), () => "")}`,
       ]),
       `  replayed with everything captured: ${trace} (and the screens' frames under their output)`,
+      `  a prompt for a coding agent to pin it as a story and fix it: ${promptFile}`,
       reportOf(exploration, covered()),
     ].join("\n");
 
@@ -782,10 +1069,19 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
         moves: codes,
         failure: shortest.failure,
         story: pasteable(shortest.sequence),
+        prompt,
       }),
     );
 
-    throw new ExploreFailure(message, codes, shortest.failure, trace);
+    throw new ExploreFailure(
+      message,
+      codes,
+      shortest.failure,
+      trace,
+      generatedOf(plan, index, shortest.sequence, origin),
+      pasteable(shortest.sequence),
+      prompt,
+    );
   }
 
   const explored = covered();
@@ -826,7 +1122,8 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
 };
 
 /**
- * Explorations: `Explore.source` declares what can happen; `Explore.run` explores every sequence
- * of it, deterministically, checking the story's rules (`Story.rule`) at their moments.
+ * Explorations: `Explore.source` declares what can happen; `Explore.stories` makes a story of
+ * every sequence of it, on a runner with its rules; `Explore.run` runs them, deterministically,
+ * and shrinks a failure to the shortest story that fails so.
  */
-export const Explore = { source, run } as const;
+export const Explore = { source, stories, run } as const;
