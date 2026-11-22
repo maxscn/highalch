@@ -12,6 +12,7 @@ import {
   Pull,
   Schedule,
   Scope,
+  Stream,
 } from "effect";
 import type { Defect, TaggedFailure } from "./state";
 import { cursorOf, failureOf, read, waitKind, type Connection } from "./client";
@@ -41,6 +42,8 @@ export type Spec = {
   readonly rule: Option.Option<(row: Row, input: Input) => boolean>;
   /** Reads the rows of one answer, when the declaration selects them with `.rows()`. */
   readonly select: Option.Option<(answer: Answer) => ReadonlyArray<Row>>;
+  /** Served views or streams whose changes re-ask the query, each at its key (`.follows()`). */
+  readonly follows: ReadonlyArray<{ readonly name: string; readonly key: string }>;
 };
 
 type Reason = "feed" | "reload" | "correction";
@@ -89,6 +92,8 @@ export class Subset {
   private feed: Subscription | undefined;
   private readonly release: () => void;
   private stopping: Promise<void> | undefined;
+  /** One per followed read: done once it showed its value, or failed, so the first ask is not older. */
+  private readonly based: Array<Deferred.Deferred<void>> = [];
 
   constructor(
     private readonly connection: Connection,
@@ -123,10 +128,84 @@ export class Subset {
       this.feed.acquire(this);
     }
 
+    if (this.connection.live)
+      for (const followed of this.spec.follows) {
+        const based = Deferred.makeUnsafe<void>();
+
+        this.based.push(based);
+        this.connection.fork(this.follow(followed, based), this.scope);
+      }
+
     this.connection.fork(this.work(), this.scope);
 
     return this.stop;
   };
+
+  /**
+   * Follows one served view or stream: its first value is the baseline, and every different value
+   * after it (also the first one after a reconnect) asks the query again. A transport failure is
+   * retried on the client's schedule; a failure for good is reported, and the rows stay.
+   */
+  private follow(
+    followed: { readonly name: string; readonly key: string },
+    based: Deferred.Deferred<void>,
+  ) {
+    const name = `${this.name} follows ${followed.name}`;
+    let mark = Option.none<string>();
+
+    const seen = (value: unknown) =>
+      Effect.sync(() => {
+        const next = JSON.stringify(value) ?? "";
+
+        if (Option.isSome(mark) && mark.value !== next) this.schedule();
+
+        mark = Option.some(next);
+        Deferred.doneUnsafe(based, Effect.void);
+        this.healthy();
+      });
+
+    return Effect.gen({ self: this }, function* () {
+      let step = yield* Schedule.toStep(this.connection.retry);
+
+      while (true) {
+        const result = yield* Effect.result(
+          read(name, Stream.runForEach(this.connection.watch(followed.name, followed.key), seen)),
+        );
+
+        // The first ask must not wait on a read that cannot connect.
+        Deferred.doneUnsafe(based, Effect.void);
+
+        const now = yield* Clock.currentTimeMillis;
+
+        if (result._tag === "Success") {
+          step = yield* Schedule.toStep(this.connection.retry);
+          yield* Effect.sleep(this.connection.reloadDelay).pipe(
+            Effect.provideService(waitKind, "retry"),
+          );
+
+          continue;
+        }
+
+        const error = result.failure;
+
+        this.interrupted(error);
+
+        const waited = yield* Effect.exit(
+          Pull.catchDone(step(now, error), () => Effect.fail(error)),
+        );
+
+        if (Exit.isFailure(waited)) return;
+
+        yield* Effect.sleep(waited.value[1]).pipe(Effect.provideService(waitKind, "retry"));
+      }
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+
+        return Effect.sync(() => this.interrupted(failureOf(name, cause)));
+      }),
+    );
+  }
 
   private stop = () => {
     if (this.stopping) return this.stopping;
@@ -245,6 +324,8 @@ export class Subset {
 
     return Effect.gen({ self: this }, function* () {
       yield* Effect.yieldNow;
+      // Followed reads show their value first: an answer is then never older than its baseline.
+      yield* Effect.forEach(this.based, (based) => Deferred.await(based), { discard: true });
 
       let reason: Reason | undefined;
       while (true) {

@@ -119,6 +119,11 @@ export type Receipt = {
   readonly version: number;
 };
 
+/** A served view or stream, as a read follows it: its value now and after every change. */
+type WatchEndpoints = {
+  readonly watch: (key: string) => Stream.Stream<unknown, TaggedFailure>;
+};
+
 /** The reads of a served stream this package uses: its latest entry, and its entries after a cursor. */
 type StreamEndpoints = {
   readonly peek: (
@@ -151,7 +156,7 @@ type CommandEndpoint = (
 
 /** The Api client: its streams, queries and commands by name. */
 type Endpoints = {
-  readonly [name: string]: StreamEndpoints | QueryEndpoint | CommandEndpoint;
+  readonly [name: string]: StreamEndpoints | WatchEndpoints | QueryEndpoint | CommandEndpoint;
 };
 
 type Runtime = {
@@ -331,6 +336,21 @@ export class Connection {
           .events(this.scope, options)
           .pipe(Stream.provideContext(this.contextOf(context))),
       ),
+    );
+
+  /** The value of a served view or stream at `key`, now and after each change. */
+  watch = (name: string, key: string) =>
+    Stream.unwrap(
+      Effect.map(this.runtime.endpoints, ({ client, context }) => {
+        const endpoint = client[name];
+
+        if (!Predicate.hasProperty(endpoint, "watch"))
+          return Stream.die(new Error(`${name} is not served: list it in the Api to follow it`));
+
+        return (endpoint as WatchEndpoints)
+          .watch(key)
+          .pipe(Stream.provideContext(this.contextOf(context)));
+      }),
     );
 
   query = (name: string, ...args: Parameters<QueryEndpoint>) =>

@@ -218,8 +218,10 @@ export function ReadBuilder(otherRow: Book) {
   });
   const one = LowAlch.read(NoteById).one((row, input) => row.NoteId === input.NoteId);
 
-  expectTypeOf<ReadMethods<typeof start>>().toEqualTypeOf<"rows" | "where" | "one" | "all">();
-  expectTypeOf<ReadMethods<typeof selected>>().toEqualTypeOf<"where" | "one" | "all">();
+  expectTypeOf<ReadMethods<typeof start>>().toEqualTypeOf<
+    "rows" | "where" | "one" | "all" | "follows"
+  >();
+  expectTypeOf<ReadMethods<typeof selected>>().toEqualTypeOf<"where" | "one" | "all" | "follows">();
   expectTypeOf<ReadMethods<typeof all>>().toBeNever();
   expectTypeOf<ReadMethods<typeof where>>().toBeNever();
   expectTypeOf<ReadMethods<typeof one>>().toBeNever();
@@ -300,8 +302,8 @@ export function ReadBuilder(otherRow: Book) {
   const cursor = LowAlch.read(NotesByCursor);
   const paged = cursor.rows((answer) => answer.entries);
 
-  expectTypeOf<ReadMethods<typeof cursor>>().toEqualTypeOf<"rows" | "where" | "one">();
-  expectTypeOf<ReadMethods<typeof paged>>().toEqualTypeOf<"where" | "one">();
+  expectTypeOf<ReadMethods<typeof cursor>>().toEqualTypeOf<"rows" | "where" | "one" | "follows">();
+  expectTypeOf<ReadMethods<typeof paged>>().toEqualTypeOf<"where" | "one" | "follows">();
 
   const pages = LowAlch.collection(NoteRows, {
     queries: { byCursor: paged.where((row, input) => row.account === input.account) },

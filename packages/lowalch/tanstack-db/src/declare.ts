@@ -67,6 +67,22 @@ type ReadOptions<Q extends Domain.Query.Any, Entry> = {
   readonly rule?: (row: never, input: never) => boolean;
   /** A distinct declaration for duplicate checking, with the same subset descriptor. */
   readonly single?: boolean;
+  /** The served views or streams whose changes re-ask the query, each with its key of an input. */
+  readonly follows?: ReadonlyArray<{
+    readonly name: string;
+    readonly key: (input: never) => string;
+  }>;
+};
+
+/** A served view or stream a read can follow. */
+export type Followed =
+  | { readonly kind: "View"; readonly viewName: string }
+  | { readonly kind: "Stream"; readonly streamName: string };
+
+const followedName = (source: Followed) => {
+  if (source.kind === "View") return source.viewName;
+
+  return source.streamName;
 };
 
 type ReadDeclaration<Q extends Domain.Query.Any, Entry> = {
@@ -95,6 +111,12 @@ type ReadBuilder<Q extends Domain.Query.Any, Entry, Used extends ReadFacets> = R
   where(rule: Rule<Q, Entry>): RuledDeclaration<Q, Entry>;
   /** Gives a single-row subset a membership rule. Use `.findOne()` to read `Missing`. */
   one(rule: Rule<Q, Entry>): RuledDeclaration<Q, Entry>;
+  /**
+   * Asks the query again whenever a served view or stream changes at the key an input names: for
+   * rows whose membership the feed cannot decide (shared with the reader, visible to a group).
+   * The query's handler decides what the reader may see; the followed read only says when to ask.
+   */
+  follows(source: Followed, key: (input: QueryInput<Q>) => string): ReadBuilder<Q, Entry, Used>;
 } & (Used["rows"] extends true
     ? unknown
     : {
@@ -126,6 +148,11 @@ const buildRead = <Q extends Domain.Query.Any, Entry, const Used extends ReadFac
     [ReadOptions]: options,
     where: (rule: Rule<Q, Entry>) => withRule(rule, false),
     one: (rule: Rule<Q, Entry>) => withRule(rule, true),
+    follows: (source: Followed, key: (input: QueryInput<Q>) => string) =>
+      buildRead(
+        { ...options, follows: [...(options.follows ?? []), { name: followedName(source), key }] },
+        used,
+      ),
     all: () => {
       if (query.definition.paged)
         throw new Error(`LowAlch.all cannot declare paged query ${query.queryName}`);
@@ -501,7 +528,18 @@ const readerOf = ({
   query,
   rule,
   select,
-}: DeclaredRead): Pick<Spec, "query" | "rule" | "select"> => ({
+  follows,
+}: DeclaredRead): Pick<Spec, "query" | "rule" | "select"> & {
+  readonly follows: ReadonlyArray<{
+    readonly name: string;
+    readonly key: (input: Input) => string;
+  }>;
+} => ({
+  // SAFETY: each key function reads this query's input.
+  follows: (follows ?? []) as ReadonlyArray<{
+    readonly name: string;
+    readonly key: (input: Input) => string;
+  }>,
   query,
   // SAFETY: the rule reads this query's rows and input.
   rule: Option.fromUndefinedOr(rule as ((row: Row, input: Input) => boolean) | undefined),
@@ -710,7 +748,13 @@ export const collection = <
 
     const accessor = (input: Input = {}, page: Page = {}) =>
       subset(
-        { ...reader, entity: rows, input, page },
+        {
+          ...reader,
+          follows: reader.follows.map((each) => ({ name: each.name, key: each.key(input) })),
+          entity: rows,
+          input,
+          page,
+        },
         `${rows.entityName}/${query.queryName}:${stable(input)}:${stable(page)}`,
       );
 
