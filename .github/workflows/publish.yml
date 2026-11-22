@@ -128,19 +128,20 @@ jobs:
             if (!ok) { console.error(`npm ${process.argv[1]} is older than 11.5.1`); process.exit(1); }
           ' "$(npm --version)"
 
-      # @lowalch/tanstack-db first: @highalch/story depends on it. Lifecycle scripts stay off. A
-      # version with a prerelease suffix (a hyphen after the package prefix) goes to `next`.
+      # @lowalch/tanstack-db first, then @highalch/story, then the packages that depend on them.
+      # Lifecycle scripts stay off. A version with a prerelease suffix goes to `next`.
       - name: Publish
         working-directory: ${{ runner.temp }}/release
         run: |
-          for package in lowalch-tanstack-db highalch-story; do
-            for tarball in "$package"-*.tgz; do
-              [ -e "$tarball" ] || continue
-              version="${tarball#"$package"-}"
-              tag=latest
-              case "$version" in *-*) tag=next ;; esac
-              npm publish "./$tarball" --tag "$tag" --ignore-scripts
-            done
+          published=" "
+          for tarball in lowalch-*.tgz highalch-story-*.tgz highalch-*.tgz; do
+            [ -e "$tarball" ] || continue
+            case "$published" in *" $tarball "*) continue ;; esac
+            published="$published$tarball "
+            version="$(tar -xOf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+            tag=latest
+            case "$version" in *-*) tag=next ;; esac
+            npm publish "./$tarball" --tag "$tag" --ignore-scripts
           done
 
   tag:
