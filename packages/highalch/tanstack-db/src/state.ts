@@ -46,6 +46,8 @@ export type RowOf<S> = S extends Source<infer Row> ? Row : never;
 export class Observed {
   readonly rows = new Map<string, Shown>();
   readonly history: Array<Observation> = [];
+  /** Whether a step has opened or read it: until then the world has not settled since it opened. */
+  awaited = false;
   private readonly subscription: { readonly unsubscribe: () => void };
 
   constructor(

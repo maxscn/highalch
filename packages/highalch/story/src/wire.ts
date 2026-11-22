@@ -201,7 +201,45 @@ export class Wire {
       );
     });
 
+  /**
+   * A served view's or stream's `watch`: in flight until it showed its first value (or ended), so
+   * the world waits for a read that follows it to have its baseline.
+   */
+  private watched =
+    (watch: (...args: ReadonlyArray<unknown>) => Stream.Stream<unknown, unknown>) =>
+    (...args: ReadonlyArray<unknown>) =>
+      Stream.unwrap(
+        Effect.sync(() => {
+          let connecting = true;
+
+          const connected = Effect.sync(() => {
+            if (connecting) this.inflight -= 1;
+
+            connecting = false;
+          });
+
+          this.inflight += 1;
+
+          return watch(...args).pipe(
+            Stream.tap(() => connected),
+            Stream.ensuring(connected),
+          );
+        }),
+      );
+
+  /** A served read with `watch` (a view; a stream beside its feed reads), counted while it connects. */
+  private following = <E extends object>(endpoint: E): E => {
+    if (!Predicate.hasProperty(endpoint, "watch") || !Predicate.isFunction(endpoint.watch))
+      return endpoint;
+
+    // SAFETY: `watch` answers a stream of the read's values.
+    const watch = endpoint.watch as (...args: ReadonlyArray<unknown>) => Stream.Stream<unknown>;
+
+    return { ...endpoint, watch: this.watched(watch) };
+  };
+
   private feed = (name: string, endpoint: Feed): Feed => ({
+    ...this.following(endpoint),
     peek: (...args) => this.counted(`${name}.peek`, endpoint.peek(...args), false, false),
     events: (key, options) =>
       Stream.unwrap(
@@ -239,7 +277,7 @@ export class Wire {
       Object.entries(endpoints).map(([name, endpoint]) => {
         if (isFeed(endpoint)) return [name, this.feed(name, endpoint)];
 
-        if (!Predicate.isFunction(endpoint)) return [name, endpoint];
+        if (!Predicate.isFunction(endpoint)) return [name, this.following(endpoint)];
 
         const call: Call = (...args) => {
           if (queries.has(name)) {

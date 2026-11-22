@@ -81,11 +81,17 @@ export type Expected<Row> =
 /** Which client a step acts as, and the source's label in reports. */
 export type Scoped = { readonly as?: string };
 
-/** Opens a source (once) in the step's client; a newly opened source is settled. */
+/**
+ * Opens a source (once) in the step's client. The world settles the first time a step reads it:
+ * when the step opened it, or a rule's reader did before (a reader opens without settling).
+ */
 const opened = async <Row extends object>(db: Clients, source: Source<Row>, scope?: string) => {
-  const { observed, opened: fresh } = await db.observe(source, scope);
+  const { observed } = await db.observe(source, scope);
 
-  if (fresh) await db.world.settle();
+  if (!observed.awaited) {
+    observed.awaited = true;
+    await db.world.settle();
+  }
 
   return observed;
 };
@@ -96,7 +102,10 @@ export const open = <Row extends object>(
   options: Scoped & { readonly settle?: boolean } = {},
 ) =>
   dbStep(`open ${source.id ?? "source"}`, async (db, world) => {
-    await db.observe(source, options.as);
+    const { observed } = await db.observe(source, options.as);
+
+    // Opened by a step, settled or left as it is: later steps read it as they find it.
+    observed.awaited = true;
 
     if (options.settle !== false) await world.settle();
   });

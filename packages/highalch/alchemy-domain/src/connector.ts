@@ -217,6 +217,27 @@ export const lowalch =
           return Option.some(`${scope}: the ${stream} feed is at ${feed.seq} of ${latest}`);
       }
 
+      // A read that follows a view is current once it saw what the view shows now.
+      const raw = await world.raw(scope);
+
+      for (const followed of connection.followed.values()) {
+        const served: unknown = raw[followed.name];
+
+        if (!Predicate.hasProperty(served, "watch") || !Predicate.isFunction(served.watch))
+          continue;
+
+        // SAFETY: a served view's `watch` answers a stream of its values at a key.
+        const watch = served.watch as (key: string) => Stream.Stream<unknown, unknown>;
+        const now = await Effect.runPromiseExit(Stream.runHead(watch(followed.key)));
+
+        if (Exit.isFailure(now) || Option.isNone(followed.shown)) continue;
+
+        const latest = Option.map(now.value, (value) => JSON.stringify(value) ?? "");
+
+        if (Option.isSome(latest) && latest.value !== followed.shown.value)
+          return Option.some(`${scope}: a read following ${followed.name} is behind`);
+      }
+
       return Option.none();
     },
 

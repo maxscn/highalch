@@ -219,6 +219,14 @@ export class Connection {
   queue: Option.Option<Queue> = Option.none();
   /** One subscription per feed (stream name), shared by every subset of every entity on it. */
   readonly feeds = new Map<string, Subscription>();
+  /**
+   * What each followed view or stream last showed (`.follows()`), as JSON, by the read following
+   * it. Read-only; the story kit compares it with the server's to know a reader is current.
+   */
+  readonly followed = new Map<
+    object,
+    { readonly name: string; readonly key: string; shown: Option.Option<string> }
+  >();
   /** The subsets of each entity whose sync runs, by entity name. */
   readonly subsets = new Map<string, Set<Subset>>();
 

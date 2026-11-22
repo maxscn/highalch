@@ -151,15 +151,17 @@ export class Subset {
     based: Deferred.Deferred<void>,
   ) {
     const name = `${this.name} follows ${followed.name}`;
-    let mark = Option.none<string>();
+    const state = { ...followed, shown: Option.none<string>() };
+
+    this.connection.followed.set(based, state);
 
     const seen = (value: unknown) =>
       Effect.sync(() => {
         const next = JSON.stringify(value) ?? "";
 
-        if (Option.isSome(mark) && mark.value !== next) this.schedule();
+        if (Option.isSome(state.shown) && state.shown.value !== next) this.schedule();
 
-        mark = Option.some(next);
+        state.shown = Option.some(next);
         Deferred.doneUnsafe(based, Effect.void);
         this.healthy();
       });
@@ -204,6 +206,7 @@ export class Subset {
 
         return Effect.sync(() => this.interrupted(failureOf(name, cause)));
       }),
+      Effect.ensuring(Effect.sync(() => this.connection.followed.delete(based))),
     );
   }
 
