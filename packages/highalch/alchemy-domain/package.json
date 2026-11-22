@@ -1,6 +1,6 @@
 {
   "name": "@highalch/alchemy-domain",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "HighAlch stories of apps on an alchemy Domain: the Domain hosted in memory with LowAlch clients, its steps and the feed rules.",
   "keywords": [
     "alchemy",

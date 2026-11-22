@@ -1,6 +1,6 @@
 {
   "name": "@highalch/tanstack-form",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "Form steps for HighAlch stories on TanStack Form: type into and submit the app's own forms, found by a Vite plugin.",
   "keywords": [
     "alchemy",

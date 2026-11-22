@@ -1,6 +1,6 @@
 {
   "name": "@highalch/stream",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "The stream HighAlch explorations send while they run: the protocol's schemas for the receiving app, and the client that sends it.",
   "keywords": [
     "alchemy",

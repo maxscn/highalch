@@ -1,6 +1,6 @@
 {
   "name": "@highalch/studio",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "A local browser viewer and relay for HighAlch explorations, available through the `highalch studio` command.",
   "keywords": [
     "alchemy",

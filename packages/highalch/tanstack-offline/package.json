@@ -1,6 +1,6 @@
 {
   "name": "@highalch/tanstack-offline",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "Offline steps for HighAlch stories on TanStack DB's offline transactions: storage, tabs and a network the story owns.",
   "keywords": [
     "effect",

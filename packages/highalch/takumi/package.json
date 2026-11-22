@@ -1,6 +1,6 @@
 {
   "name": "@highalch/takumi",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "takumi's WASM renderer as a HighAlch screen's frames and layout, without a browser.",
   "keywords": [
     "alchemy",

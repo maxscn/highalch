@@ -1,6 +1,6 @@
 {
   "name": "@highalch/explore",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "Explorations of HighAlch stories: every sequence of what can happen, deterministically, shrunk and replayed; sharded and streamed.",
   "keywords": [
     "alchemy",
