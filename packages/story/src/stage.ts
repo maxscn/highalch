@@ -15,6 +15,9 @@ export class Mismatch extends Error {
 /** A step that passed: its number (from 1) and label. */
 export type Done = { readonly step: number; readonly label: string };
 
+/** A frame a screen painted for a story's observer: its PNG and size. */
+export type Shown = { readonly png: Uint8Array; readonly width: number; readonly height: number };
+
 /**
  * What a story captures: `compare` paints frames and compares them with their baselines (a
  * story), `record` paints and writes them without comparing (an exploration's replay), `off`
@@ -66,7 +69,15 @@ export class Stage {
     readonly name: Option.Option<string> = Option.none(),
     /** What the story captures (frames): everything a story compares, by default. */
     readonly capture: Capture = "compare",
+    /**
+     * Whether a screen paints a frame after every step for the story's observer (an exploration
+     * streaming its tiles), even when it captures nothing; it leaves it in `shown`.
+     */
+    readonly live: boolean = false,
   ) {}
+
+  /** The frame a screen painted after the step that just ran, for the story's observer. */
+  shown: Option.Option<Shown> = Option.none();
 
   /**
    * Adds what an adapter shows of its state to the story's trace (its sources' rows, a machine's

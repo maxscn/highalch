@@ -57,6 +57,10 @@ const workspace = [
     find: /^@highalch\/story\/screen$/,
     replacement: source("./packages/story/src/screen/index.ts"),
   },
+  {
+    find: /^@highalch\/story\/stream$/,
+    replacement: source("./packages/story/src/stream/index.ts"),
+  },
 ];
 
 export default defineConfig({

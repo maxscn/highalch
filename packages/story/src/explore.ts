@@ -1,7 +1,9 @@
 import { Option, Predicate } from "effect";
 import { pathOf, readText, slug, write, type Place } from "./files";
 import { before, rule, type Rule } from "./rules";
-import { StoryFailure, type Story } from "./run";
+import { StoryFailure, type Observer, type Story } from "./run";
+import type { Kind, Phase, Shard } from "./stream/protocol";
+import { shardOf, streamed, type Sink } from "./stream/sink";
 import { flatten, type Step, type Steps } from "./steps";
 import { json } from "./world";
 
@@ -92,6 +94,18 @@ export type Exploration = {
   readonly corpus?: Place;
   /** Where a failure's replay writes its trace and frames (default `artifacts/explore`). */
   readonly artifacts?: Place;
+  /**
+   * Which shard of the exploration this process runs (`{ index: 2, total: 4 }`, the 2nd of 4;
+   * `HIGHALCH_SHARD=2/4` by default): every shard numbers the sequences the same way and runs
+   * every `total`-th, so shards on separate machines cover them all once. A shard leaves the
+   * check that every rule was judged to the shards together (the stream counts each shard's).
+   */
+  readonly shard?: Shard;
+  /**
+   * Where the exploration streams its sequences as they run (`@highalch/story/stream`): the
+   * process's stream from `HIGHALCH_STREAM_URL` by default, or none (`false`).
+   */
+  readonly stream?: Sink | false;
   /** What a run may leave undone and still pass. */
   readonly allow?: {
     /** Pass when the checked sequences stop at the budget before `depth`. */
@@ -117,6 +131,10 @@ export type Explored = {
   readonly discovered: Option.Option<{ readonly sequences: number; readonly seed: number }>;
   /** How many times each rule was judged, by name. */
   readonly judged: Readonly<Record<string, number>>;
+  /** The shard that ran (`1` of `1` unsharded): it ran every `total`-th sequence. */
+  readonly shard: Shard;
+  /** How many sequences this shard ran. */
+  readonly ran: number;
   /** The coverage as text: what is checked, sampled, replayed and discovered. */
   readonly report: string;
 };
@@ -201,26 +219,135 @@ const counting = (rules: ReadonlyArray<Rule>, judged: Record<string, number>) =>
     },
   }));
 
+/** Where an attempt is streamed: the stream, the exploration's id, and its tile. */
+type Tile = {
+  readonly sink: Option.Option<Sink>;
+  readonly exploration: string;
+  /** The sequence's number across every shard. */
+  readonly sequence: number;
+  readonly kind: Kind;
+  readonly phase: Phase;
+};
+
+/** Attempts in this process, numbered once across its explorations: the session's numbering. */
+let attempts = 0;
+
+/** What a failed story run says, as the stream carries it. */
+const failureOf = (failure: StoryFailure) => ({
+  step: failure.step,
+  reason: failure.reason,
+  detail: [...failure.detail],
+});
+
 /**
- * Runs one sequence quietly (nothing captured); its failure, if any. A world that did not settle
- * is tried once more: only one that never settles fails, as such.
+ * Streams a story run of a sequence as an attempt of its tile: when it starts, each step (with
+ * its screen's frame, when frames are streamed), and how it ended. Without a stream, nothing.
+ */
+const streaming = async <A>(
+  tile: Tile,
+  sequence: ReadonlyArray<Move>,
+  run: (observe: Option.Option<Observer>) => Promise<A>,
+): Promise<A> => {
+  if (Option.isNone(tile.sink)) return run(Option.none());
+
+  const sink = tile.sink.value;
+  const exploration = tile.exploration;
+
+  attempts += 1;
+
+  const attempt = attempts;
+  const started = performance.now();
+
+  sink.send({
+    type: "attempt",
+    exploration,
+    attempt,
+    sequence: tile.sequence,
+    kind: tile.kind,
+    phase: tile.phase,
+    moves: sequence.map(codeOf),
+  });
+
+  const observe: Observer = {
+    frames: sink.frames === "every" || (sink.frames === "replay" && tile.phase === "replay"),
+    step: async ({ step, label, status, frame }) => {
+      const image = await Option.match(frame, {
+        onNone: async () => Option.none<string>(),
+        onSome: (shown) => sink.frame(shown.png),
+      });
+
+      sink.send({
+        type: "step",
+        exploration,
+        attempt,
+        step,
+        label,
+        status,
+        ...Option.match(
+          Option.zipWith(image, frame, (sha, shown) => ({ sha, shown })),
+          {
+            onNone: () => ({}),
+            onSome: ({ sha, shown }) => ({
+              frame: { image: sha, width: shown.width, height: shown.height },
+            }),
+          },
+        ),
+      });
+    },
+  };
+
+  const ended = (failure: Option.Option<StoryFailure>) =>
+    sink.send({
+      type: "attempt-end",
+      exploration,
+      attempt,
+      ...Option.match(failure, {
+        onNone: () => ({ status: "passed" as const }),
+        onSome: (failed) => ({ status: "failed" as const, failure: failureOf(failed) }),
+      }),
+      ms: Math.round(performance.now() - started),
+    });
+
+  try {
+    const result = await run(Option.some(observe));
+
+    ended(Option.none());
+
+    return result;
+  } catch (error) {
+    if (error instanceof StoryFailure) ended(Option.some(error));
+
+    throw error;
+  }
+};
+
+/**
+ * Runs one sequence quietly (nothing captured, unless its tile streams frames); its failure, if
+ * any. A world that did not settle is tried once more: only one that never settles fails, as such.
  */
 const attempt = async (
   exploration: Exploration,
   rules: ReadonlyArray<Rule>,
   sequence: ReadonlyArray<Move>,
+  tile: Tile,
   again = true,
 ): Promise<Option.Option<StoryFailure>> => {
   try {
-    await exploration.story.with({ rules, capture: "off", trace: false, name: exploration.name })(
-      stepsOf(exploration, sequence),
+    await streaming(tile, sequence, (observe) =>
+      exploration.story.with({
+        rules,
+        capture: "off",
+        trace: false,
+        name: exploration.name,
+        ...Option.match(observe, { onNone: () => ({}), onSome: (each) => ({ observe: each }) }),
+      })(stepsOf(exploration, sequence)),
     );
 
     return Option.none();
   } catch (error) {
     if (!(error instanceof StoryFailure)) throw error;
 
-    if (again && unsettled(error)) return attempt(exploration, rules, sequence, false);
+    if (again && unsettled(error)) return attempt(exploration, rules, sequence, tile, false);
 
     return Option.some(error);
   }
@@ -232,6 +359,7 @@ const shrink = async (
   rules: ReadonlyArray<Rule>,
   sequence: ReadonlyArray<Move>,
   failure: StoryFailure,
+  tile: Tile,
 ) => {
   const about = aboutOf(failure);
   let best = { sequence, failure };
@@ -242,7 +370,7 @@ const shrink = async (
 
     for (const index of best.sequence.keys()) {
       const shorter = best.sequence.filter((_, position) => position !== index);
-      const result = await attempt(exploration, rules, shorter);
+      const result = await attempt(exploration, rules, shorter, { ...tile, phase: "shrink" });
 
       if (Option.isSome(result) && aboutOf(result.value) === about) {
         best = { sequence: shorter, failure: result.value };
@@ -351,6 +479,9 @@ const checkedOf = (checked: Explored["checked"]) => {
 const reportOf = (exploration: Exploration, explored: Omit<Explored, "report">) =>
   [
     `Explore "${exploration.name}":`,
+    ...onlyIf(explored.shard.total > 1, () => [
+      `  Shard ${explored.shard.index} of ${explored.shard.total}: ran ${explored.ran} sequence(s), every ${explored.shard.total}th`,
+    ]),
     `  Checked: ${checkedOf(explored.checked)}`,
     `  Sampled: ${explored.sampled.sequences} walk(s) (seed ${explored.sampled.seed})`,
     `  Corpus: ${explored.corpus} sequence(s) found before`,
@@ -405,6 +536,28 @@ export class ExploreIncomplete extends Error {
     super(message);
   }
 }
+
+/** The exploration's shard: its own, else `HIGHALCH_SHARD`, else the only one. */
+const shardIn = (exploration: Exploration): Shard => {
+  const shard = Option.getOrElse(
+    Option.orElse(Option.fromUndefinedOr(exploration.shard), () =>
+      shardOf(globalThis.process?.env.HIGHALCH_SHARD || undefined),
+    ),
+    (): Shard => ({ index: 1, total: 1 }),
+  );
+
+  if (
+    !Number.isInteger(shard.index) ||
+    !Number.isInteger(shard.total) ||
+    shard.index < 1 ||
+    shard.index > shard.total
+  )
+    throw new Error(
+      `Explore "${exploration.name}": shard ${shard.index} of ${shard.total} is not one of them: shards are numbered from 1 to their total`,
+    );
+
+  return shard;
+};
 
 /**
  * Explores what can happen, deterministically: the corpus's sequences first, then every sequence
@@ -479,40 +632,126 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
     }),
   ];
 
+  const shard = shardIn(exploration);
+  const sink = Option.match(Option.fromUndefinedOr(exploration.stream), {
+    onNone: streamed,
+    onSome: (given) => Option.liftPredicate(given, (each): each is Sink => each !== false),
+  });
+  const id = slug(exploration.name);
+
+  // Every shard numbers the sequences alike and runs every `total`-th.
+  const mine = [...all.entries()].filter(([index]) => index % shard.total === shard.index - 1);
+  let ran = 0;
+
   const covered = (): Omit<Explored, "report"> => ({
     checked: { sequences: found.length, depth, complete: !truncated },
     sampled: { sequences: sampled.length, seed: sampleSeed },
     corpus: corpus.length,
     discovered: Option.map(discovering, ({ seed }) => ({ sequences: discovered.length, seed })),
     judged: { ...judged },
+    shard,
+    ran,
   });
 
-  for (const [index, { sequence, origin }] of all.entries()) {
-    const result = await attempt(exploration, rules, sequence);
+  /** Streams how the exploration ended in this shard, and waits until it is sent. */
+  const finished = async (
+    status: "passed" | "failed" | "flaky" | "incomplete",
+    report: string,
+    failure: Option.Option<{
+      readonly sequence: number;
+      readonly moves: ReadonlyArray<string>;
+      readonly failure: StoryFailure;
+      readonly story: string;
+    }>,
+  ) => {
+    if (Option.isNone(sink)) return;
+
+    sink.value.send({
+      type: "exploration-end",
+      exploration: id,
+      status,
+      ran,
+      judged: { ...judged },
+      ...Option.match(failure, {
+        onNone: () => ({}),
+        onSome: (failed) => ({
+          failure: {
+            sequence: failed.sequence,
+            moves: [...failed.moves],
+            reason: failed.failure.reason,
+            detail: [...failed.failure.detail],
+            story: failed.story,
+          },
+        }),
+      }),
+      report,
+    });
+
+    await sink.value.flush();
+  };
+
+  if (Option.isSome(sink))
+    sink.value.send({
+      type: "exploration",
+      exploration: id,
+      name: exploration.name,
+      shard,
+      sequences: {
+        total: all.length,
+        corpus: corpus.length,
+        checked: found.length,
+        sampled: sampled.length,
+        discovered: discovered.length,
+      },
+      depth,
+      sources: exploration.sources.map((each) => ({
+        name: each.name,
+        values: each.values.length,
+      })),
+      rules: exploration.rules.map((each) => each.name),
+      setup: flatten([exploration.setup ?? []]).map((each) => each.label),
+    });
+
+  for (const [index, { sequence, origin }] of mine) {
+    const tile: Tile = {
+      sink,
+      exploration: id,
+      sequence: index,
+      kind: origin.kind,
+      phase: "explore",
+    };
+    const result = await attempt(exploration, rules, sequence, tile);
+
+    ran += 1;
 
     if (Option.isNone(result)) continue;
 
-    const shortest = await shrink(exploration, rules, sequence, result.value);
+    const shortest = await shrink(exploration, rules, sequence, result.value, tile);
     const codes = shortest.sequence.map(codeOf);
 
     // A failure must reproduce: replayed twice more, it fails the same way each time.
     for (const time of [1, 2]) {
-      const replay = await attempt(exploration, rules, shortest.sequence);
+      const replay = await attempt(exploration, rules, shortest.sequence, {
+        ...tile,
+        phase: "confirm",
+      });
       const same = Option.exists(
         replay,
         (failure) => aboutOf(failure) === aboutOf(shortest.failure),
       );
 
-      if (!same)
-        throw new ExploreFlaky(
-          [
-            `Explore "${exploration.name}": a failing sequence did not fail the same way on replay ${time}: the app or the kit is not deterministic here`,
-            ...codes.map((code, at) => `    ${at + 1}. ${code}`),
-            `  first:  ${shortest.failure.reason}`,
-            `  replay: ${Option.match(replay, { onNone: () => "passed", onSome: (failure) => failure.reason })}`,
-          ].join("\n"),
-          codes,
-        );
+      if (!same) {
+        const message = [
+          `Explore "${exploration.name}": a failing sequence did not fail the same way on replay ${time}: the app or the kit is not deterministic here`,
+          ...codes.map((code, at) => `    ${at + 1}. ${code}`),
+          `  first:  ${shortest.failure.reason}`,
+          `  replay: ${Option.match(replay, { onNone: () => "passed", onSome: (failure) => failure.reason })}`,
+        ].join("\n");
+
+        await finished("flaky", message, Option.none());
+
+        throw new ExploreFlaky(message, codes);
+      }
     }
 
     const added = origin.kind === "discovered" && (await remember(exploration, shortest.sequence));
@@ -520,41 +759,54 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
     const trace = `${folder}/trace.txt`;
 
     // The replay captures everything; it fails as the sequence did.
-    await exploration.story
-      .with({
+    await streaming({ ...tile, phase: "replay" }, shortest.sequence, (observe) =>
+      exploration.story.with({
         rules,
         capture: "record",
         traceTo: trace,
         name: `${exploration.name} (explored)`,
-      })(stepsOf(exploration, shortest.sequence))
-      .catch(() => undefined);
+        ...Option.match(observe, { onNone: () => ({}), onSome: (each) => ({ observe: each }) }),
+      })(stepsOf(exploration, shortest.sequence)),
+    ).catch(() => undefined);
 
-    throw new ExploreFailure(
-      [
-        `Explore "${exploration.name}": ${shortest.failure.reason}`,
-        `  found in ${originOf(origin)} (${index + 1} of ${all.length}), shrunk from ${sequence.length} to ${shortest.sequence.length} move(s), failing the same way on 2 replays:`,
-        ...codes.map((code, at) => `    ${at + 1}. ${code}`),
-        ...shortest.failure.detail.map((line) => `  ${line}`),
-        "  as a story:",
-        ...pasteable(shortest.sequence)
-          .split("\n")
-          .map((line) => `    ${line}`),
-        ...onlyIf(added, () => [
-          `  added to the corpus: ${Option.getOrElse(corpusFile(exploration), () => "")}`,
-        ]),
-        `  replayed with everything captured: ${trace} (and the screens' frames under their output)`,
-        reportOf(exploration, covered()),
-      ].join("\n"),
-      codes,
-      shortest.failure,
-      trace,
+    const message = [
+      `Explore "${exploration.name}": ${shortest.failure.reason}`,
+      `  found in ${originOf(origin)} (${index + 1} of ${all.length}), shrunk from ${sequence.length} to ${shortest.sequence.length} move(s), failing the same way on 2 replays:`,
+      ...codes.map((code, at) => `    ${at + 1}. ${code}`),
+      ...shortest.failure.detail.map((line) => `  ${line}`),
+      "  as a story:",
+      ...pasteable(shortest.sequence)
+        .split("\n")
+        .map((line) => `    ${line}`),
+      ...onlyIf(added, () => [
+        `  added to the corpus: ${Option.getOrElse(corpusFile(exploration), () => "")}`,
+      ]),
+      `  replayed with everything captured: ${trace} (and the screens' frames under their output)`,
+      reportOf(exploration, covered()),
+    ].join("\n");
+
+    await finished(
+      "failed",
+      reportOf(exploration, covered()),
+      Option.some({
+        sequence: index,
+        moves: codes,
+        failure: shortest.failure,
+        story: pasteable(shortest.sequence),
+      }),
     );
+
+    throw new ExploreFailure(message, codes, shortest.failure, trace);
   }
 
   const explored = covered();
   const report = reportOf(exploration, explored);
+  // A shard judges only its share: whether every rule was judged is for the shards together.
   const unjudged = Object.entries(explored.judged).flatMap(([name, times]) =>
-    onlyIf(times === 0 && !(exploration.allow?.unjudged ?? []).includes(name), () => [name]),
+    onlyIf(
+      shard.total === 1 && times === 0 && !(exploration.allow?.unjudged ?? []).includes(name),
+      () => [name],
+    ),
   );
 
   const undone = [
@@ -567,15 +819,19 @@ export const run = async (exploration: Exploration): Promise<Explored> => {
     ),
   ];
 
-  if (undone.length > 0)
-    throw new ExploreIncomplete(
-      [
-        `Explore "${exploration.name}" left part of its check undone:`,
-        ...undone.map((line) => `  ${line}`),
-        report,
-      ].join("\n"),
-      { ...explored, report },
-    );
+  if (undone.length > 0) {
+    const message = [
+      `Explore "${exploration.name}" left part of its check undone:`,
+      ...undone.map((line) => `  ${line}`),
+      report,
+    ].join("\n");
+
+    await finished("incomplete", message, Option.none());
+
+    throw new ExploreIncomplete(message, { ...explored, report });
+  }
+
+  await finished("passed", report, Option.none());
 
   return { ...explored, report };
 };

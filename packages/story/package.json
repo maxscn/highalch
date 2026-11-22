@@ -62,6 +62,10 @@
       "types": "./dist/takumi.d.mts",
       "default": "./dist/takumi.mjs"
     },
+    "./stream": {
+      "types": "./dist/stream.d.mts",
+      "default": "./dist/stream.mjs"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {

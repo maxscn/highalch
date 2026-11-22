@@ -28,7 +28,8 @@
       "@highalch/story/vite": ["./packages/story/src/vite.ts"],
       "@highalch/story/xstate": ["./packages/story/src/xstate/index.ts"],
       "@highalch/story/screen": ["./packages/story/src/screen/index.ts"],
-      "@highalch/story/takumi": ["./packages/story/src/takumi/index.ts"]
+      "@highalch/story/takumi": ["./packages/story/src/takumi/index.ts"],
+      "@highalch/story/stream": ["./packages/story/src/stream/index.ts"]
     }
   }
 }

@@ -32,7 +32,7 @@ parallel, and start no dev servers.
   Domain primitives for other infrastructure; HighAlch (`@highalch/*`) verifies apps built on
   them. `@lowalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
   `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./lowalch`, `./tanstack-form`,
-  `./xstate`, `./screen`, `./takumi`, `./vite`, and the internal `./react-form`). Shared
+  `./xstate`, `./screen`, `./takumi`, `./stream`, `./vite`, and the internal `./react-form`). Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy

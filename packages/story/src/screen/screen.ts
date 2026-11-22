@@ -287,6 +287,8 @@ const build = (options: Options, engines: Engines) => {
     const target = join(pathOf(framing.settings.output), story);
     const png = encode(actual);
 
+    if (stage.live) stage.shown = Option.some({ png, width, height });
+
     await write(join(target, file), png);
     await write(join(target, `${name}.html`), html);
 
@@ -330,6 +332,19 @@ const build = (options: Options, engines: Engines) => {
         `diff:     ${relative(process.cwd(), join(target, `${name}.diff.png`))}`,
       ],
     );
+  };
+
+  /**
+   * Paints a frame for the story's observer only (an exploration streaming its tiles): nothing
+   * is written or compared.
+   */
+  const show = async (stage: Stage, mounted: Mounted, framing: Framing, done: Done) => {
+    await quiet(stage.hosted(done.label));
+
+    const html = framed(serialize(mounted.container));
+    const painted: Pixels = await framing.painter.paint({ html, css, width, height });
+
+    stage.shown = Option.some({ png: encode(painted), width, height });
   };
 
   /** Writes the story's filmstrip and manifest, when the screen has frames. */
@@ -419,8 +434,11 @@ const build = (options: Options, engines: Engines) => {
       );
 
       stage.after(async (done) => {
-        if (Option.isSome(framing) && framing.value.every && stage.capture !== "off")
+        if (Option.isNone(framing)) return;
+
+        if (framing.value.every && stage.capture !== "off")
           await capture(stage, mounted, framing.value, done);
+        else if (stage.live) await show(stage, mounted, framing.value, done);
       });
     });
   };

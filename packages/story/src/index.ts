@@ -20,7 +20,7 @@ export type { ClientOf, Host, Hosting, Memory, SessionOf } from "./host";
 
 export { make, StoryFailure } from "./run";
 
-export type { Story as Runner, StoryOptions, StepReport } from "./run";
+export type { Observed, Observer, Story as Runner, StoryOptions, StepReport } from "./run";
 
 export {
   advance,
@@ -46,7 +46,7 @@ export {
 
 export { CurrentStage } from "./stage";
 
-export type { Adapter, Done, Stage } from "./stage";
+export type { Adapter, Done, Shown, Stage } from "./stage";
 
 export { registryOf as registry } from "./atoms";
 

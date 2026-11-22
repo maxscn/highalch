@@ -3,7 +3,7 @@ import { Option } from "effect";
 import type { Hosting } from "./host";
 import { pathOf, readText, slug, write, type Place } from "./files";
 import { due, type Rule } from "./rules";
-import { Mismatch, Stage, type Capture } from "./stage";
+import { Mismatch, Stage, type Capture, type Shown } from "./stage";
 import { flatten, type Step, type Steps } from "./steps";
 import { describeDefect, World, type Options } from "./world";
 
@@ -41,6 +41,23 @@ export class StoryFailure extends Error {
   }
 }
 
+/** A step as a story's observer sees it: passed (with its screen's frame, if painted) or failed. */
+export type Observed = {
+  readonly step: number;
+  readonly label: string;
+  readonly status: "passed" | "failed";
+  readonly frame: Option.Option<Shown>;
+};
+
+/**
+ * Who watches a story run step by step (an exploration streaming its tiles): told of each step
+ * as it ends; `frames` has screens paint a frame after every step for it.
+ */
+export type Observer = {
+  readonly frames: boolean;
+  readonly step: (observed: Observed) => Promise<void>;
+};
+
 /** The options of a story: its world's settings, its first scope, and the rules it keeps. */
 export type StoryOptions = Options & {
   /** The scope of the story's first client; `as(scope, ...)` steps open others. */
@@ -63,6 +80,8 @@ export type StoryOptions = Options & {
   readonly update?: boolean;
   /** Writes the trace to this file, passed or failed, without comparing (an exploration's replay). */
   readonly traceTo?: string;
+  /** Told of each step as it ends (an exploration streaming its tiles). */
+  readonly observe?: Observer;
 };
 
 /** One step of a trace: its number, label, and what every adapter showed after it. */
@@ -173,11 +192,22 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
 
   const options = Option.map(setup, (each) => each.options);
 
+  const observer = Option.flatMap(options, (each) => Option.fromUndefinedOr(each.observe));
+
   const stage = new Stage(
     world,
     Option.flatMap(options, (each) => Option.fromUndefinedOr(each.name)),
     Option.match(options, { onNone: () => "compare", onSome: (each) => each.capture ?? "compare" }),
+    Option.exists(observer, (each) => each.frames),
   );
+
+  const observed = async (step: number, label: string, status: Observed["status"]) => {
+    const frame = stage.shown;
+
+    stage.shown = Option.none();
+
+    if (Option.isSome(observer)) await observer.value.step({ step, label, status, frame });
+  };
 
   const tracing = Option.match(options, {
     onNone: () => false,
@@ -211,9 +241,12 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
       try {
         await each.run(stage);
         await stage.passed({ step: number, label: each.label });
+        await observed(number, each.label, "passed");
         await traced(number, each.label);
       } catch (error) {
         if (error instanceof StoryFailure) throw error;
+
+        await observed(number, each.label, "failed");
 
         const { reason, detail } = why(error);
 
