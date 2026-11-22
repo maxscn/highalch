@@ -1,0 +1,100 @@
+{
+  "name": "@lowalch/tanstack-db",
+  "version": "0.0.6",
+  "description": "Alchemy Domains synced into TanStack DB collections, with typed errors from the Domain definitions.",
+  "keywords": [
+    "alchemy",
+    "domain",
+    "effect",
+    "tanstack-db",
+    "xstate"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/lowalch/tanstack-db#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/lowalch/tanstack-db"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.mts",
+      "default": "./dist/server.mjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.mts",
+      "default": "./dist/react.mjs"
+    },
+    "./xstate": {
+      "types": "./dist/xstate.d.mts",
+      "default": "./dist/xstate.mjs"
+    },
+    "./offline": {
+      "types": "./dist/offline.d.mts",
+      "default": "./dist/offline.mjs"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.mts",
+      "default": "./dist/internal.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@alchemy.run/domain": "catalog:",
+    "@tanstack/db": "catalog:",
+    "@tanstack/offline-transactions": "catalog:",
+    "@tanstack/react-db": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@xstate/effect": "catalog:",
+    "effect": "catalog:",
+    "happy-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "xstate": "catalog:"
+  },
+  "peerDependencies": {
+    "@alchemy.run/domain": "2.0.0-beta.87",
+    "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/offline-transactions": "1.2.0",
+    "@tanstack/react-db": "1.0.0-rc.1.5",
+    "@xstate/effect": "1.0.0-beta.2",
+    "effect": "^4.1.4",
+    "react": "^19.2.7",
+    "xstate": "6.0.0-beta.3"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/offline-transactions": {
+      "optional": true
+    },
+    "@xstate/effect": {
+      "optional": true
+    },
+    "xstate": {
+      "optional": true
+    }
+  }
+}

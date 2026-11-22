@@ -1,0 +1,68 @@
+{
+  "name": "@highalch/tanstack-form",
+  "version": "0.0.0",
+  "description": "Form steps for HighAlch stories on TanStack Form: type into and submit the app's own forms, found by a Vite plugin.",
+  "keywords": [
+    "alchemy",
+    "effect",
+    "highalch",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/tanstack-form#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/tanstack-form"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.mts",
+      "default": "./dist/vite.mjs"
+    },
+    "./react-form": {
+      "types": "./dist/react-form.d.mts",
+      "default": "./dist/react-form.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@highalch/alchemy-domain": "workspace:*",
+    "@highalch/screen": "workspace:*",
+    "@highalch/story": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
+    "@tanstack/react-form": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@highalch/story": "workspace:^",
+    "@tanstack/react-form": "1.33.5",
+    "effect": "^4.1.4",
+    "react": "^19.2.7"
+  }
+}

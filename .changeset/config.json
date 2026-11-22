@@ -4,7 +4,22 @@
   "access": "public",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [["@lowalch/tanstack-db", "@highalch/story"]],
+  "fixed": [
+    [
+      "@lowalch/tanstack-db",
+      "@highalch/story",
+      "@highalch/tanstack-db",
+      "@highalch/alchemy-domain",
+      "@highalch/xstate",
+      "@highalch/screen",
+      "@highalch/takumi",
+      "@highalch/tanstack-form",
+      "@highalch/tanstack-offline",
+      "@highalch/explore",
+      "@highalch/stream",
+      "@highalch/studio"
+    ]
+  ],
   "linked": [],
   "ignore": [],
   "updateInternalDependencies": "patch"

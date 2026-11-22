@@ -1,0 +1,54 @@
+{
+  "name": "@highalch/story",
+  "version": "0.0.6",
+  "description": "Stories for frontends: given, when, then, one runner for every kind of step, with rules checked at their moments. Adapters add the steps: @highalch/tanstack-db, @highalch/xstate, @highalch/screen, @highalch/tanstack-form, @highalch/alchemy-domain.",
+  "keywords": [
+    "alchemy",
+    "effect",
+    "highalch",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/story#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/story"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.mts",
+      "default": "./dist/internal.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.1.4"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "@highalch/takumi",
+  "version": "0.0.0",
+  "description": "takumi's WASM renderer as a HighAlch screen's frames and layout, without a browser.",
+  "keywords": [
+    "alchemy",
+    "effect",
+    "highalch",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/takumi#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/takumi"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@highalch/alchemy-domain": "workspace:*",
+    "@highalch/screen": "workspace:*",
+    "@highalch/story": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
+    "@highalch/tanstack-form": "workspace:*",
+    "@highalch/xstate": "workspace:*",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "takumi-js": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@highalch/screen": "workspace:^",
+    "effect": "^4.1.4",
+    "takumi-js": "^2.14.0"
+  }
+}

@@ -141,8 +141,12 @@ export class NoteAggregate extends Domain.Aggregate("Note", {
   reply: { TouchNote: () => ({ touched: true }) },
 }) {}
 
+const NotebookChangesBase: ReturnType<
+  typeof LowAlch.Feed<"NotebookChanges", typeof Schema.String>
+> = LowAlch.Feed("NotebookChanges", { scope: Schema.String });
+
 /** The feed: one stream per account, carrying both entities' rows. */
-export class NotebookChanges extends LowAlch.Feed("NotebookChanges", { scope: Schema.String }) {}
+export class NotebookChanges extends NotebookChangesBase {}
 
 /** The first entity on the feed: notes, whose commands address `[account, NoteId]`. */
 export class NoteRows extends LowAlch.Rows("NoteRows", {
@@ -223,10 +227,18 @@ export class BookRows extends LowAlch.Rows("BookRows", {
 }) {}
 
 /** The feed's one writer: both entities, one line each. */
-export class NotebookWriter extends LowAlch.Projection("NotebookChanges", {
+const NotebookWriterBase: ReturnType<
+  typeof LowAlch.Projection<
+    "NotebookChanges",
+    typeof NotebookChanges,
+    readonly [typeof NoteRows, typeof BookRows]
+  >
+> = LowAlch.Projection("NotebookChanges", {
   feed: NotebookChanges,
   entities: [NoteRows, BookRows],
-}) {}
+});
+
+export class NotebookWriter extends NotebookWriterBase {}
 
 /** The store the queries answer from, written by the `NoteIndex` and `BookIndex` projections. */
 export class NoteStore extends Context.Service<
@@ -530,48 +542,58 @@ const faulty = (client: Client) => {
       return client.NotebookChanges.peek(key, options);
     });
 
+  const down = { on: false };
+
+  /** A command while the transport is down fails before it is sent. */
+  const guarded = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | RpcClientError> =>
+    Effect.suspend((): Effect.Effect<A, E | RpcClientError> => {
+      if (down.on) return Effect.fail(transport());
+
+      return effect;
+    });
+
   const wrapped: Client = {
     ...client,
     NotebookChanges: { ...client.NotebookChanges, events, peek },
     CreateNote: (target, input, options) => {
       sent("CreateNote", target);
 
-      return client.CreateNote(target, input, options);
+      return guarded(client.CreateNote(target, input, options));
     },
     RenameNote: (target, input, options) => {
       sent("RenameNote", target);
 
-      return client.RenameNote(target, input, options);
+      return guarded(client.RenameNote(target, input, options));
     },
     PinNote: (target, input, options) => {
       sent("PinNote", target);
 
-      return client.PinNote(target, input, options);
+      return guarded(client.PinNote(target, input, options));
     },
     DeleteNote: (target, input, options) => {
       sent("DeleteNote", target);
 
-      return client.DeleteNote(target, input, options);
+      return guarded(client.DeleteNote(target, input, options));
     },
     TouchNote: (target, input, options) => {
       sent("TouchNote", target);
 
-      return client.TouchNote(target, input, options);
+      return guarded(client.TouchNote(target, input, options));
     },
     MoveNote: (target, input, options) => {
       sent("MoveNote", target);
 
-      return client.MoveNote(target, input, options);
+      return guarded(client.MoveNote(target, input, options));
     },
     CreateBook: (target, input, options) => {
       sent("CreateBook", target);
 
-      return client.CreateBook(target, input, options);
+      return guarded(client.CreateBook(target, input, options));
     },
     RenameBook: (target, input, options) => {
       sent("RenameBook", target);
 
-      return client.RenameBook(target, input, options);
+      return guarded(client.RenameBook(target, input, options));
     },
   };
 
@@ -583,6 +605,10 @@ const faulty = (client: Client) => {
     },
     repeat: (on: boolean) => {
       repeated.on = on;
+    },
+    /** Takes the transport of commands down (every one fails with `RpcClientError`) or back up. */
+    down: (on: boolean) => {
+      down.on = on;
     },
     cut: (error = transport()) =>
       Effect.runSync(Effect.forEach([...cuts], (cut) => Deferred.fail(cut, error))),

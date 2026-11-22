@@ -1,0 +1,62 @@
+{
+  "name": "@highalch/xstate",
+  "version": "0.0.0",
+  "description": "Machine steps for HighAlch stories: XState machines stepped purely or running, in the same story as the data steps.",
+  "keywords": [
+    "alchemy",
+    "effect",
+    "highalch",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/xstate#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/xstate"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@highalch/alchemy-domain": "workspace:*",
+    "@highalch/story": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
+    "@lowalch/tanstack-db": "workspace:*",
+    "@tanstack/db": "catalog:",
+    "@types/node": "catalog:",
+    "@xstate/effect": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "xstate": "catalog:"
+  },
+  "peerDependencies": {
+    "@highalch/story": "workspace:^",
+    "@lowalch/tanstack-db": "workspace:^",
+    "@tanstack/db": "1.0.0-rc.1.5",
+    "@xstate/effect": "1.0.0-beta.2",
+    "effect": "^4.1.4",
+    "xstate": "6.0.0-beta.3"
+  }
+}

@@ -10,12 +10,22 @@ This repository holds two npm scopes:
   what a client shows and how its commands settle. It can also screenshot a mounted component
   after every step without a browser.
 
-| Package                                                  | What                                                                                                                                                                                         |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@lowalch/tanstack-db`](packages/tanstack-db/README.md) | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
-| [`@highalch/story`](packages/story/README.md)            | Stories: the runner, data steps, invariants and view helpers; `./xstate` (machine steps, `explore`) and `./screen` (takumi screenshots)                                                      |
+| Package                                                                      | What                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@lowalch/tanstack-db`](packages/lowalch/tanstack-db/README.md)             | Feeds, rows and projections on the server; collections, queries, commands and `match` in the client; `./react` (`Provider`), `./xstate` (`invoke`), `./server` and the unstable `./internal` |
+| [`@highalch/story`](packages/highalch/story/README.md)                       | The story runner, the world (transport faults, held replies, time), rules; the guide to stories                                                                                              |
+| [`@highalch/tanstack-db`](packages/highalch/tanstack-db/README.md)           | `Db`: what a client's sources show and how its commands settle, on plain TanStack DB                                                                                                         |
+| [`@highalch/alchemy-domain`](packages/highalch/alchemy-domain/README.md)     | `Alchemy`: an alchemy Domain hosted in memory with LowAlch clients, `given`, `remote`, the feed rules                                                                                        |
+| [`@highalch/xstate`](packages/highalch/xstate/README.md)                     | `Machine`: XState machines stepped purely or running, in the same story                                                                                                                      |
+| [`@highalch/screen`](packages/highalch/screen/README.md)                     | `Screen`: a mounted component, its frames vs reviewed baselines, its layout for rules                                                                                                        |
+| [`@highalch/takumi`](packages/highalch/takumi/README.md)                     | `Takumi`: takumi's WASM renderer as a screen's frames and layout, without a browser                                                                                                          |
+| [`@highalch/tanstack-offline`](packages/highalch/tanstack-offline/README.md) | `Offline`: a network, tabs and a stored queue the story owns, for apps on TanStack DB's offline transactions                                                                                 |
+| [`@highalch/tanstack-form`](packages/highalch/tanstack-form/README.md)       | `Form`: the app's own TanStack Form forms, found by the `highalch()` Vite plugin                                                                                                             |
+| [`@highalch/explore`](packages/highalch/explore/README.md)                   | Explorations: every sequence of what can happen, deterministically, shrunk and replayed, sharded across processes; `./xstate` (`explore`: stories generated from a model)                    |
+| [`@highalch/stream`](packages/highalch/stream/README.md)                     | The stream explorations send to an app while they run: the protocol's schemas and the client that sends it, with its auth                                                                    |
+| [`@highalch/studio`](packages/highalch/studio/README.md)                     | `highalch studio`: watch explorations live in a bundled browser UI on your machine                                                                                                           |
 
-Both packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
+The packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
 `@effect/atom-react` are optional peers, needed only by the entries that use them.
 
@@ -106,25 +116,26 @@ run `yield* LowAlch.close(db)` when its owner shuts down.
 
 ```tsx
 import * as Story from "@highalch/story";
-import { Db } from "@highalch/story/tanstack-db";
-import { Screen } from "@highalch/story/screen";
+import { Db } from "@highalch/tanstack-db";
+import { Alchemy } from "@highalch/alchemy-domain";
+import { Screen } from "@highalch/screen";
+import { Takumi } from "@highalch/takumi";
 
-const story = Story.make(Story.memory({ api: NotesApi, layer: handlers, services: stores }), {
+const story = Story.make(Alchemy.memory({ api: NotesApi, layer: handlers, services: stores }), {
   scope: "acc-1",
 });
 
-const List = Screen.make({
-  css,
-  width: 360,
-  height: 200,
-  baselines: new URL("./baselines/", import.meta.url),
-  output: new URL("../artifacts/stories/", import.meta.url),
-  update: process.env.UPDATE_SCREENS === "1",
-});
+const List = Screen.make({ css, width: 360, height: 200 }).pipe(
+  Takumi.frames({
+    baselines: new URL("./baselines/", import.meta.url),
+    output: new URL("../artifacts/stories/", import.meta.url),
+    update: process.env.UPDATE_SCREENS === "1",
+  }),
+);
 
 it("renames optimistically, then settles through the feed", () =>
-  story.with({ name: "rename settles", invariants: Db.invariants })(
-    Story.given(NoteAggregate.ref(id), new NoteCreated({ note: ada })),
+  story.with({ name: "rename settles", rules: Db.rules })(
+    Alchemy.given(NoteAggregate.ref(id), new NoteCreated({ note: ada })),
     List.render(<NoteList account="acc-1" />), // a frame after this step and every later one
     Db.when(notes.rename, { NoteId: "n1", title: "Ada Lovelace" }),
     Db.then(notes.list({ account: "acc-1" }), [{ title: "Ada Lovelace", $hasPendingWrites: true }]),
@@ -180,9 +191,15 @@ state only when that state lives where the story can reach it. The rules:
 
 A story then drives all of it: data steps for collections, machine steps for machines
 (`Machine.mounted` for the one a mounted component reads), and a frame of the component after
-each step. See [Machines in a screen](packages/story/README.md#machines-in-a-screen). One thing
+each step. See [Machines in a screen](packages/highalch/story/README.md#machines-in-a-screen). One thing
 is not covered yet: a frame of a state seeded without reaching it. A story has to send the events
 that lead there.
+
+## Examples
+
+[`packages/highalch/examples`](packages/highalch/examples/README.md) shows bugs a story catches (a list that claims to be
+empty while it loads, a rejected rename that stays on screen, a rejected save that says "Saved",
+a form that forgets your draft), each with the broken variant next to the approved one.
 
 ## Repository
 
@@ -191,6 +208,7 @@ A Vite+ (`vp`) pnpm workspace:
 ```
 packages/tanstack-db   @lowalch/tanstack-db
 packages/story         @highalch/story
+packages/highalch/examples      @highalch/examples (private): bugs a story catches, broken vs approved
 fixtures/              example Domains and views shared by both packages' tests (not published)
 scripts/               check-patterns.ts: the packages' import boundaries
 ```
@@ -211,15 +229,15 @@ through their `exports`, which point at `dist`. `@highalch/story` builds against
 
 ## Releasing
 
-Releases use [Changesets](https://github.com/changesets/changesets). `@lowalch/tanstack-db` and
-`@highalch/story` always share a version.
+Releases use [Changesets](https://github.com/changesets/changesets). `@lowalch/tanstack-db`,
+and every `@highalch/*` package always share a version.
 
 1. With a change that should reach npm, run `vp run changeset`, choose the bump and write one
    line for the changelog. Commit the file it adds under `.changeset/`.
 2. Merging to `main` opens or updates a "Version Packages" pull request with the new versions and
    changelogs.
 3. Merging that pull request packs the new versions and stops: the `publish` job waits in the
-   `npm` environment until its reviewer approves it in the Actions tab. Approval publishes both
+   `npm` environment until its reviewer approves it in the Actions tab. Approval publishes the
    packages through npm trusted publishing and tags the release.
 
 For a prerelease line, run `vp exec changeset pre enter next` before step 1 and
