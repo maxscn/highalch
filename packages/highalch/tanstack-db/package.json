@@ -1,6 +1,6 @@
 {
   "name": "@highalch/tanstack-db",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "Data steps for HighAlch stories on TanStack DB: what a client's sources show, how its commands settle, readers and rules.",
   "keywords": [
     "alchemy",

@@ -1,6 +1,6 @@
 {
   "name": "@highalch/screen",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "Screen steps for HighAlch stories: a mounted React component, its frames against reviewed baselines, and its layout for rules.",
   "keywords": [
     "alchemy",

@@ -1,6 +1,6 @@
 {
   "name": "@highalch/xstate",
-  "version": "0.0.0",
+  "version": "0.0.7",
   "description": "Machine steps for HighAlch stories: XState machines stepped purely or running, in the same story as the data steps.",
   "keywords": [
     "alchemy",
