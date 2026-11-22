@@ -1,5 +1,17 @@
 # @highalch/story
 
+## 0.0.6
+
+### Patch Changes
+
+- c4c693e: `command.result(input)` is a promise again: await it for `Committed | Unconfirmed | E` where there is no Effect, such as a React transition or a form's submit. It never rejects for a typed error; a defect rejects, as does a call on a closing or closed client. Breaking: it is no longer an Effect, so drop the `Effect.runPromise` around it; Effect code uses `command.effect(input)`, with the typed error in the error channel.
+- 0fafb1b: A `.where` or `.one` rule may read only what the entity's rows have. The feed gives a rule the entity's own rows, so a rule over rows that `.rows(...)` widened with extra fields compiled and then read `undefined`; it is now a type error on that declaration. A query whose answer is an array or `null` is accepted as a bare query.
+- c683be6: Move the core to the LowAlch scope: `@highalch/db` is now `@lowalch/tanstack-db` (with the same `/server`, `/react`, `/xstate` and `/internal` entries), and its namespace and error messages say `LowAlch` instead of `HighAlch`. `@highalch/story` keeps its name. The API is otherwise unchanged.
+- Updated dependencies [c4c693e]
+- Updated dependencies [0fafb1b]
+- Updated dependencies [c683be6]
+  - @lowalch/tanstack-db@0.0.6
+
 ## 0.0.5
 
 ### Patch Changes
