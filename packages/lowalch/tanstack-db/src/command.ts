@@ -1,3 +1,4 @@
+import * as Aggregate from "@alchemy.run/domain/Aggregate";
 import type * as Domain from "@alchemy.run/domain";
 import {
   getActiveTransaction,
@@ -7,7 +8,17 @@ import {
   type PacedMutationsConfig,
   type Transaction,
 } from "@tanstack/db";
-import { Cause, Data, Deferred, Effect, Exit, Option, Predicate, type Schema } from "effect";
+import {
+  Cause,
+  Data,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Option,
+  Predicate,
+  type Schema,
+} from "effect";
 import { handle, type Checked, type Handlers } from "./match";
 import { Defect, type TaggedFailure } from "./state";
 import {
@@ -21,7 +32,7 @@ import {
   withEndpointFiber,
   type Connection,
 } from "./client";
-import type * as Rows from "./rows";
+import * as Rows from "./rows";
 import type { Subset } from "./subset";
 import type { Input, Row as Entity } from "./values";
 
@@ -106,6 +117,7 @@ export type Options<A, E extends TaggedFailure> = {
 /** How a declaration addresses and edits rows optimistically: the entity, and one call's edit. */
 export type Edit = {
   readonly entity: Option.Option<Rows.Any>;
+  readonly inserts?: boolean;
   /**
    * Resolves one call from its input in a client's scope: the key of the row it addresses (`known`
    * when it is already chosen, e.g. a create replayed by `mutationFn`) and the aggregate target.
@@ -276,6 +288,86 @@ const react = <A, E extends TaggedFailure>(
       }),
   });
 
+const predict = (
+  connection: Connection,
+  command: Domain.Command.Any,
+  edit: Edit,
+  call: CallOf,
+  subsets: ReadonlyArray<Subset>,
+  commandId: string,
+) => {
+  const entity = Option.getOrUndefined(edit.entity);
+  if (!entity?.rows.state) return;
+
+  const aggregate = entity.writer.from.find(
+    (source): source is Aggregate.Any =>
+      source.kind === "Aggregate" && source.definition.commands.includes(command),
+  );
+  if (!aggregate) return;
+
+  const row = subsets
+    .map((subset) => subset.collection.get(call.key))
+    .find((row) => row !== undefined);
+  if (!row && !edit.inserts) return;
+
+  let state = aggregate.definition.initial;
+  if (row) state = entity.rows.state(row);
+
+  const prediction = Aggregate.predict(aggregate, state, new command(call.input), {
+    id: call.target,
+    now: DateTime.makeUnsafe(connection.clock.currentTimeMillisUnsafe()),
+    commandId,
+    context: connection.context,
+  });
+  if (prediction._tag === "Rejected") return prediction;
+  if (prediction._tag === "Unpredictable") return;
+
+  const source = Aggregate.makeRef(aggregate, call.target);
+  const field = entity.rows.key;
+  const changes = prediction.events.flatMap((event, index) =>
+    entity.writer.changes(aggregate.aggregateName, {
+      event,
+      source,
+      state: undefined,
+      envelope: prediction.envelopes[index]!,
+    }),
+  );
+  if (
+    edit.inserts &&
+    changes.some(
+      (change) => change._tag === "Upserted" && Reflect.get(change.row, field) !== call.key,
+    )
+  )
+    return;
+
+  return {
+    _tag: "Accepted" as const,
+    apply: () => {
+      for (const change of changes) {
+        for (const subset of subsets) {
+          if (change._tag === "Removed") {
+            if (subset.collection.has(change.key)) subset.collection.delete(change.key);
+            continue;
+          }
+          const row = change.row as Entity;
+          const key = String(Reflect.get(row, field));
+          if (subset.collection.has(key)) {
+            subset.collection.update(key, (draft) => {
+              for (const name of Object.keys(draft)) {
+                if (name !== field && !Object.hasOwn(row, name))
+                  Reflect.deleteProperty(draft, name);
+              }
+              for (const [name, value] of Object.entries(row)) {
+                if (name !== field) Reflect.set(draft, name, value);
+              }
+            });
+          } else if (subset.accepts(row)) subset.collection.insert(row);
+        }
+      }
+    },
+  };
+};
+
 /**
  * Starts one call on a client: one TanStack DB transaction whose id is the `commandId`, holding
  * the optimistic edit; it commits when the call settles and rolls back with the original error
@@ -311,8 +403,13 @@ const start = <A, E extends TaggedFailure>(
     onSome: (entity) => connection.ready(entity.entityName),
   });
 
+  let prediction: ReturnType<typeof predict>;
   try {
-    if (call) transaction.mutate(() => edit.apply(subsets, call));
+    if (call) {
+      prediction = predict(connection, command, edit, call, subsets, transaction.id);
+      if (prediction?._tag === "Accepted") transaction.mutate(prediction.apply);
+      else if (!prediction) transaction.mutate(() => edit.apply(subsets, call));
+    }
   } catch (cause) {
     transaction.rollback();
 
@@ -352,6 +449,12 @@ const start = <A, E extends TaggedFailure>(
   if (!call || connection.closingOrClosed) {
     transaction.rollback({ error: closedClientError() });
 
+    return result;
+  }
+
+  if (prediction?._tag === "Rejected") {
+    // Domain rejections are Error instances.
+    transaction.rollback({ error: prediction.rejection as unknown as Error });
     return result;
   }
 

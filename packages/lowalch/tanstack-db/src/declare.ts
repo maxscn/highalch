@@ -641,6 +641,7 @@ const editOf = (entity: Rows.Any, spec: CommandSpec<Row>): Edit => {
   if (spec instanceof Inserts)
     return {
       ...base,
+      inserts: true,
       resolve: resolver(entity, declared, () => crypto.randomUUID()),
       apply: (subsets, call) => {
         // SAFETY: a call's input is this command's input.

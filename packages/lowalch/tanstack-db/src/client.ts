@@ -43,6 +43,8 @@ type Identifier<A extends Domain.Api.Any> = A["Client"]["Identifier"];
 
 /** How a client behaves, besides how it reaches its Api. */
 export type Settings = {
+  /** Services supplied to local command decisions. */
+  readonly context?: Context.Context<never>;
   /** The scope every feed of this client reads, e.g. the signed-in account's key. */
   readonly scope: string;
   /**
@@ -208,7 +210,8 @@ export class Connection {
   readonly settleTimeout: number;
   readonly reloadDelay: number;
   readonly gcTime: number | undefined;
-  private readonly clock: Clock.Clock;
+  readonly clock: Clock.Clock;
+  readonly context?: Context.Context<never>;
   private readonly endpointClock: Clock.Clock | undefined;
   private readonly scopeOfRun = Scope.makeUnsafe();
   private readonly commands = Effect.runSync(Scope.provide(FiberSet.make(), this.scopeOfRun));
@@ -241,6 +244,7 @@ export class Connection {
     this.settleTimeout = settings.settleTimeout ?? 10_000;
     this.reloadDelay = settings.reloadDelay ?? 50;
     this.gcTime = settings.gcTime;
+    this.context = settings.context;
     this.endpointClock = settings.clock;
     this.clock = settings.clock ?? ambientClock ?? Effect.runSync(Clock.Clock);
   }

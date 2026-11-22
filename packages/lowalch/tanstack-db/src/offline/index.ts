@@ -178,7 +178,7 @@ export const status = collectionOptions(statusId, (db: DbClient) => {
     },
   };
 
-  return { id: statusId, getKey: (row: Status) => row.id, sync };
+  return { id: statusId, getKey: (row: Status): string => row.id, sync };
 });
 
 /** The schema of a command's input, as its RPC sends it. */

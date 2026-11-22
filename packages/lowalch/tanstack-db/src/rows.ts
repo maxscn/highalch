@@ -184,6 +184,10 @@ export type RowsDefinition<
   readonly key: KeyField;
   /** The aggregates or views whose events change rows. */
   readonly from: From;
+  /** Reconstructs the aggregate state for local command prediction. */
+  readonly state?: From extends readonly [infer A extends Aggregate.Any]
+    ? (row: RowSchema["Type"]) => Aggregate.StateOf<A>
+    : never;
   /** The feed (scope) an event belongs to, or `undefined` to leave it out of every feed. */
   readonly scope: (input: ViewModule.Inputs<From>) => F["feed"]["scope"]["Type"] | undefined;
   /**
@@ -218,6 +222,7 @@ export type Meta<RowSchema extends Schema.Top, KeyField extends string, Target e
   readonly target: (key: string, scope: string) => string;
   /** Whether changes can arrive after their command's receipt (the entity declares `cause`). */
   readonly deferred: boolean;
+  readonly state?: (row: object) => unknown;
   /** Type-level only: the row. */
   readonly "~row": RowSchema["Type"];
   /** Type-level only: what `target` returns, checked against each command's target. */
@@ -243,6 +248,7 @@ export type Writer = {
   readonly handles: (source: string, tag: string) => boolean;
   /** The scope an input belongs to, or `undefined`. */
   readonly scope: (source: string, input: WriterInput) => string | undefined;
+  readonly changes: (source: string, input: WriterInput) => ReadonlyArray<Change<object>>;
   /** The feed entries an input produces, each naming the entity. */
   readonly entries: (
     source: string,
@@ -325,18 +331,18 @@ export const Rows = <
     scope: (source, input) =>
       // SAFETY: the projection routes the entity's own source inputs, named by their source.
       definition.scope({ name: source, ...input } as never),
-    entries: (source, input) => {
-      const caused = causeOf(input.event);
-
-      const answered = list(
+    changes: (source, input) =>
+      list<Change<object>>(
         handler(source, tagOf(input.event))?.(input.event, {
           source: input.source,
           state: input.state,
           envelope: input.envelope,
-        }),
-      );
+        }) as Answer<object>,
+      ),
+    entries: (source, input) => {
+      const caused = causeOf(input.event);
 
-      return Effect.forEach(answered, (change) =>
+      return Effect.forEach(writer.changes(source, input), (change) =>
         changes.$match(change, {
           // An entry that cannot be encoded is a bug in the entity's `on`: the projection dies.
           Upserted: ({ row }) =>
@@ -362,6 +368,8 @@ export const Rows = <
       return target(key as KeyOf<RowSchema, KeyField>, scope as F["feed"]["scope"]["Type"]);
     },
     deferred: definition.cause !== undefined,
+    // The client supplies a row from this entity’s own subset.
+    state: definition.state as Meta<RowSchema, KeyField, Target>["state"],
     // SAFETY: type-level fields; nothing reads their values.
     "~row": undefined as never,
     // SAFETY: as above.
@@ -387,6 +395,7 @@ export type Any = {
     readonly key: string;
     readonly target: (key: string, scope: string) => string;
     readonly deferred: boolean;
+    readonly state?: (row: object) => unknown;
     readonly "~row": object;
     readonly "~target": string;
   };
