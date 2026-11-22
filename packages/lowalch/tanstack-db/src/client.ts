@@ -47,7 +47,8 @@ export type Settings = {
   readonly scope: string;
   /**
    * Follow each feed (default `true`). Server rendering sets `false`: subsets then load
-   * on observation and explicit reload, and a command settles when it returns.
+   * on observation and explicit reload, and a command settles `Unconfirmed` when it returns,
+   * reloading the entity's loaded subsets.
    */
   readonly live?: boolean;
   /** Retries of loads, reloads and feeds; defaults to `transient`. */

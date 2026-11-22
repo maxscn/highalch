@@ -69,8 +69,9 @@ export const created = (transaction: Created): string => transaction.metadata[cr
 
 /**
  * How a command settled. `Committed`: the server accepted it and the feed delivered every change
- * it caused (or it has no rows to follow). `Unconfirmed`: the server accepted it, but the feed did
- * not deliver its change within the client's `settleTimeout`; its subsets reload instead.
+ * it caused (or no loaded subset could show it). `Unconfirmed`: the server accepted it, but no
+ * feed delivered its change: within the client's `settleTimeout`, or at all (a client that does
+ * not follow its feeds, a feed that failed); its loaded subsets reload instead.
  */
 export type Settled<A> = Data.TaggedEnum<{
   Committed: { readonly reply: A; readonly stream: string; readonly version: number };
@@ -158,7 +159,18 @@ const persist = <A>(
         // SAFETY: the command's reply schema decoded the reply.
         const receipt = { ...written, reply: written.reply as A };
 
-        if (!waiter || !entity) return Option.some(settled.Committed(receipt));
+        if (!entity) return Option.some(settled.Committed(receipt));
+
+        // No feed can confirm it (not followed, or failed): only a reload shows the change.
+        if (!waiter) {
+          const shown = connection.ready(entity.entityName);
+
+          if (shown.length === 0) return Option.some(settled.Committed(receipt));
+
+          for (const subset of shown) subset.schedule();
+
+          return Option.some(settled.Unconfirmed(receipt));
+        }
 
         // A deferred change can only be confirmed by its delivery.
         if (!entity.rows.deferred) {

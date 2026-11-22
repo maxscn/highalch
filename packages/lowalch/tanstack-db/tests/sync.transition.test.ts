@@ -1568,6 +1568,41 @@ describe("f(ready subsets, command)", () => {
     await until(() => one.get("n1")?.title === "Ada 2", "reload");
   });
 
+  it("f(client not following its feeds, command) → Unconfirmed at the reply; its loaded subsets reload", async () => {
+    const server = await open();
+
+    await seed(server, ada);
+
+    const db = account(server, "acc-1", cleanup, { live: false });
+    const one = observe<Note>(db, notes.get({ NoteId: "n1" }), cleanup);
+
+    await ready(one);
+
+    const outcome = await notes.rename
+      .with({ client: db })
+      .result({ NoteId: "n1", title: "Ada 2" });
+
+    // No feed delivered the change: `Committed` would claim the subset holds it.
+    expect(Predicate.isTagged(outcome, "Unconfirmed")).toBe(true);
+
+    await until(() => one.get("n1")?.title === "Ada 2", "reload");
+    expect(server.wire.counts).toMatchObject({ connections: 0 });
+  });
+
+  it("f(no subset loaded, command) → Committed: nothing shown can be stale", async () => {
+    const server = await open();
+
+    await seed(server, ada);
+
+    const db = account(server, "acc-1", cleanup, { live: false });
+
+    const outcome = await notes.rename
+      .with({ client: db })
+      .result({ NoteId: "n1", title: "Ada 2" });
+
+    expect(Predicate.isTagged(outcome, "Committed")).toBe(true);
+  });
+
   it("f(entity command that changes nothing) → settles at once from the stream's cursor, no timeout", async () => {
     const server = await open();
 

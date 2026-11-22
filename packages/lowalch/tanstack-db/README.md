@@ -378,6 +378,10 @@ customers.addComment({ CustomerId: id, Comment });
   `Api.CommandClient`'s errors for that command.
 - If the feed does not deliver within the client's `settleTimeout`, the command settles as
   `Unconfirmed` (the server accepted it) and the entity's subsets reload; it never hangs.
+- `Committed` means the loaded subsets hold the change. When no feed can deliver it (a client
+  with `live: false`, a feed that failed for good), the command settles `Unconfirmed` at the
+  server's reply and the entity's loaded subsets reload, so an app never re-reads to be sure.
+  With no subset of the entity loaded, nothing shown can be stale and it settles `Committed`.
 - `command.with({ client?, onCommitted?, onRejected? })` binds a client and default reactions.
 - `command.effect(input)`: an `Effect<Settled, E>` with the typed error channel (state machines,
   tests). `command.result(input)` is a promise of `Committed | Unconfirmed | E` for `match`, to
@@ -488,8 +492,8 @@ const refresh = Effect.gen(function* () {
 `LowAlch.reload(db, Rows)` reloads every loaded subset of an entity in one client (one snapshot
 transaction each, no flicker; calls within `reloadDelay` reload once). Use it for a change the
 feed does not carry: a write through another path than the entity's commands, while that path
-exists. A client with `live: false` loads subsets on observation and on explicit reload.
-It opens no feed and never re-asks automatically. For server rendering, make one such client
+exists. A client with `live: false` loads subsets on observation, on explicit reload and after
+its own commands (which settle `Unconfirmed`). It opens no feed. For server rendering, make one such client
 per request, call `dehydrate()` on it, then `hydrate(state)` on the browser's client. The
 collection ids match because both clients derive them from the declaration, query and input.
 
