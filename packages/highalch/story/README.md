@@ -79,6 +79,14 @@ guarded. `Alchemy.connect(settings)` adds LowAlch clients to any other host's `a
 host is a `Hosting`: a function returning `{ client(scope), dispose }` (plus optional `queries`,
 `caughtUp`, `idle`, `service`, `adapters`), for example a deployed backend over HTTP.
 
+**The data layer.** Screens and machines need the story's clients without knowing which data
+layer they are: a screen mounts under the client's provider, a running machine's commands run on
+the client and are recorded. They reach it through `Data`, an interface of `@highalch/story`
+(`connect`, `mount`, `run`, `runs`) that a host provides through its `adapters`. `Db.data`
+(`@highalch/tanstack-db`) is TanStack DB's, and `Alchemy.memory` includes it; on a host with
+nothing behind it, give it yourself: `Story.local({ adapters: [Db.data] })`. Without one, a screen
+mounts its element as is, and a running machine fails, naming its step.
+
 A hostless story runs any step that needs no Domain: machines stepped purely, and your own steps
 built with `staged`. A data step or a running machine in it fails at once, naming itself:
 `Step 2 (then …) failed: "then …" needs a host, and this story has none`. `pure.with(...)` is
@@ -133,9 +141,10 @@ machine introduced last), as data steps take `{ as?: scope }`:
 | `done(command, output?, { machine? })`                      | feeds `xstate.done.actor` for the command it asked for last    | an error: its commands settle by themselves (`Db.settled`)                  |
 | `failed(command, error, { machine? })`                      | feeds `xstate.error.actor` with the typed error                | an error: assert the real rejection with `Db.rejected`                      |
 
-`(read) => …` computes a snapshot or an event from what the story's sources show when the step runs
-(`read(source, { as? })` returns its rows, opening it first), so a stepped machine can be asked
-what it _would_ do with the rows a collection shows now. It needs a host.
+`(read) => …` computes a snapshot or an event from what the story shows when the step runs:
+`read` takes a reader, the same a rule yields (`read(Db.rows(source))`, the rows a source shows
+by key; open it first with `Db.open`), so a stepped machine can be asked what it _would_ do with
+the rows a collection shows now. It needs a host.
 
 ## Pure, running or mounted: one explicit choice
 
@@ -167,7 +176,10 @@ story(
   Alchemy.remote(n1, new RenameNote({ NoteId: "n1", title: "Ada (theirs)" })),
   // A draft editor, stepped purely, beside the data: what would it save?
   Machine.given(editor, { input: { NoteId: "n1" } }, { name: "draft" }),
-  Machine.when(async (read) => ({ type: "Edit", title: `${(await read(one))[0]?.title}, edited` })),
+  Machine.when(async (read) => ({
+    type: "Edit",
+    title: `${[...(await read(Db.rows(one))).values()][0]?.title}, edited`,
+  })),
   Machine.when({ type: "Save" }),
   Machine.asked(notes.rename, { title: "Ada (theirs), edited" }),
   Db.then(one, [{ title: "Ada (theirs)", $hasPendingWrites: false }]), // nothing was sent

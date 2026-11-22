@@ -6,5 +6,5 @@
 import { Machine } from "@highalch/xstate";
 ```
 
-Peer dependencies: `@highalch/story`, `@highalch/tanstack-db`, `@lowalch/tanstack-db`, `xstate`, `@xstate/effect`, `effect`. The guide to stories, with this package's steps in context, is
+Peer dependencies: `@highalch/story`, `@lowalch/tanstack-db`, `xstate`, `@xstate/effect`, `effect`. A running machine's commands run on the story's data layer (`Data`, which `Db.data` or `Alchemy.memory` provides). The guide to stories, with this package's steps in context, is
 [`@highalch/story`'s README](../story/README.md#pure-running-or-mounted-one-explicit-choice).

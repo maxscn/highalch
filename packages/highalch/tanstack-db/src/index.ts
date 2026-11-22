@@ -18,6 +18,7 @@
  * ```
  */
 import { connected, nothingPending, rules } from "./rules";
+import { data } from "./data";
 import { clients } from "./state";
 import {
   check,
@@ -53,6 +54,7 @@ export const Db = {
   nothingPending,
   connected,
   clients,
+  data,
 } as const;
 
 export { Connect, plain as plainConnector } from "./connector";

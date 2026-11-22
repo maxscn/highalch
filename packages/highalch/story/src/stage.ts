@@ -119,14 +119,7 @@ export class Stage {
     // SAFETY: built from this adapter, under its own service key.
     if (known) return known as Promise<S>;
 
-    const provided = Option.match(this.world, {
-      onNone: () => [],
-      onSome: (world) => world.host.adapters ?? [],
-    });
-
-    const layer = adapter.layer.pipe(
-      Layer.provide(Layer.mergeAll(Layer.succeed(CurrentStage, this), ...provided)),
-    );
+    const layer = adapter.layer.pipe(Layer.provide(this.adapting()));
 
     const made = Effect.runPromise(
       Layer.buildWithMemoMap(layer, this.memo, this.scope).pipe(
@@ -137,6 +130,32 @@ export class Stage {
     this.built.set(adapter.service, made);
 
     return made;
+  };
+
+  /** The host's adapters (given this stage) and the stage itself, as one Layer. */
+  private adapting = () => {
+    const stage = Layer.succeed(CurrentStage, this);
+    const provided = Option.match(this.world, {
+      onNone: () => [],
+      onSome: (world) => world.host.adapters ?? [],
+    });
+
+    return Layer.mergeAll(stage, ...provided.map((each) => each.pipe(Layer.provide(stage))));
+  };
+
+  private context: Promise<Context.Context<never>> | undefined;
+
+  /**
+   * A service the host's adapters provide (the data layer, `Data`), built once per run; `None`
+   * when the host provides none (or the story has no host).
+   */
+  provided = <I, S>(key: Context.Key<I, S>): Promise<Option.Option<S>> => {
+    // SAFETY: the context of the host's adapters; a key it lacks reads as `None`.
+    this.context ??= Effect.runPromise(
+      Layer.buildWithMemoMap(this.adapting(), this.memo, this.scope),
+    ) as Promise<Context.Context<never>>;
+
+    return this.context.then((context) => Context.getOption(context as Context.Context<I>, key));
   };
 
   /** The runner calls this after each step that passed. */

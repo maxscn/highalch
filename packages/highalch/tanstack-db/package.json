@@ -45,6 +45,7 @@
   "devDependencies": {
     "@highalch/story": "workspace:*",
     "@tanstack/db": "catalog:",
+    "@tanstack/react-db": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "effect": "catalog:",
@@ -55,6 +56,7 @@
   "peerDependencies": {
     "@highalch/story": "workspace:^",
     "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/react-db": "1.0.0-rc.1.5",
     "effect": "^4.1.4",
     "react": "^19.2.7"
   }

@@ -19,8 +19,7 @@ import { registryOf, stageOf } from "@highalch/story/internal";
 import { reader, type Reader } from "@highalch/story/internal";
 import { CurrentStage, Mismatch, type Stage } from "@highalch/story/internal";
 import { partial, staged, type Step } from "@highalch/story/internal";
-import { clients, type Clients, type Run, type Source } from "@highalch/tanstack-db/internal";
-import type { Callable } from "@highalch/tanstack-db/internal";
+import { Data, type CommandRun, type DataLayer } from "@highalch/story/internal";
 import { json } from "@highalch/story/internal";
 
 /** A command a machine's transition spawned, with its actor id, session and input. */
@@ -61,8 +60,8 @@ type Running = {
   readonly machine: AnyStateMachine;
   readonly actor: EffectActor<AnyStateMachine>;
   readonly scope: string;
-  /** The story's clients its commands run on. */
-  readonly db: Clients;
+  /** The story's data layer its commands run on. */
+  readonly data: DataLayer;
   since: number;
 };
 
@@ -108,30 +107,44 @@ export type Named = { readonly name?: string };
 export type Expected = { readonly state: StateValue; readonly context?: MachineContext };
 
 /**
- * Reads what a source shows now in the step's client (or the client of `as`), opened and settled
- * first if it was not observed yet: its rows by key, without TanStack DB's virtual fields. It needs
- * a hosted story.
+ * Reads what the story shows now, through a reader (the same a rule yields): `Db.rows(source)`
+ * for a source's rows by key (open it first, with `Db.open`, if no step showed it yet).
  */
-export type Read = <Row extends object>(
-  source: Source<Row>,
-  options?: { readonly as?: string },
-) => Promise<ReadonlyArray<Row>>;
+export type Read = <A>(reader: Reader<A>) => Promise<A>;
 
 /** A value given as is, or computed from what the story's sources show when the step runs. */
 export type FromShown<T> = T | ((read: Read) => T | Promise<T>);
 
 const readerOf =
   (stage: Stage, label: string): Read =>
-  async <Row extends object>(source: Source<Row>, options: { readonly as?: string } = {}) => {
-    const world = stage.hosted(label);
-    const db = await stage.use(clients);
-    const { observed, opened } = await db.observe(source, options.as);
+  (read) => {
+    stage.hosted(label);
 
-    if (opened) await world.settle();
-
-    // SAFETY: an observed source's rows are its `Row`s, without TanStack DB's virtual fields.
-    return observed.sorted().map(([, shown]) => shown.row as Row);
+    return read.read(stage);
   };
+
+/**
+ * The story's data layer, which running machines need: its host provides it (`Alchemy.memory`,
+ * or `Db.data` in a host's `adapters`). Fails naming the step without one.
+ */
+const dataOf = async (stage: Stage, label: string): Promise<DataLayer> => {
+  stage.hosted(label);
+
+  return Option.getOrThrowWith(
+    await stage.provided(Data),
+    () =>
+      new Mismatch(
+        `"${label}" needs the story's data layer, and its host has none: host it with Alchemy.memory(…), or give its adapters Db.data`,
+      ),
+  );
+};
+
+/** How a declared LowAlch command is called on a client. */
+type Callable<I> = {
+  readonly with: (options: {
+    readonly client?: never;
+  }) => (input: I, callbacks?: { readonly onCommitted?: (value: unknown) => void }) => unknown;
+};
 
 const resolved = async <T extends object>(
   value: FromShown<T>,
@@ -201,12 +214,14 @@ const snapshotOf = (machine: Entered) => {
 const askedOf = (machine: Entered): ReadonlyArray<Ask> => {
   if (machine.mode === "stepped") return machine.asked;
 
-  return machine.db.runs
+  return machine.data
+    .runs()
     .filter((run) => run.by === byOf(machine.name) && run.tick > machine.since)
     .flatMap((run) =>
       Option.match(run.command, {
         onNone: () => [],
-        onSome: (command) => [{ command, input: run.input }],
+        // SAFETY: a machine's recorded commands are the marked commands it invoked.
+        onSome: (command) => [{ command: command as Marked, input: run.input }],
       }),
     );
 };
@@ -293,7 +308,7 @@ type Owner = { readonly name: string; readonly label: string; readonly scope: st
  * recorded as the owner's (`asked` reads them; `settled`/`rejected` assert the last one).
  */
 const runnerOf = (
-  db: Clients,
+  data: DataLayer,
   owner: <I extends Input, A, E>(command: Invocable<I, A, E>, input: I) => Owner,
 ) =>
   Runner.of({
@@ -301,28 +316,30 @@ const runnerOf = (
       Effect.promise(() => {
         const { name, label, scope } = owner(command, input);
 
-        return db.start(
+        return data.run({
           label,
           scope,
-          byOf(name),
+          by: byOf(name),
           input,
-          (client, onCommitted) => {
+          call: (client, onCommitted) => {
             if (!isCallable(command))
               throw new Error("invoke(command) takes a declared LowAlch command");
 
-            return command.with({ client })(input, { onCommitted });
+            // SAFETY: the data layer calls a command with its own client.
+            return command.with({ client: client as never })(input, { onCommitted });
           },
-          Option.some(command),
-        );
+          command: Option.some(command),
+        });
       }).pipe(
-        Effect.flatMap((run: Run) => Effect.promise(() => run.done.then(() => run.outcome))),
+        Effect.flatMap((run: CommandRun) => Effect.promise(() => run.done.then(() => run.outcome))),
         Effect.flatMap((outcome): Effect.Effect<A, E> => {
           if (Predicate.isTagged(outcome, "Rejected") && "error" in outcome)
             // SAFETY: the command's typed rejection is one of its declared errors.
             return Effect.fail(outcome.error as E);
 
-          if (Predicate.isTagged(outcome, "Died") && "cause" in outcome)
-            return Effect.failCause(outcome.cause);
+          if (Predicate.isTagged(outcome, "Died") && Cause.isCause(Reflect.get(outcome, "cause")))
+            // SAFETY: a dead command's cause is a Cause, checked above.
+            return Effect.failCause(Reflect.get(outcome, "cause") as Cause.Cause<E>);
 
           const value = Option.flatten(
             Option.liftPredicate(
@@ -402,12 +419,17 @@ Atom.runtime.addGlobalLayer(
               Effect.promise(async () => {
                 stage.hosted("a mounted machine's command");
 
-                return { db: await stage.use(clients), entered: await machinesOf(stage) };
+                return {
+                  data: await dataOf(stage, "a mounted machine's command"),
+                  scope: stage.hosted("a mounted machine's command").scope,
+                  entered: await machinesOf(stage),
+                };
               }).pipe(
-                Effect.flatMap(({ db, entered }) =>
-                  runnerOf(db, (asked, given) =>
-                    mountedOwner(entered, db.world.scope, asked, given),
-                  ).run(command, input),
+                Effect.flatMap(({ data, scope, entered }) =>
+                  runnerOf(data, (asked, given) => mountedOwner(entered, scope, asked, given)).run(
+                    command,
+                    input,
+                  ),
                 ),
               ),
           }),
@@ -467,9 +489,9 @@ const start = (
 
   return staged(label, async (stage) => {
     const world = stage.hosted(label);
-    const db = await stage.use(clients);
+    const data = await dataOf(stage, label);
 
-    await db.connect();
+    await data.connect();
 
     const scope = Effect.runSync(Scope.make());
     let entered = Option.none<Running>();
@@ -488,7 +510,7 @@ const start = (
       create.pipe(
         Effect.provideService(
           Runner,
-          runnerOf(db, (command) => ownerOf(current(), command)),
+          runnerOf(data, (command) => ownerOf(current(), command)),
         ),
         Effect.provideService(Scope.Scope, scope),
       ),
@@ -501,16 +523,17 @@ const start = (
       machine,
       actor,
       scope: world.scope,
-      db,
+      data,
       since: world.next(),
     };
 
     entered = Option.some(running);
     await enter(stage, running);
-    // Stopped before the clients close, as an unmounting component stops its actor.
-    db.releases.push(() => {
+    // Stopped when the story ends, before the data layer closes its clients, as an unmounting
+    // component stops its actor.
+    stage.end(async () => {
       actor.stop();
-      Effect.runFork(Scope.close(scope, Exit.void));
+      await Effect.runPromise(Scope.close(scope, Exit.void));
     });
     await world.settle(false);
   });
@@ -533,9 +556,9 @@ const mounted = <M extends AnyStateMachine>(atoms: Atoms<M>, options: Named = {}
 
   return staged(label, async (stage) => {
     const world = stage.hosted(label);
-    const db = await stage.use(clients);
+    const data = await dataOf(stage, label);
 
-    await db.connect();
+    await data.connect();
 
     const registry = await registryOf(stage);
     const release = registry.mount(atoms.actor);
@@ -557,7 +580,7 @@ const mounted = <M extends AnyStateMachine>(atoms: Atoms<M>, options: Named = {}
       machine: actor.logic,
       actor,
       scope: world.scope,
-      db,
+      data,
       since: world.next(),
     });
     await world.settle(false);

@@ -3,14 +3,12 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RegistryContext } from "@effect/atom-react";
 import { Context, Layer, Option, Pipeable, Schema } from "effect";
-import { DbProvider } from "@tanstack/react-db";
 import { act, createElement, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { registryOf } from "@highalch/story/internal";
+import { Data, registryOf } from "@highalch/story/internal";
 import { reader, type Reader } from "@highalch/story/internal";
 import { Mismatch, type Done, type Stage } from "@highalch/story/internal";
 import { staged, type Step } from "@highalch/story/internal";
-import { clients } from "@highalch/tanstack-db/internal";
 import { macrotask, type World } from "@highalch/story/internal";
 import { escape, install, numbered, serialize, type Installed } from "./dom";
 import { Layout, LayoutOf, type Box, type Extent, type Measured, type Run } from "./layout";
@@ -391,8 +389,13 @@ const build = (options: Options, engines: Engines) => {
         throw new Mismatch("this story already rendered a screen");
 
       const framing = await framingOf(stage, settings.every ?? true);
-      const db = await stage.use(clients);
-      const client = await db.connect();
+      // Under the client of the story's data layer, when its host has one.
+      const data = await stage.provided(Data);
+      const provided = await Option.match(data, {
+        onNone: async () => element,
+        // SAFETY: a data layer mounts the React element it is given.
+        onSome: async (layer) => (await layer.mount(element)) as ReactElement,
+      });
       const registry = await registryOf(stage);
       const dom = install(width, height);
       const container = document.createElement("div");
@@ -421,16 +424,7 @@ const build = (options: Options, engines: Engines) => {
       });
 
       await flush(() =>
-        root.render(
-          createElement(
-            RegistryContext.Provider,
-            { value: registry },
-            Option.match(Option.fromUndefinedOr(db.connector.provide), {
-              onNone: () => createElement(DbProvider, { client: client.db }, element),
-              onSome: (provide) => provide(client.db, element),
-            }),
-          ),
-        ),
+        root.render(createElement(RegistryContext.Provider, { value: registry }, provided)),
       );
 
       stage.after(async (done) => {

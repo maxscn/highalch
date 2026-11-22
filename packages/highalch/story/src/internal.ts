@@ -5,6 +5,7 @@
  */
 export * from "./atoms";
 export * from "./clock";
+export * from "./data";
 export * from "./files";
 export * from "./host";
 export * from "./rules";

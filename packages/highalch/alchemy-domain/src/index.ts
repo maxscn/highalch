@@ -15,7 +15,7 @@
  */
 import type * as Domain from "@alchemy.run/domain";
 import * as LowAlch from "@lowalch/tanstack-db";
-import { dbStep, type Scoped } from "@highalch/tanstack-db/internal";
+import { data, dbStep, type Scoped } from "@highalch/tanstack-db/internal";
 import { connect as connectWith, entries, retryTransport, type ClientSettings } from "./connector";
 import { domain, type DomainHost, type Memory } from "./host";
 import { fed, noFlickerBack, rejectedRestores, subsetsAgree } from "./rules";
@@ -38,7 +38,8 @@ const memory =
   async () => {
     const host = await domain(options)();
 
-    return { ...host, adapters: [...(host.adapters ?? []), connect(settings)] };
+    // LowAlch's clients, and the data layer screens and machines use over them.
+    return { ...host, adapters: [...(host.adapters ?? []), connect(settings), data] };
   };
 
 /** An entity, as `LowAlch.reload(db, Rows)` takes it. */

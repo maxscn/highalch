@@ -9,7 +9,8 @@
  *   layer, no UI, no alchemy. Adapters add those, each in its own package.
  * - `@highalch/tanstack-db` adds TanStack DB; `@highalch/xstate` XState and LowAlch's commands;
  *   `@highalch/screen` happy-dom, React DOM and node files; `@highalch/takumi` takumi; and
- *   `@highalch/tanstack-form` TanStack Form. Only `@highalch/alchemy-domain` (and `@highalch/xstate`,
+ *   `@highalch/tanstack-form` TanStack Form. Screens and machines reach the data layer through the
+ *   story's `Data` interface, never `@highalch/tanstack-db`. Only `@highalch/alchemy-domain` (and `@highalch/xstate`,
  *   for LowAlch's commands) touch alchemy or LowAlch.
  * - `@highalch/stream` imports only effect: the console decodes with it, without the test kit.
  *   `@highalch/studio` adds `ws` and node; `@highalch/explore` adds the story kit and node files,
@@ -70,12 +71,12 @@ const packages: ReadonlyArray<Package> = [
   {
     name: "@highalch/tanstack-db",
     folder: "packages/highalch/tanstack-db/src",
-    allows: of(effect, react, tanstack, story),
+    allows: of(effect, react, tanstack, /^@tanstack\/react-db$/, story),
   },
   {
     name: "@highalch/xstate",
     folder: "packages/highalch/xstate/src",
-    allows: of(effect, tanstack, story, db, lowalch, xstate),
+    allows: of(effect, story, lowalch, xstate),
   },
   {
     name: "@highalch/screen",
@@ -84,8 +85,7 @@ const packages: ReadonlyArray<Package> = [
       effect,
       react,
       story,
-      db,
-      /^(?:happy-dom|react-dom|@effect\/atom-react|@tanstack\/react-db)(?:\/|$)/,
+      /^(?:happy-dom|react-dom|@effect\/atom-react)(?:\/|$)/,
       /^node:(?:fs|fs\/promises|path|url|zlib)$/,
     ),
   },

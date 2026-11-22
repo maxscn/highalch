@@ -12,6 +12,10 @@
  * import * as Story from "@highalch/story";
  * ```
  */
+export { Data } from "./data";
+
+export type { CommandOutcome, CommandRequest, CommandRun, DataLayer } from "./data";
+
 export { local } from "./host";
 
 export type { Host, Hosting } from "./host";

@@ -185,6 +185,19 @@ describe("f(hostless story, step that needs a host) → a clear error naming the
     expect(failure?.message).toContain('"start editor running" needs a host');
   });
 
+  it("f(Machine.start, a host with no data layer) → a clear error: its commands run nowhere", async () => {
+    const failure = await Story.make(Story.local(), { scope: "acc-1" })(
+      Machine.start(editor, { input: { NoteId: "n1" } }),
+    ).then(
+      () => undefined,
+      (error: Story.StoryFailure) => error,
+    );
+
+    expect(failure?.message).toContain(
+      `"start editor running" needs the story's data layer, and its host has none`,
+    );
+  });
+
   it("f(hostless.with(options)) → refused: it has no clients or rules", () => {
     expect(() => pure.with({ rules: Db.rules })).toThrow(/hostless story/);
   });
@@ -248,7 +261,7 @@ describe("f(machines and data in one story) → what only the combination shows"
       // The user appends to the title the list shows now.
       Machine.when(async (read) => ({
         type: "Edit",
-        title: `${(await read(one))[0]?.title ?? ""}, edited`,
+        title: `${[...(await read(Db.rows(one))).values()][0]?.title ?? ""}, edited`,
       })),
       Machine.when({ type: "Save" }),
       Machine.then({ state: "Saving", context: { draft: "Ada (theirs), edited" } }),

@@ -4,6 +4,7 @@
  */
 export { Connect, plain as plainConnector } from "./connector";
 export type { Change, Connector, Watched } from "./connector";
+export * from "./data";
 export * from "./rules";
 export * from "./state";
 export * from "./steps";

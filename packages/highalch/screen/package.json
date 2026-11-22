@@ -61,9 +61,6 @@
   "peerDependencies": {
     "@effect/atom-react": "^4.1.4",
     "@highalch/story": "workspace:^",
-    "@highalch/tanstack-db": "workspace:^",
-    "@tanstack/db": "1.0.0-rc.1.5",
-    "@tanstack/react-db": "1.0.0-rc.1.5",
     "effect": "^4.1.4",
     "happy-dom": "^20.11.1",
     "react": "^19.2.7",
