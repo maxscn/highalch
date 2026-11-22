@@ -11,7 +11,7 @@ import type { Marked } from "./live";
 import { Defect, type TaggedFailure } from "./state";
 import { closedClientError, connectionOf, failureOf, read } from "./client";
 import {
-  make,
+  declare,
   type Command,
   type Created,
   type Edit,
@@ -718,7 +718,7 @@ export const collection = <
   });
 
   const commands = Object.entries(declaration.commands ?? {}).map(([name, spec]) => {
-    return [name, make(declaredOf(spec).command, editOf(rows, spec))] as const;
+    return [name, declare(declaredOf(spec).command, editOf(rows, spec), name)] as const;
   });
 
   declarations.set(rows, known);
@@ -840,12 +840,16 @@ export const command = <C extends Domain.Command.Any>(
       }),
   });
 
-  return make(source, {
-    entity: Option.none(),
-    resolve: (input, scope) => ({ key: "", target: target(input, scope), input }),
-    apply: () => 0,
-    paced: Option.none(),
-  });
+  return declare(
+    source,
+    {
+      entity: Option.none(),
+      resolve: (input, scope) => ({ key: "", target: target(input, scope), input }),
+      apply: () => 0,
+      paced: Option.none(),
+    },
+    source.tag,
+  );
 };
 
 export type { TaggedFailure };

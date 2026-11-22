@@ -27,6 +27,10 @@ const workspace = [
     replacement: source("./packages/lowalch/tanstack-db/src/xstate/index.ts"),
   },
   {
+    find: /^@lowalch\/tanstack-db\/offline$/,
+    replacement: source("./packages/lowalch/tanstack-db/src/offline/index.ts"),
+  },
+  {
     find: /^@lowalch\/tanstack-db\/internal$/,
     replacement: source("./packages/lowalch/tanstack-db/src/internal.ts"),
   },

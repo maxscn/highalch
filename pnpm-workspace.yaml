@@ -17,6 +17,7 @@ catalog:
   "@changesets/cli": ^3.0.3
   "@effect/atom-react": 4.1.4
   "@tanstack/db": 1.0.0-rc.1.5
+  "@tanstack/offline-transactions": 1.2.0
   "@tanstack/react-db": 1.0.0-rc.1.5
   "@tanstack/react-form": 1.33.5
   "@types/node": ^24

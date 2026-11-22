@@ -32,7 +32,8 @@ parallel, and start no dev servers.
   `packages/highalch/*`). LowAlch (`@lowalch/*`) converts alchemy Domain primitives for other
   infrastructure; HighAlch (`@highalch/*`) verifies apps built on them, one package per
   integration:
-  - `@lowalch/tanstack-db`: the core (`.`, `./server`, `./react`, `./xstate`, `./internal`).
+  - `@lowalch/tanstack-db`: the core (`.`, `./server`, `./react`, `./xstate`, `./offline`,
+    `./internal`).
   - `@highalch/story`: the runner, world, rules and the host interface (`.`, `./internal`).
   - `@highalch/tanstack-db` (`Db`), `@highalch/xstate` (`Machine`), `@highalch/screen`
     (`Screen`), `@highalch/takumi` (`Takumi`), `@highalch/tanstack-form` (`Form`; `./vite`,
@@ -63,6 +64,7 @@ parallel, and start no dev servers.
     LowAlch; `@highalch/tanstack-db` works on plain TanStack DB.
   - Only `@lowalch/tanstack-db/xstate` and `@highalch/xstate` import `xstate` and `@xstate/effect`
     (and `@highalch/explore/xstate`, its model-based exploration).
+  - Only `@lowalch/tanstack-db/offline` imports `@tanstack/offline-transactions`.
   - Only `@highalch/screen` imports `happy-dom`, `react-dom` and `@effect/atom-react`; only
     `@highalch/takumi` imports `takumi-js`; only `@highalch/tanstack-form` imports
     `@tanstack/react-form`. Stories find the app's forms through the `highalch()` Vite plugin

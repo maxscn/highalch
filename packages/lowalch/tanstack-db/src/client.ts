@@ -61,7 +61,36 @@ export type Settings = {
   readonly gcTime?: number;
   /** Time service for synchronous make. A scoped layer uses the ambient Clock by default. */
   readonly clock?: Clock.Clock;
+  /**
+   * Queue command calls durably and send them when the network allows: `offline()` from
+   * `@lowalch/tanstack-db/offline`. Left out, a call is sent at once and fails with the transport.
+   */
+  readonly offline?: Offline;
 };
+
+/** One command call as a queue stores it: plain data, replayed with the same `commandId`. */
+export type Queued = {
+  readonly commandId: string;
+  /** The declaration that replays it: `<entity>/<declared name>`. */
+  readonly name: string;
+  readonly target: string;
+  readonly input: Input;
+  /** The key of the row the call addresses (empty for a command with no rows). */
+  readonly key: string;
+};
+
+/** A client's durable queue of command calls. */
+export type Queue = {
+  /** Queues one call; settles with what sending it settled with, once it was sent for good. */
+  readonly send: (call: Queued) => Promise<unknown>;
+  /** A subset turned ready: the queue shows it the calls restored from storage. */
+  readonly arrived: (subset: Subset) => void;
+  /** Stops sending. Calls still queued stay stored; their transactions roll back as closed. */
+  readonly close: () => void;
+};
+
+/** Starts a client's queue (`offline()` of `@lowalch/tanstack-db/offline` makes one). */
+export type Offline = (connection: Connection, db: DbClient) => Queue;
 
 /**
  * A client of the Api `api`, reached through its client Layer (`Api.layerClientWebSocket(url)`,
@@ -181,6 +210,8 @@ export class Connection {
   private readonly paced = new Set<Transaction>();
   private readonly replyDeadline = Deferred.makeUnsafe<void>();
   private closing: Effect.Effect<void> | undefined;
+  /** The durable queue of this client's calls, when it was made with `offline`. */
+  queue: Option.Option<Queue> = Option.none();
   /** One subscription per feed (stream name), shared by every subset of every entity on it. */
   readonly feeds = new Map<string, Subscription>();
   /** The subsets of each entity whose sync runs, by entity name. */
@@ -236,6 +267,15 @@ export class Connection {
     const release = () => this.paced.delete(transaction);
 
     void transaction.when("settled").then(release, release);
+  };
+
+  /** Runs a queued call's send as one of this client's commands; never rejects. */
+  runQueued = <A, E>(effect: Effect.Effect<A, E>) => {
+    const done = Deferred.makeUnsafe<Exit.Exit<A, E>>();
+
+    this.forkCommand(Effect.exit(effect).pipe(Effect.tap((exit) => Deferred.succeed(done, exit))));
+
+    return Effect.runPromise(Deferred.await(done));
   };
 
   forkCommand = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -324,6 +364,9 @@ export class Connection {
 
   close = (db: DbClient) =>
     Effect.suspend(() => {
+      // Queued calls stay stored for the next client; only what is being sent is waited for.
+      if (!this.closing) Option.map(this.queue, (queue) => queue.close());
+
       this.closing ??= Effect.runSync(
         Effect.cached(
           this.drainCommands().pipe(
@@ -381,8 +424,16 @@ const runtimeOf = <A extends Domain.Api.Any>(config: Config<A>): Runtime => {
   return { endpoints, dispose: Effect.void };
 };
 
-const makeClient = <A extends Domain.Api.Any>(config: Config<A>, ambientClock?: Clock.Clock) =>
-  new DbClient({ [dependency]: new Connection(config, runtimeOf(config), ambientClock) });
+const makeClient = <A extends Domain.Api.Any>(config: Config<A>, ambientClock?: Clock.Clock) => {
+  const connection = new Connection(config, runtimeOf(config), ambientClock);
+  const db = new DbClient({ [dependency]: connection });
+
+  connection.queue = Option.map(Option.fromUndefinedOr(config.offline), (start) =>
+    start(connection, db),
+  );
+
+  return db;
+};
 
 /**
  * One account's TanStack `DbClient`, with its Domain connection as a dependency. Give it to the

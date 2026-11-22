@@ -398,8 +398,12 @@ export class Subset {
 
     if (!this.ready) {
       this.ready = true;
+      markReady();
 
-      return markReady();
+      // Calls restored from a durable queue show on the rows that just loaded.
+      Option.map(this.connection.queue, (queue) => queue.arrived(this));
+
+      return;
     }
 
     for (const error of this.reported.splice(0)) reportHealthy(error);

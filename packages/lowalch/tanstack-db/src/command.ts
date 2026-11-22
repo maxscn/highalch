@@ -134,7 +134,7 @@ const typed = (error: unknown): error is TaggedFailure =>
  * Sends one call with `commandId` and settles once the feed delivered its change, the feed
  * passed the stream's cursor after it (a change the feed does not carry), or the timeout.
  */
-const persist = <A>(
+export const persist = <A>(
   connection: Connection,
   command: Domain.Command.Any,
   edit: Edit,
@@ -213,6 +213,53 @@ const persist = <A>(
       return Effect.succeed(answer.value);
     }),
   );
+
+/** The commands declared in this module graph, by `<entity>/<declared name>`: what a queue replays. */
+const registry = new Map<string, { readonly command: Domain.Command.Any; readonly edit: Edit }>();
+
+const names = new WeakMap<Edit, string>();
+
+/** The declared command a stored call names, once its module loaded. */
+export const declaredAs = (name: string) => Option.fromUndefinedOr(registry.get(name));
+
+/** A declaration's command: built, and known by name to a durable queue. */
+export const declare = <C extends Domain.Command.Any>(
+  command: C,
+  edit: Edit,
+  declared: string,
+): Command<C> => {
+  const entity = Option.match(edit.entity, {
+    onNone: () => "",
+    onSome: (rows) => rows.entityName,
+  });
+
+  names.set(edit, `${entity}/${declared}`);
+  registry.set(`${entity}/${declared}`, { command, edit });
+
+  return make(command, edit);
+};
+
+/**
+ * Sends one call: at once, or through the client's durable queue when it has one. Either way it
+ * settles as `persist` does, and fails with the original typed error.
+ */
+const send = <A>(
+  connection: Connection,
+  command: Domain.Command.Any,
+  edit: Edit,
+  call: CallOf,
+  commandId: string,
+): Effect.Effect<Settled<A>, TaggedFailure | Defect> =>
+  Option.match(connection.queue, {
+    onNone: () => persist<A>(connection, command, edit, call, commandId),
+    onSome: (queue) =>
+      Effect.tryPromise({
+        try: () => queue.send({ ...call, commandId, name: names.get(edit) ?? command.tag }),
+        // SAFETY: a queue rejects with what `persist` failed with, or a closed client's error.
+        catch: (cause) => cause as TaggedFailure | Defect,
+        // SAFETY: a queue resolves with what `persist` settled with.
+      }).pipe(Effect.map((value) => value as Settled<A>)),
+  });
 
 /** Runs the reactions of a settled call. */
 const react = <A, E extends TaggedFailure>(
@@ -312,7 +359,7 @@ const start = <A, E extends TaggedFailure>(
 
   connection.forkCommand(
     Effect.gen(function* () {
-      const exit = yield* Effect.exit(persist<A>(connection, command, edit, call, transaction.id));
+      const exit = yield* Effect.exit(send<A>(connection, command, edit, call, transaction.id));
 
       if (Exit.isSuccess(exit)) value = Option.some(exit.value);
 
@@ -455,7 +502,7 @@ export const make = <C extends Domain.Command.Any>(
       const id = active?.id ?? crypto.randomUUID();
 
       connection.forkCommand(
-        persist<A>(connection, command, edit, call, id).pipe(
+        send<A>(connection, command, edit, call, id).pipe(
           Effect.onExit((exit) =>
             Effect.sync(() => {
               if (Exit.isSuccess(exit)) react<A, E>(Exit.succeed(exit.value), bound);
@@ -477,7 +524,7 @@ export const make = <C extends Domain.Command.Any>(
       const call = edit.resolve(input, connection.scope, known);
 
       return connection.runMutation(
-        persist<A>(connection, command, edit, call, params.transaction.id),
+        send<A>(connection, command, edit, call, params.transaction.id),
         params.transaction,
       );
     },
@@ -574,13 +621,7 @@ const pace = <C extends Domain.Command.Any>(
             const target = addressed?.get(key) ?? resolved.target;
 
             return Effect.exit(
-              persist(
-                connection,
-                command,
-                edit,
-                { ...resolved, target },
-                `${transaction.id}:${key}`,
-              ),
+              send(connection, command, edit, { ...resolved, target }, `${transaction.id}:${key}`),
             );
           }),
           { concurrency: "unbounded" },

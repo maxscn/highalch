@@ -3,7 +3,8 @@
  * only what its row below allows, and reaches another package only by its entries (never its
  * `src` by a relative path):
  *
- * - `@lowalch/tanstack-db` imports effect, alchemy Domain, TanStack DB and React; XState only in
+ * - `@lowalch/tanstack-db` imports effect, alchemy Domain, TanStack DB and React; TanStack's
+ *   offline transactions only in its `offline` entry; XState only in
  *   its `xstate` entry. It never imports HighAlch.
  * - `@highalch/story`, the runner, imports effect and the node files keeping traces: no data
  *   layer, no UI, no alchemy. Adapters add those, each in its own package.
@@ -61,7 +62,7 @@ const packages: ReadonlyArray<Package> = [
     name: "@lowalch/tanstack-db",
     folder: "packages/lowalch/tanstack-db/src",
     allows: of(effect, react, alchemy, /^@tanstack\/(?:db|react-db)$/),
-    entries: { xstate },
+    entries: { xstate, offline: /^@tanstack\/offline-transactions$/ },
   },
   {
     name: "@highalch/story",

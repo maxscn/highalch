@@ -18,6 +18,7 @@
       "@lowalch/tanstack-db/server": ["./packages/lowalch/tanstack-db/src/server.ts"],
       "@lowalch/tanstack-db/react": ["./packages/lowalch/tanstack-db/src/react.tsx"],
       "@lowalch/tanstack-db/xstate": ["./packages/lowalch/tanstack-db/src/xstate/index.ts"],
+      "@lowalch/tanstack-db/offline": ["./packages/lowalch/tanstack-db/src/offline/index.ts"],
       "@lowalch/tanstack-db/internal": ["./packages/lowalch/tanstack-db/src/internal.ts"],
       "@highalch/examples": ["./packages/highalch/examples/src/index.ts"],
       "@highalch/story": ["./packages/highalch/story/src/index.ts"],

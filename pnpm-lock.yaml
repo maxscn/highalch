@@ -185,6 +185,9 @@ catalogs:
     '@tanstack/db':
       specifier: 1.0.0-rc.1.5
       version: 1.0.0-rc.1.5
+    '@tanstack/offline-transactions':
+      specifier: 1.2.0
+      version: 1.2.0
     '@tanstack/react-db':
       specifier: 1.0.0-rc.1.5
       version: 1.0.0-rc.1.5
@@ -253,6 +256,9 @@ importers:
       '@tanstack/db':
         specifier: 'catalog:'
         version: 1.0.0-rc.1.5(typescript@7.0.2)
+      '@tanstack/offline-transactions':
+        specifier: 'catalog:'
+        version: 1.2.0(@tanstack/db@1.0.0-rc.1.5(typescript@7.0.2))
       '@tanstack/react-db':
         specifier: 'catalog:'
         version: 1.0.0-rc.1.5(react@19.2.7)(typescript@7.0.2)
@@ -678,6 +684,9 @@ importers:
       '@tanstack/db':
         specifier: 'catalog:'
         version: 1.0.0-rc.1.5(typescript@7.0.2)
+      '@tanstack/offline-transactions':
+        specifier: 'catalog:'
+        version: 1.2.0(@tanstack/db@1.0.0-rc.1.5(typescript@7.0.2))
       '@tanstack/react-db':
         specifier: 'catalog:'
         version: 1.0.0-rc.1.5(react@19.2.7)(typescript@7.0.2)
@@ -1366,6 +1375,18 @@ packages:
 
   '@tanstack/form-core@1.33.5':
     resolution: {integrity: sha512-3dfx9MBP0aq5sXKteikG629X9oviptrQj0IFRk9YGcb+lB7Kv5x8S17oOSk1wUWgjQZ4xVJEMbKwOAODymocgA==}
+
+  '@tanstack/offline-transactions@1.2.0':
+    resolution: {integrity: sha512-bITqJN2lSHeXTxDaqNhieW94qUuivxyzxD+ehb25/j0PWPpTJoB8RNzbjvU0Q2j6hAfdplgu+P3TewoNTjlOMQ==}
+    peerDependencies:
+      '@react-native-community/netinfo': '>=11.0.0'
+      '@tanstack/db': ^1.0.0-rc.0
+      react-native: '>=0.70.0'
+    peerDependenciesMeta:
+      '@react-native-community/netinfo':
+        optional: true
+      react-native:
+        optional: true
 
   '@tanstack/pacer-lite@0.1.1':
     resolution: {integrity: sha512-y/xtNPNt/YeyoVxE/JCx+T7yjEzpezmbb+toK8DDD1P4m7Kzs5YR956+7OKexG3f8aXgC3rLZl7b1V+yNUSy5w==}
@@ -2733,6 +2754,10 @@ snapshots:
       '@tanstack/devtools-event-client': 0.4.4
       '@tanstack/pacer-lite': 0.1.1
       '@tanstack/store': 0.11.2
+
+  '@tanstack/offline-transactions@1.2.0(@tanstack/db@1.0.0-rc.1.5(typescript@7.0.2))':
+    dependencies:
+      '@tanstack/db': 1.0.0-rc.1.5(typescript@7.0.2)
 
   '@tanstack/pacer-lite@0.1.1': {}
 

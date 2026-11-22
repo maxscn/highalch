@@ -507,6 +507,66 @@ Retries, reload debounces and command settlement use Effect's `Clock`. The scope
 uses the ambient clock. Pass `clock` in the config to provide a clock directly to `make` or
 override the layer's clock.
 
+## Offline: `@lowalch/tanstack-db/offline`
+
+Opt in on the client. Left out, nothing changes: a call is sent at once and fails with the
+transport.
+
+```ts
+import * as LowAlch from "@lowalch/tanstack-db";
+import { offline, status } from "@lowalch/tanstack-db/offline";
+
+const db = LowAlch.make({ api, layer, scope: accountId, offline: offline() });
+
+const tx = notes.rename({ NoteId, title }); // the same call, the same transaction
+await tx.when("settled"); // queued while the network is away; the row shows `$hasPendingWrites`
+
+const { data } = useLiveQuery((q) => q.from({ status })); // [{ online, queued, leader, durable }]
+```
+
+It is built on TanStack DB's `@tanstack/offline-transactions` (an optional peer, `1.2.0`): its
+executor stores, orders, retries and replays the calls and elects the tab that sends. LowAlch
+writes no outbox of its own.
+
+- **A call is stored as data** before it is sent: the declaration's name, the target from the
+  command's own `target`, the input encoded by the command's schema, and the `commandId`. The
+  queue is a local collection of the client, `calls`, readable like any other; a row leaves when
+  its call settled.
+- **Replay after a reload.** The next client of the same scope restores the queue and sends each
+  call again with the same `commandId`, in the order called. A restored call's optimistic edit
+  shows again on every subset that loads, with the key it was given (a create is the same row),
+  until it settles.
+- **Failures.** A typed Domain rejection is permanent: the optimistic edit rolls back and
+  `when("settled")`, `effect` and `result` get the original instance. A transport failure
+  (`RpcClientError`) is retried under the executor's backoff, and at once when the browser says it
+  is back online. Any other failure is a defect and permanent. A call rejected while replayed
+  after a reload has no transaction left to reject, so it is kept as a row of `rejected` with its
+  error; delete the row to dismiss it.
+- **Status** is one row of the `status` collection: `online` (the detector says so and the last
+  send reached the server), `queued` (calls stored or being sent by this tab), `leader` and
+  `durable` (calls survive a reload: storage works and this tab leads). It is data for
+  `useLiveQuery`, machines and stories; there is no hook.
+- **Scopes.** Storage and leadership are named by the client's `scope`
+  (`lowalch-offline:<scope>`), so two accounts never share a queue.
+- **Options.** `offline({ storage?, leaderElection?, onlineDetector? })` takes the library's
+  interfaces. The defaults are the library's: IndexedDB, else localStorage; Web Locks, else a
+  BroadcastChannel; the browser's online detector. With no storage, calls are sent at once and
+  `durable` is `false`.
+- **Lazy declarations.** A stored call whose declaration is not loaded yet (a lazy route) waits
+  and is retried; it is never dropped.
+
+**Several tabs.** One tab leads and sends the queue; when it closes, another takes over and
+sends what is stored, so nothing is lost. The library has no way for another tab to hand a call
+to the leader: a tab that does not lead sends its own calls at once, and they are not stored
+(`leader: false`, `durable: false`). That is safe, as a `commandId` is idempotent, but such a call
+fails with the transport while offline. With Web Locks a tab leads until it closes.
+
+**What LowAlch adds to the library, and why.** Its `collections` are fixed when the executor
+starts, and a transaction with no mutation is never stored, while LowAlch's optimistic edits land
+on subset collections that are made as they are observed, and some calls edit no loaded row. So
+the executor's only collection is `calls`: every call is one inserted row there, and LowAlch
+applies the command's own edit to the subsets, holding it until the executor settles the call.
+
 ## The subset model and its trade-offs
 
 An account can have too many rows to load a whole entity, so there is **one collection per

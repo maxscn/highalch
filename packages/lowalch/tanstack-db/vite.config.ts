@@ -7,6 +7,7 @@ export default defineConfig({
       server: "src/server.ts",
       react: "src/react.tsx",
       xstate: "src/xstate/index.ts",
+      offline: "src/offline/index.ts",
       internal: "src/internal.ts",
     },
     format: "esm",
