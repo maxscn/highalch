@@ -8,13 +8,14 @@ export type Asked = {
   readonly concurrency: number;
   /** Stop once the command ends (by default the studio stays up to be browsed, until Ctrl+C). */
   readonly exit: boolean;
+  readonly open?: boolean;
+  readonly frames?: false;
   readonly command: ReadonlyArray<string>;
 };
 
-const usage = `usage: highalch studio [--port 4983] [--concurrency 1] [--exit] [-- <test command>]
+const usage = `usage: highalch studio [--port 4983] [--concurrency 1] [--exit] [--open] [--no-frames] [-- <test command>]
 
-Starts the studio's relay on 127.0.0.1 and prints the link that opens https://studio.highalch.dev on
-it. With a test command, runs it (as --concurrency shards) streaming to the relay.`;
+Starts the studio on 127.0.0.1 and prints its local link. With a test command, runs it (as --concurrency shards) streaming to the relay.`;
 
 /** The command line, read: `studio [--port n] [--concurrency n] [--exit] [-- command…]`. */
 export const parse = (argv: ReadonlyArray<string>): Asked => {
@@ -42,7 +43,7 @@ export const parse = (argv: ReadonlyArray<string>): Asked => {
     return value;
   };
 
-  const known = new Set(["studio", "--port", "--concurrency", "--exit"]);
+  const known = new Set(["studio", "--port", "--concurrency", "--exit", "--open", "--no-frames"]);
   const unknown = flags.filter(
     (flag, index) =>
       !known.has(flag) && !["--port", "--concurrency"].includes(flags[index - 1] ?? ""),
@@ -54,11 +55,19 @@ export const parse = (argv: ReadonlyArray<string>): Asked => {
 
   if (concurrency < 1) throw new Error(`--concurrency is at least 1\n\n${usage}`);
 
-  return { port: number("--port", 4983), concurrency, exit: flags.includes("--exit"), command };
+  return {
+    port: number("--port", 4983),
+    concurrency,
+    exit: flags.includes("--exit"),
+    ...(flags.includes("--open") && { open: true }),
+    ...(flags.includes("--no-frames") && { frames: false as const }),
+    command,
+  };
 };
 
 /** Where the studio writes and how it runs a shard: the process's own, unless a test gives others. */
 export type Io = {
+  readonly open?: (link: string) => void;
   readonly log: (line: string) => void;
   readonly run: (
     command: ReadonlyArray<string>,
@@ -68,6 +77,22 @@ export type Io = {
 
 const io: Io = {
   log: (line) => console.log(line),
+  open: (link) => {
+    let command = ["xdg-open", link];
+    if (process.platform === "darwin") command = ["open", link];
+    if (process.platform === "win32")
+      command = ["rundll32.exe", "url.dll,FileProtocolHandler", link];
+
+    const [program = "", ...args] = command;
+    const child = spawn(program, args, { stdio: "ignore" });
+    child.on("error", () =>
+      console.error("Could not open the browser. Use the printed local link."),
+    );
+    child.on("exit", (code) => {
+      if (code !== 0) console.error("Could not open the browser. Use the printed local link.");
+    });
+    child.unref();
+  },
   run: (command, env) =>
     new Promise((resolve) => {
       const [program = "", ...args] = command;
@@ -92,13 +117,15 @@ const io: Io = {
 export const studio = async (asked: Asked, using: Io = io) => {
   const running = await relay({ port: asked.port });
 
-  using.log(`HighAlch studio on ${running.url}`);
-  using.log(`Open ${running.link}`);
+  using.log(`Open ${running.local}`);
+  using.log(`Hosted alternative: ${running.link}`);
+  if (asked.open) using.open?.(running.local);
 
   const env = {
     HIGHALCH_STREAM_URL: running.url,
     HIGHALCH_STREAM_TOKEN: running.ingest,
     HIGHALCH_RUN: randomUUID(),
+    ...(asked.frames === false && { HIGHALCH_STREAM_FRAMES: "none" }),
   };
 
   if (asked.command.length === 0) {

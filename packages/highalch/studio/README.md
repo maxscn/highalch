@@ -1,33 +1,35 @@
 # @highalch/studio
 
-The HighAlch studio, on your machine: watch explorations live at
-[studio.highalch.dev](https://studio.highalch.dev) while they run, with nothing sent to a server. A
-relay on 127.0.0.1 receives what the tests stream (as the console would) and the page connects to
-it from your browser.
+Watch HighAlch explorations in your browser while they run. Install `@highalch/studio` in your
+project, then run:
 
 ```sh
-highalch studio -- vp test                     # runs the tests, streaming to the studio
-highalch studio --concurrency 4 -- vp test     # four shards of one run, side by side
-highalch studio                                # just the relay: prints the variables to set
+highalch studio --open -- vp test
 ```
 
-It prints a link, `https://studio.highalch.dev/#connect=http://127.0.0.1:4983&token=…`. The token is
-in the fragment, which the browser never sends to studio.highalch.dev. The studio stays up after the
-tests end, to be browsed, until Ctrl+C (`--exit` stops it with them). Its exit code is the worst
-of the shards'.
+The CLI prints a local link at `http://127.0.0.1:4983/` and `--open` opens it. The grid
+shows each exploration shard's progress, current step, outcome, and latest painted screen.
+Open a tile to see its sequences, story steps, and any shrunk failure. The relay keeps results
+in memory, so opening or reloading the page after the tests finish shows the run so far.
+The bundled viewer works offline. The CLI also prints a hosted alternative.
 
-- **What it sets.** Each shard runs with `HIGHALCH_STREAM_URL` and `HIGHALCH_STREAM_TOKEN` (the
-  relay's), one `HIGHALCH_RUN` for all, and `HIGHALCH_SHARD=i/n` with `--concurrency n`. Tests
-  change nothing.
-- **Who gets in.** The relay listens on 127.0.0.1 only and answers only requests addressed to
-  `127.0.0.1` or `localhost` (a page can't reach it by rebinding a name of its own). Test
-  processes need the ingest token to open a session and the session's token to stream; pages
-  need the view token, and only `https://studio.highalch.dev` and the relay's own address may watch.
-  A page can't stream.
-- **Browsers.** Chrome asks once whether studio.highalch.dev may reach your local network. Safari
-  does not let an HTTPS page reach plain HTTP on localhost.
-- **Memory.** The relay keeps the run in memory, so a page opened late (or reloaded) sees all of
-  it. Stop it to let it go.
+Explorations with a screen configured with `Takumi.frames()` stream the real painted PNG after
+each step by default so you can see the UI evolve. Set `HIGHALCH_STREAM_FRAMES=replay` for failure
+replays only, or pass `--no-frames` to skip painting for streaming and reduce test overhead.
+Explorations without a painter still show steps and statuses. Standalone story runs do not
+emit stream events.
 
-From code, `relay({ port })` starts one and returns its `url`, `ingest` and `view` tokens, `link`
-and `close`.
+- `--port n` chooses the loopback port. Use `0` for an available port.
+- `--concurrency n` starts `n` shards under the same `HIGHALCH_RUN` and sets `HIGHALCH_SHARD=i/n`.
+- `--exit` stops the relay when the command ends. By default Ctrl+C stops the relay after you
+  finish browsing. The CLI uses the worst exit code across shards.
+- With no command, the CLI prints the variables for a runner to stream to it.
+
+The relay listens only on 127.0.0.1 and checks the Host and watcher Origin. Keep the printed
+link private. Its fragment carries the view token, which the viewer sends as a WebSocket
+subprotocol. The relay accepts viewing from its own address and studio.highalch.dev by default.
+Test processes open sessions with `HIGHALCH_STREAM_TOKEN` and stream with a separate session
+token. The view token grants read access only.
+
+Use `relay()` to start the relay from a custom runner. Its `local` property is the local
+viewer link and `link` is the hosted alternative.

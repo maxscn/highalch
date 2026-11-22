@@ -1,3 +1,9 @@
+import { createElement } from "react";
+import * as Story from "@highalch/story";
+import { Explore, ExploreFailure } from "@highalch/explore";
+import { Screen } from "@highalch/screen";
+import { Takumi } from "@highalch/takumi";
+import { read, status } from "../src/read";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
 import { Schema } from "effect";
@@ -99,6 +105,34 @@ const png = (byte: number) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, byte]);
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 describe("f(request) → only this machine's processes stream, only the studio's pages watch", () => {
+  it("f(local page, without a view token) → the shell loads and the stream stays private", async () => {
+    const made = await started();
+    const page = await fetch(made.url);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const markup = await page.text();
+    expect(markup).toContain('src="/studio.mjs"');
+    expect(markup).not.toContain(made.view);
+    expect(
+      await opens(
+        new WebSocket(socketUrl(made, "/v1/watch"), [subprotocol], {
+          origin: made.url,
+        }),
+      ),
+    ).toContain("401");
+    expect(
+      await new Promise((resolve, reject) => {
+        const sent = request(made.url, { headers: { host: "foreign.example" } }, (response) => {
+          response.resume();
+          resolve(response.statusCode);
+        });
+        sent.on("error", reject);
+        sent.end();
+      }),
+    ).toBe(403);
+  });
+
   it("f(another Host, a wrong token, another origin, a page streaming) → refused", async () => {
     const made = await started();
     const port = new URL(made.url).port;
@@ -290,6 +324,73 @@ describe("f(a process streaming, a page watching) → what is kept so far, then 
   });
 });
 
+it("f(a painted failing exploration) → live and late viewers see its steps, frames and failure", async () => {
+  const made = await started();
+  const viewer = async () => {
+    const model = read();
+    const states: string[] = [];
+    const socket = new WebSocket(socketUrl(made, "/v1/watch"), [subprotocol, bearer(made.view)], {
+      origin: made.url,
+    });
+    socket.binaryType = "arraybuffer";
+    socket.on("message", (data, binary) => {
+      if (binary) model.receive(data as ArrayBuffer);
+      else model.receive((data as Buffer).toString());
+      const [session] = model.sessions.values();
+      if (session) states.push(status(session));
+    });
+    await new Promise((resolve) => socket.once("open", resolve));
+    return { ...model, states };
+  };
+
+  const live = await viewer();
+  const sink = connect(settingsOf(made));
+  const card = Screen.make({ width: 160, height: 80 }).pipe(
+    Takumi.frames({
+      baselines: new URL("./baselines/", import.meta.url),
+      output: new URL("../artifacts/", import.meta.url),
+    }),
+  );
+  const story = Story.make(Story.local(), { name: "broken card", scope: "local" });
+  const exploration = Explore.stories(story, {
+    setup: [card.render(createElement("div", null, "Painted card"))],
+    sources: [
+      Explore.source("break", {
+        step: () =>
+          Story.step("fail this step", () => {
+            throw new Error("broken");
+          }),
+      }),
+    ],
+    depth: 1,
+  });
+
+  await expect(
+    Explore.run(exploration, {
+      stream: sink,
+      artifacts: new URL("../artifacts/explore/", import.meta.url),
+    }),
+  ).rejects.toBeInstanceOf(ExploreFailure);
+  await sink.close();
+
+  const late = await viewer();
+  for (const model of [live, late]) {
+    await until(() => [...model.sessions.values()].some((session) => session.closed));
+    const [session] = model.sessions.values();
+    if (!session) throw new Error("Missing exploration");
+    expect(session.start.name).toBe("broken card");
+    expect(status(session)).toBe("failed");
+    expect(session.end?.failure?.moves).toHaveLength(1);
+    expect(session.steps.map((step) => step.label)).toContain("fail this step");
+    expect([...session.sequences.values()].map((sequence) => sequence.status)).toEqual(["failed"]);
+    const url = model.frames.get(session.frame ?? "");
+    expect(url).toMatch(/^blob:/);
+    expect((await fetch(url ?? "")).headers.get("content-type")).toBe("image/png");
+    for (const frame of model.frames.values()) URL.revokeObjectURL(frame);
+  }
+  expect(live.states).toContain("running");
+});
+
 describe("f(highalch studio …) → the relay, the link, and the command as shards", () => {
   it("f(flags) → what was asked; f(unknown flags) → the usage", () => {
     expect(parse(["studio", "--concurrency", "4", "--", "vp", "test"])).toEqual({
@@ -305,12 +406,26 @@ describe("f(highalch studio …) → the relay, the link, and the command as sha
 
   it("f(--concurrency 2 -- a command) → two shards of one run, streaming to the relay; the worst exit code", async () => {
     const lines: Array<string> = [];
+    const opened: string[] = [];
     const envs: Array<Readonly<Record<string, string | undefined>>> = [];
 
     const { relay: made, code } = await studio(
-      { port: 0, concurrency: 2, exit: true, command: ["vp", "test"] },
+      parse([
+        "studio",
+        "--port",
+        "0",
+        "--concurrency",
+        "2",
+        "--exit",
+        "--open",
+        "--no-frames",
+        "--",
+        "vp",
+        "test",
+      ]),
       {
         log: (line) => lines.push(line),
+        open: (link) => opened.push(link),
         run: async (command, env) => {
           envs.push(env);
 
@@ -320,12 +435,18 @@ describe("f(highalch studio …) → the relay, the link, and the command as sha
     );
 
     expect(code).toBe(1);
-    expect(lines[1]).toBe(`Open ${made.link}`);
+    expect(opened).toEqual([made.local]);
+    expect(lines).toEqual([
+      `Open ${made.local}`,
+      `Hosted alternative: ${made.link}`,
+      "The tests ended (exit code 1).",
+    ]);
     expect(envs.map((env) => env.HIGHALCH_SHARD)).toEqual(["1/2", "2/2"]);
     expect(new Set(envs.map((env) => env.HIGHALCH_RUN)).size).toBe(1);
     expect(envs[0]).toMatchObject({
       HIGHALCH_STREAM_URL: made.url,
       HIGHALCH_STREAM_TOKEN: made.ingest,
+      HIGHALCH_STREAM_FRAMES: "none",
     });
     // --exit: the relay stopped with the tests.
     expect(

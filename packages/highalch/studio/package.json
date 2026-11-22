@@ -1,7 +1,7 @@
 {
   "name": "@highalch/studio",
   "version": "0.0.0",
-  "description": "The HighAlch studio on this machine: a relay that passes what explorations stream to https://studio.highalch.dev in your browser, and the `highalch studio` command.",
+  "description": "A local browser viewer and relay for HighAlch explorations, available through the `highalch studio` command.",
   "keywords": [
     "alchemy",
     "effect",

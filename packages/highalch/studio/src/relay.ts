@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { css, page } from "./page";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { Schema } from "effect";
@@ -36,6 +38,7 @@ export type Relay = {
   readonly view: string;
   /** `https://studio.highalch.dev/#connect=…&token=…`: the fragment never leaves the browser. */
   readonly link: string;
+  readonly local: string;
   readonly close: () => Promise<void>;
 };
 
@@ -138,10 +141,49 @@ export const relay = async (options: Options = {}): Promise<Relay> => {
     for (const watcher of watchers) watcher.send(text);
   };
 
+  const style = createHash("sha256").update(css).digest("base64");
+
   const server = createServer((request, response) => {
     if (!hosts().has(request.headers.host ?? "")) return answer(response, 403);
 
+    if (request.method === "GET" && request.url === "/") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": [
+          "default-src 'none'",
+          "script-src 'self'",
+          `style-src 'sha256-${style}'`,
+          `connect-src ws://${request.headers.host}`,
+          "img-src blob:",
+          "frame-ancestors 'none'",
+          "base-uri 'none'",
+          "form-action 'none'",
+        ].join("; "),
+      });
+      return response.end(page);
+    }
+
+    if (request.method === "GET" && request.url === "/studio.mjs") {
+      void readFile(new URL("./browser.mjs", import.meta.url)).then(
+        (script) => {
+          response.writeHead(200, {
+            "content-type": "text/javascript; charset=utf-8",
+            "x-content-type-options": "nosniff",
+            "cache-control": "no-store",
+          });
+          response.end(script);
+        },
+        () => answer(response, 404),
+      );
+      return;
+    }
+
     if (request.method !== "POST" || request.url !== "/v1/sessions") return answer(response, 404);
+
+    if (request.headers.origin !== undefined) return answer(response, 403);
 
     const authorization = request.headers.authorization ?? "";
 
@@ -149,7 +191,12 @@ export const relay = async (options: Options = {}): Promise<Relay> => {
 
     void bodyOf(request).then(
       (text) => {
-        const open = decodeOpen(JSON.parse(text));
+        let open: Open;
+        try {
+          open = decodeOpen(JSON.parse(text));
+        } catch {
+          return answer(response, 400);
+        }
         const kept: Kept = {
           id: randomUUID(),
           token: secret(),
@@ -303,6 +350,7 @@ export const relay = async (options: Options = {}): Promise<Relay> => {
     url,
     ingest,
     view,
+    local: `${url}/#token=${view}`,
     link: `${studio}/#${fragment.toString()}`,
     close: async () => {
       for (const client of sockets.clients) client.terminate();

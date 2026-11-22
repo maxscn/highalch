@@ -40,7 +40,7 @@ parallel, and start no dev servers.
     `./react-form`) and `@highalch/alchemy-domain` (`Alchemy`: the Domain hosted in memory with
     LowAlch clients, its steps and the feed rules).
   - `@highalch/explore` explores stories (`.`, `./xstate`), `@highalch/stream` streams them to an
-    app (the protocol and its client), and `@highalch/studio` is the relay behind
+    app (the protocol and its client), and `@highalch/studio` is the relay and local viewer behind
     `highalch studio`.
 
   Shared versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned

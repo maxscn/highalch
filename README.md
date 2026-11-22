@@ -23,7 +23,7 @@ This repository holds two npm scopes:
 | [`@highalch/tanstack-form`](packages/highalch/tanstack-form/README.md)       | `Form`: the app's own TanStack Form forms, found by the `highalch()` Vite plugin                                                                                                             |
 | [`@highalch/explore`](packages/highalch/explore/README.md)                   | Explorations: every sequence of what can happen, deterministically, shrunk and replayed, sharded across processes; `./xstate` (`explore`: stories generated from a model)                    |
 | [`@highalch/stream`](packages/highalch/stream/README.md)                     | The stream explorations send to an app while they run: the protocol's schemas and the client that sends it, with its auth                                                                    |
-| [`@highalch/studio`](packages/highalch/studio/README.md)                     | `highalch studio`: watch explorations live at studio.highalch.dev, through a relay on your machine                                                                                           |
+| [`@highalch/studio`](packages/highalch/studio/README.md)                     | `highalch studio`: watch explorations live in a bundled browser UI on your machine                                                                                                           |
 
 The packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and

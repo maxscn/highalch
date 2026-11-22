@@ -1,7 +1,5 @@
 /**
- * The HighAlch studio, on this machine: a relay that receives what explorations stream (as the
- * console would) and passes it to the page at https://studio.highalch.dev, which connects to it from
- * the browser. Nothing leaves this machine, and nothing runs on a server of ours.
+ * The HighAlch studio serves a local viewer for streamed explorations.
  *
  * ```sh
  * highalch studio -- vp test                  # one process
