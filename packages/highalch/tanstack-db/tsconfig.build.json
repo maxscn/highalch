@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    // Built against the workspace packages as published (their dist), not their source.
+    "paths": {}
+  },
+  "include": ["src"]
+}

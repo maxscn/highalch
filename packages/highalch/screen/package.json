@@ -1,0 +1,72 @@
+{
+  "name": "@highalch/screen",
+  "version": "0.0.0",
+  "description": "Screen steps for HighAlch stories: a mounted React component, its frames against reviewed baselines, and its layout for rules.",
+  "keywords": [
+    "alchemy",
+    "effect",
+    "highalch",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/screen#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/screen"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.mts",
+      "default": "./dist/internal.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@effect/atom-react": "catalog:",
+    "@highalch/story": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
+    "@tanstack/db": "catalog:",
+    "@tanstack/react-db": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "effect": "catalog:",
+    "happy-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@effect/atom-react": "^4.1.4",
+    "@highalch/story": "workspace:^",
+    "@highalch/tanstack-db": "workspace:^",
+    "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/react-db": "1.0.0-rc.1.5",
+    "effect": "^4.1.4",
+    "happy-dom": "^20.11.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  }
+}

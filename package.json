@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vp run -r build",
-    "typecheck": "tsc -p packages/tanstack-db && tsc -p packages/story && tsc -p packages/stream && tsc -p packages/studio && tsc -p packages/explore && tsc -p packages/examples && tsc -p .",
+    "typecheck": "tsc -p packages/lowalch/tanstack-db && tsc -p packages/highalch/story && tsc -p packages/highalch/tanstack-db && tsc -p packages/highalch/xstate && tsc -p packages/highalch/screen && tsc -p packages/highalch/takumi && tsc -p packages/highalch/tanstack-form && tsc -p packages/highalch/alchemy-domain && tsc -p packages/highalch/stream && tsc -p packages/highalch/studio && tsc -p packages/highalch/explore && tsc -p packages/highalch/examples && tsc -p .",
     "check:patterns": "node scripts/check-patterns.ts",
     "test": "vp test --maxWorkers=2",
     "ready": "vp check && vp run check:patterns && vp run typecheck && vp run test && vp run build",

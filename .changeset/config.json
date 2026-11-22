@@ -8,6 +8,12 @@
     [
       "@lowalch/tanstack-db",
       "@highalch/story",
+      "@highalch/tanstack-db",
+      "@highalch/alchemy-domain",
+      "@highalch/xstate",
+      "@highalch/screen",
+      "@highalch/takumi",
+      "@highalch/tanstack-form",
       "@highalch/explore",
       "@highalch/stream",
       "@highalch/studio"

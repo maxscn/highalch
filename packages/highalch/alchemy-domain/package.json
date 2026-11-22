@@ -1,0 +1,63 @@
+{
+  "name": "@highalch/alchemy-domain",
+  "version": "0.0.0",
+  "description": "HighAlch stories of apps on an alchemy Domain: the Domain hosted in memory with LowAlch clients, its steps and the feed rules.",
+  "keywords": [
+    "alchemy",
+    "effect",
+    "highalch",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/alchemy-domain#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/alchemy-domain"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@alchemy.run/domain": "catalog:",
+    "@highalch/story": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
+    "@lowalch/tanstack-db": "workspace:*",
+    "@tanstack/db": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@alchemy.run/domain": "2.0.0-beta.87",
+    "@highalch/story": "workspace:^",
+    "@highalch/tanstack-db": "workspace:^",
+    "@lowalch/tanstack-db": "workspace:^",
+    "@tanstack/db": "1.0.0-rc.1.5",
+    "effect": "^4.1.4",
+    "react": "^19.2.7"
+  }
+}
