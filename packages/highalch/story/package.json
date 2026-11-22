@@ -1,6 +1,6 @@
 {
   "name": "@highalch/story",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Stories for frontends: given, when, then, one runner for every kind of step, with rules checked at their moments. Adapters add the steps: @highalch/tanstack-db, @highalch/xstate, @highalch/screen, @highalch/tanstack-form, @highalch/alchemy-domain.",
   "keywords": [
     "alchemy",
