@@ -16,6 +16,7 @@ This repository holds two npm scopes:
 | [`@highalch/story`](packages/story/README.md)            | Stories: the runner, rules and the Domain's steps; `./tanstack-db` (`Db`), `./lowalch` (`LowAlchDb`), `./xstate` (machine steps), `./screen` (screenshots and layout) and `./takumi` (takumi's frames and layout) |
 | [`@highalch/explore`](packages/explore/README.md)        | Explorations: every sequence of what can happen, deterministically, shrunk and replayed, sharded across processes; `./xstate` (`explore`: stories generated from a model)                                         |
 | [`@highalch/stream`](packages/stream/README.md)          | The stream explorations send to an app while they run: the protocol's schemas and the client that sends it, with its auth                                                                                         |
+| [`@highalch/studio`](packages/studio/README.md)          | `highalch studio`: watch explorations live at highalch.studio, through a relay on your machine                                                                                                                    |
 
 The packages are ESM-only and built on Effect v4 (`effect` 4.1.4), `@alchemy.run/domain`
 2.0.0-beta.87 and `@tanstack/db` 1.0.0-rc.1.5. XState, react-dom, happy-dom, takumi and
@@ -222,7 +223,7 @@ through their `exports`, which point at `dist`. `@highalch/story` builds against
 ## Releasing
 
 Releases use [Changesets](https://github.com/changesets/changesets). `@lowalch/tanstack-db`,
-`@highalch/story`, `@highalch/explore` and `@highalch/stream` always share a version.
+`@highalch/story`, `@highalch/explore`, `@highalch/stream` and `@highalch/studio` always share a version.
 
 1. With a change that should reach npm, run `vp run changeset`, choose the bump and write one
    line for the changelog. Commit the file it adds under `.changeset/`.

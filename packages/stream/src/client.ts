@@ -1,5 +1,8 @@
 import { Option } from "effect";
 import {
+  bearer,
+  framed,
+  subprotocol,
   version,
   type Envelope,
   type Event,
@@ -35,14 +38,17 @@ export type Settings = {
   readonly shard: Shard;
   readonly origin: Origin;
   readonly frames: Frames;
-  /** The fetch to send with (the global one by default). */
+  /** The fetch to open sessions with (the global one by default). */
   readonly fetch?: typeof fetch;
+  /** The WebSocket to stream with (the global one, as the process started, by default). */
+  readonly WebSocket?: typeof WebSocket;
 };
 
 /**
  * Where an exploration streams to: `send` queues an event; `frame` sends a PNG once (named by its
- * SHA-256, which it returns, or `None` when frames are being dropped); `flush` waits until
- * everything queued is sent or given up. Never throws: a stream that fails turns itself off.
+ * SHA-256, which it returns, or `None` when frames are being dropped); `flush` waits until the
+ * app acknowledged everything sent, or gave up. Never throws: a stream that fails turns itself
+ * off.
  */
 export interface Sink {
   readonly frames: Frames;
@@ -225,36 +231,62 @@ const sha256 = async (bytes: Uint8Array) =>
 /** A refusal that no retry changes: the stream turns off. */
 class Refused extends Error {}
 
+/** What went wrong, as a warning says it. */
+const messageOf = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+
+  return String(error);
+};
+
 const pause = (ms: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms).unref?.();
   });
 
-/** Frames in flight beyond this many bytes are dropped (the step is sent without its frame). */
+/** The WebSocket as the process started, before a screen installs a DOM's globals. */
+const Native = globalThis.WebSocket;
+
+/** Frames waiting on the socket beyond this many bytes are dropped (the step is sent without one). */
 const backlog = 32 * 1024 * 1024;
 
 /** Events are sent at least this often, or as soon as this many are queued. */
-const interval = 250;
+const interval = 100;
 const batch = 200;
 
+/** How long `flush` waits for the app to acknowledge what was sent. */
+const patience = 10_000;
+
+/** A frame sent, kept until an event after it is acknowledged, to send again on a reconnect. */
+type Sent = { readonly after: number; readonly message: Uint8Array<ArrayBuffer> };
+
 /**
- * A sink sending to the app at `settings.url`. It opens its session on the first event, sends
- * events in batches, and frames once each. A request that fails on the network or with a 5xx or
- * 429 is tried twice more; a 401 or 403, or one that still fails, turns the stream off with one
- * warning. Tokens are only ever sent in the `Authorization` header and never printed.
+ * A sink streaming to the app at `settings.url`. It opens its session on the first event (an
+ * HTTP request carrying the ingest token), then streams over one WebSocket authenticated by the
+ * session's own token: events in batches, frames once each, in order. What the app has not
+ * acknowledged is sent again when the socket reconnects (up to 3 tries). A refused session, or a
+ * socket that can't reconnect, turns the stream off with one warning. Tokens are never put in a
+ * URL and never printed.
  */
 export const connect = (settings: Settings): Sink => {
   const base = checkedUrl(settings.url);
-  const send = settings.fetch ?? globalThis.fetch;
+  const post = settings.fetch ?? globalThis.fetch;
+  const Socket = settings.WebSocket ?? Native;
   const queue: Array<Envelope> = [];
-  const sent = new Set<string>();
-  let frames: Array<Promise<unknown>> = [];
-  let pending = 0;
+  const unacked: Array<Envelope> = [];
+  const frames: Array<Sent> = [];
+  const known = new Set<string>();
+  const waiting: Array<() => void> = [];
   let seq = 0;
+  let acked = 0;
   let off = false;
-  let chain: Promise<void> = Promise.resolve();
+  let closing = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let session: Promise<Opened> | undefined;
+  let socket: Promise<WebSocket> | undefined;
+
+  const settle = () => {
+    for (const resolve of waiting.splice(0)) resolve();
+  };
 
   const stop = (why: string) => {
     if (off) return;
@@ -262,28 +294,32 @@ export const connect = (settings: Settings): Sink => {
     off = true;
     queue.length = 0;
     console.warn(`HighAlch stream: turned off: ${why}`);
+    settle();
   };
 
-  /** A request, tried up to 3 times; a refusal (401, 403, 4xx) is not retried. */
-  const request = async (path: string, init: RequestInit): Promise<Response> => {
+  const failed = (error: unknown) => stop(messageOf(error));
+
+  /** Opens the session: the one request that carries the ingest token (or OIDC token). */
+  const request = async (init: RequestInit): Promise<Response> => {
     let last = "";
 
     for (const wait of [0, 250, 1000]) {
       if (wait > 0) await pause(wait);
 
-      const response = await send(new URL(path, base), { ...init, redirect: "error" }).catch(
-        (error: unknown) => {
-          last = error instanceof Error ? error.message : String(error);
+      const response = await post(new URL("v1/sessions", base), {
+        ...init,
+        redirect: "error",
+      }).catch((error: unknown) => {
+        last = messageOf(error);
 
-          return undefined;
-        },
-      );
+        return undefined;
+      });
 
       if (response === undefined) continue;
 
       if (response.ok) return response;
 
-      last = `${init.method ?? "GET"} /${path} answered ${response.status}`;
+      last = `POST /v1/sessions answered ${response.status}`;
 
       if (response.status !== 429 && response.status < 500) throw new Refused(last);
     }
@@ -291,15 +327,14 @@ export const connect = (settings: Settings): Sink => {
     throw new Error(last);
   };
 
-  const credential = async (): Promise<{ readonly headers: Record<string, string> }> => {
-    if (settings.auth.kind === "token")
-      return { headers: { authorization: `Bearer ${settings.auth.token}` } };
+  const credential = async (): Promise<Record<string, string>> => {
+    if (settings.auth.kind === "token") return { authorization: `Bearer ${settings.auth.token}` };
 
     const env = environment();
     const endpoint = env.ACTIONS_ID_TOKEN_REQUEST_URL;
-    const bearer = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+    const token = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
 
-    if (endpoint === undefined || bearer === undefined)
+    if (endpoint === undefined || token === undefined)
       throw new Refused(
         "HIGHALCH_STREAM_AUTH=github-oidc needs a GitHub Actions job with `permissions: id-token: write`",
       );
@@ -308,8 +343,8 @@ export const connect = (settings: Settings): Sink => {
 
     url.searchParams.set("audience", base.origin);
 
-    const response = await send(url, {
-      headers: { authorization: `Bearer ${bearer}` },
+    const response = await post(url, {
+      headers: { authorization: `Bearer ${token}` },
       redirect: "error",
     });
 
@@ -319,7 +354,7 @@ export const connect = (settings: Settings): Sink => {
 
     if (typeof value !== "string") throw new Refused("GitHub answered no OIDC token");
 
-    return { headers: { authorization: `Bearer ${value}`, "highalch-auth": "github-oidc" } };
+    return { authorization: `Bearer ${value}`, "highalch-auth": "github-oidc" };
   };
 
   const open = () => {
@@ -330,10 +365,9 @@ export const connect = (settings: Settings): Sink => {
         shard: settings.shard,
         origin: settings.origin,
       };
-      const { headers } = await credential();
-      const response = await request("v1/sessions", {
+      const response = await request({
         method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
+        headers: { ...(await credential()), "content-type": "application/json" },
         body: JSON.stringify(body),
       });
       const opened = (await response.json()) as Partial<Opened>;
@@ -347,44 +381,125 @@ export const connect = (settings: Settings): Sink => {
     return session;
   };
 
-  const authorized = (opened: Opened) => ({ authorization: `Bearer ${opened.token}` });
+  /** The socket's URL: the stream's, as `ws:` or `wss:`. */
+  const socketUrl = (id: string) => {
+    const url = new URL(`v1/sessions/${encodeURIComponent(id)}/socket`, base);
 
-  const failed = (error: unknown) => {
-    if (error instanceof Refused) return stop(error.message);
+    url.protocol = url.protocol.replace(/^http/, "ws");
 
-    stop(error instanceof Error ? error.message : String(error));
+    return url;
   };
 
-  /** Sends what is queued, after the frames it names. */
+  const lines = (envelopes: ReadonlyArray<Envelope>) =>
+    `${envelopes.map((each) => JSON.stringify(each)).join("\n")}\n`;
+
+  /** Sends again, on a fresh socket, what the app did not acknowledge: frames, then events. */
+  const resend = (ws: WebSocket) => {
+    for (const each of frames) ws.send(each.message);
+
+    if (unacked.length > 0) ws.send(lines(unacked));
+  };
+
+  const acknowledged = (data: unknown) => {
+    if (typeof data !== "string") return;
+
+    const ack = JSON.parse(data) as { readonly type?: string; readonly seq?: number };
+
+    if (ack.type !== "ack" || typeof ack.seq !== "number") return;
+
+    acked = Math.max(acked, ack.seq);
+
+    while (unacked.length > 0 && (unacked[0]?.seq ?? Infinity) <= acked) unacked.shift();
+    while (frames.length > 0 && (frames[0]?.after ?? Infinity) < acked) frames.shift();
+
+    if (acked >= seq) settle();
+  };
+
+  /** One socket, opened on first use and again (up to 3 tries) when it drops. */
+  const connected = (): Promise<WebSocket> => {
+    socket ??= (async () => {
+      const opened = await open();
+      let last = "";
+
+      for (const wait of [0, 250, 1000]) {
+        if (wait > 0) await pause(wait);
+
+        const ws = new Socket(socketUrl(opened.session), [subprotocol, bearer(opened.token)]);
+
+        ws.binaryType = "arraybuffer";
+
+        const up = await new Promise<boolean>((resolve) => {
+          ws.addEventListener("open", () => resolve(true), { once: true });
+          ws.addEventListener("error", () => resolve(false), { once: true });
+        });
+
+        if (!up) {
+          last = "the stream's socket did not open";
+          continue;
+        }
+
+        ws.addEventListener("message", (event) => acknowledged(event.data));
+        ws.addEventListener("close", (event) => {
+          socket = undefined;
+
+          if (closing || off || event.code === 1000) return;
+
+          // Dropped: open it again and send what was not acknowledged.
+          connected().then(
+            (again) => resend(again),
+            (error: unknown) => failed(error),
+          );
+        });
+
+        return ws;
+      }
+
+      throw new Error(last);
+    })();
+
+    return socket;
+  };
+
   const drain = async () => {
     if (off || queue.length === 0) return;
 
     const envelopes = queue.splice(0, queue.length);
-    const waiting = frames;
 
-    frames = [];
+    unacked.push(...envelopes);
 
     try {
-      const opened = await open();
-
-      await Promise.all(waiting);
-      await request(`v1/sessions/${encodeURIComponent(opened.session)}/events`, {
-        method: "POST",
-        headers: { ...authorized(opened), "content-type": "application/x-ndjson" },
-        body: `${envelopes.map((each) => JSON.stringify(each)).join("\n")}\n`,
-      });
+      (await connected()).send(lines(envelopes));
     } catch (error) {
       failed(error);
     }
   };
 
-  const flush = () => {
+  let chain: Promise<void> = Promise.resolve();
+
+  const push = () => {
     if (timer !== undefined) clearTimeout(timer);
 
     timer = undefined;
     chain = chain.then(drain);
 
     return chain;
+  };
+
+  /** Waits until the app acknowledged everything sent, or `patience` ran out. */
+  const flush = async () => {
+    await push();
+
+    if (off || acked >= seq) return;
+
+    await new Promise<void>((resolve) => {
+      const late = setTimeout(resolve, patience);
+
+      late.unref?.();
+      waiting.push(() => {
+        clearTimeout(late);
+        resolve();
+      });
+    });
   };
 
   return {
@@ -396,12 +511,12 @@ export const connect = (settings: Settings): Sink => {
       queue.push({ seq, at: Date.now(), event });
 
       if (queue.length >= batch) {
-        void flush();
+        void push();
 
         return;
       }
 
-      timer ??= setTimeout(() => void flush(), interval);
+      timer ??= setTimeout(() => void push(), interval);
       timer.unref?.();
     },
     frame: async (png) => {
@@ -409,50 +524,38 @@ export const connect = (settings: Settings): Sink => {
 
       const image = await sha256(png);
 
-      if (sent.has(image)) return Option.some(image);
+      if (known.has(image)) return Option.some(image);
 
-      if (pending + png.byteLength > backlog) return Option.none();
+      // The events queued so far go first: the frame belongs to the next one.
+      await push();
 
-      sent.add(image);
-      pending += png.byteLength;
+      if (off) return Option.none();
 
-      const upload = open()
-        .then((opened) =>
-          request(`v1/sessions/${encodeURIComponent(opened.session)}/frames/${image}`, {
-            method: "PUT",
-            headers: { ...authorized(opened), "content-type": "image/png" },
-            body: png as BodyInit,
-          }),
-        )
-        .then(
-          () => undefined,
-          (error: unknown) => failed(error),
-        )
-        .finally(() => {
-          pending -= png.byteLength;
-        });
+      try {
+        const ws = await connected();
 
-      frames.push(upload);
+        if (ws.bufferedAmount + png.byteLength > backlog) return Option.none();
 
-      return Option.some(image);
+        const message = framed(image, png);
+
+        known.add(image);
+        frames.push({ after: seq, message });
+        ws.send(message);
+
+        return Option.some(image);
+      } catch (error) {
+        failed(error);
+
+        return Option.none();
+      }
     },
     flush,
     close: async () => {
       await flush();
 
-      if (off || session === undefined) return;
+      closing = true;
 
-      await session
-        .then((opened) =>
-          request(`v1/sessions/${encodeURIComponent(opened.session)}/close`, {
-            method: "POST",
-            headers: authorized(opened),
-          }),
-        )
-        .then(
-          () => undefined,
-          (error: unknown) => failed(error),
-        );
+      if (socket !== undefined) (await socket.catch(() => undefined))?.close(1000, "done");
 
       off = true;
     },

@@ -1,6 +1,6 @@
 name: Publish
 
-# Releases @lowalch/tanstack-db, @highalch/story, @highalch/explore and @highalch/stream with
+# Releases @lowalch/tanstack-db and the @highalch packages (story, explore, stream, studio) with
 # Changesets and npm trusted publishing (OIDC): no npm token exists anywhere.
 #
 # The jobs are split so that the right to publish never meets third-party code:

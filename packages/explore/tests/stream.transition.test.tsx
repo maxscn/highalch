@@ -1,12 +1,22 @@
-import { createHash } from "node:crypto";
-import { createServer, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import WebSocket from "ws";
 import * as Story from "@highalch/story";
 import { Explore, ExploreFailure } from "@highalch/explore";
 import { Screen } from "@highalch/story/screen";
-import { connect, Envelope, Open, type Event, type Settings, type Shard } from "@highalch/stream";
+import {
+  bearer,
+  connect,
+  subprotocol,
+  unframed,
+  Watched,
+  type Envelope,
+  type Event,
+  type Open,
+  type Settings,
+  type Shard,
+} from "@highalch/stream";
+import { relay } from "@highalch/studio";
 import { Takumi } from "@highalch/story/takumi";
 import { Form } from "@highalch/story/tanstack-form";
 import { Db } from "@highalch/story/tanstack-db";
@@ -15,114 +25,86 @@ import { OverflowingTitle, Shared } from "@highalch/examples";
 const { ApprovedNoteCard, BrokenNoteCard, titleForm, css } = OverflowingTitle;
 const { ada, exist, list, story } = Shared;
 
-const ingest = "hat_ingest_secret";
-
+/** A session as a page watching the studio sees it. */
 type Session = {
   readonly id: string;
-  readonly token: string;
   readonly open: Open;
   readonly events: Array<Envelope>;
-  readonly frames: Map<string, number>;
   closed: boolean;
 };
 
-const bodyOf = async (request: IncomingMessage) => {
-  const chunks: Array<Buffer> = [];
-
-  for await (const chunk of request) chunks.push(chunk as Buffer);
-
-  return Buffer.concat(chunks);
-};
-
 /**
- * The receiving app's side, as the protocol describes it: it opens a session for the ingest
- * token only, takes events and frames for that session's own token only, checks each frame's
- * SHA-256, and notes an event naming a frame it was not sent first.
+ * The studio's relay, and a page watching it: the sessions it saw, the frames, and any event
+ * that named a frame the page had not received first.
  */
-const receiver = async () => {
+const studio = async () => {
+  const made = await relay({ port: 0 });
+  const page = new WebSocket(
+    `${made.url.replace(/^http/, "ws")}/v1/watch`,
+    [subprotocol, bearer(made.view)],
+    { origin: "https://highalch.studio" },
+  );
   const sessions: Array<Session> = [];
-  const requests: Array<{ readonly method: string; readonly path: string; readonly auth: string }> =
-    [];
+  const frames = new Set<string>();
   const problems: Array<string> = [];
 
-  const server = createServer((request, response) => {
-    void bodyOf(request).then((body) => {
-      const path = request.url ?? "";
-      const auth = request.headers.authorization ?? "";
+  page.on("message", (data, binary) => {
+    if (binary) {
+      frames.add(unframed(new Uint8Array(data as Buffer)).image);
 
-      requests.push({ method: request.method ?? "", path, auth });
+      return;
+    }
 
-      const answer = (status: number, json?: unknown) => {
-        response.writeHead(status, { "content-type": "application/json" });
-        response.end(json === undefined ? undefined : JSON.stringify(json));
-      };
+    const watched = Schema.decodeUnknownSync(Watched)(JSON.parse((data as Buffer).toString()));
 
-      if (request.method === "POST" && path === "/stream/v1/sessions") {
-        if (auth !== `Bearer ${ingest}`) return answer(401);
+    if (watched.type === "session")
+      return void sessions.push({
+        id: watched.session,
+        open: watched.open,
+        events: [],
+        closed: false,
+      });
 
-        const open = Schema.decodeUnknownSync(Open)(JSON.parse(body.toString()));
-        const session: Session = {
-          id: `s${sessions.length + 1}`,
-          token: `session-token-${sessions.length + 1}`,
-          open,
-          events: [],
-          frames: new Map(),
-          closed: false,
-        };
+    const session = sessions.find((each) => each.id === watched.session);
 
-        sessions.push(session);
+    if (session === undefined) return void problems.push(`no session ${watched.session}`);
 
-        return answer(201, { session: session.id, token: session.token, expires: "soon" });
-      }
+    if (watched.type === "closed") {
+      session.closed = true;
 
-      const match = /^\/stream\/v1\/sessions\/([^/]+)\/(events|close|frames\/([0-9a-f]{64}))$/.exec(
-        path,
-      );
-      const session = sessions.find((each) => each.id === match?.[1]);
+      return;
+    }
 
-      if (!match || !session) return answer(404);
+    for (const envelope of watched.envelopes) {
+      const event = envelope.event;
 
-      if (auth !== `Bearer ${session.token}`) return answer(403);
+      if (event.type === "step" && event.frame && !frames.has(event.frame.image))
+        problems.push(`event ${envelope.seq} names a frame the page was not sent first`);
 
-      if (match[2] === "close") {
-        session.closed = true;
-
-        return answer(204);
-      }
-
-      if (match[3] !== undefined) {
-        if (createHash("sha256").update(body).digest("hex") !== match[3]) return answer(400);
-
-        session.frames.set(match[3], body.byteLength);
-
-        return answer(204);
-      }
-
-      for (const line of body.toString().split("\n").filter(Boolean)) {
-        const envelope = Schema.decodeUnknownSync(Envelope)(JSON.parse(line));
-        const event = envelope.event;
-
-        if (event.type === "step" && event.frame && !session.frames.has(event.frame.image))
-          problems.push(`event ${envelope.seq} names a frame it was not sent first`);
-
-        if (!session.events.some((each) => each.seq === envelope.seq))
-          session.events.push(envelope);
-      }
-
-      return answer(204);
-    });
+      session.events.push(envelope);
+    }
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-
-  const { port } = server.address() as AddressInfo;
+  await new Promise((resolve) => page.once("open", resolve));
 
   return {
-    url: `http://127.0.0.1:${port}/stream`,
+    url: made.url,
+    ingest: made.ingest,
     sessions,
-    requests,
+    frames,
     problems,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    /** Waits until every session closed. */
+    closed: async (count: number) => {
+      for (let tries = 0; tries < 300; tries += 1) {
+        if (sessions.filter((each) => each.closed).length >= count) return;
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    },
+    close: async () => {
+      page.close();
+      await made.close();
+    },
   };
 };
 
@@ -162,7 +144,7 @@ const explorationOf = (
   artifacts: new URL("../artifacts/explore/", import.meta.url),
 });
 
-const settingsOf = (url: string, shard: Shard, token = ingest): Settings => ({
+const settingsOf = (url: string, shard: Shard, token: string): Settings => ({
   url,
   auth: { kind: "token", token },
   run: "run-1",
@@ -182,12 +164,12 @@ afterEach(() => {
 
 describe("f(exploration, shards, stream) → every sequence once, as tiles of one grid", () => {
   it("f(approved card, 2 shards) → each runs every 2nd sequence; together all 12, each with its frames", async () => {
-    const app = await receiver();
+    const app = await studio();
 
     try {
       for (const index of [1, 2]) {
         const shard = { index, total: 2 };
-        const sink = connect(settingsOf(app.url, shard));
+        const sink = connect(settingsOf(app.url, shard, app.ingest));
         const explored = await Explore.run(
           explorationOf("approved card", <ApprovedNoteCard NoteId="n1" title="Ada" />, shard, sink),
         );
@@ -199,16 +181,12 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
         await sink.close();
       }
 
+      await app.closed(2);
       expect(app.problems).toEqual([]);
       expect(app.sessions.map((each) => [each.open.run, each.open.shard, each.closed])).toEqual([
         ["run-1", { index: 1, total: 2 }, true],
         ["run-1", { index: 2, total: 2 }, true],
       ]);
-
-      // The ingest token opens sessions and goes nowhere else.
-      expect(
-        app.requests.filter((each) => each.auth.includes(ingest)).map((each) => each.path),
-      ).toEqual(["/stream/v1/sessions", "/stream/v1/sessions"]);
 
       const sequences = app.sessions.map((session) =>
         eventsOf(session, "attempt").map((each) => each.sequence),
@@ -247,15 +225,10 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
           steps.filter((each) => each.step >= 3).every((each) => each.frame?.width === 360),
         ).toBe(true);
 
-        // Each frame is sent once, however many steps showed it.
-        const frames = new Set(steps.flatMap((each) => (each.frame ? [each.frame.image] : [])));
+        // Every frame a step names reached the page.
+        const frames = steps.flatMap((each) => (each.frame ? [each.frame.image] : []));
 
-        expect(session.frames.size).toBe(frames.size);
-        expect(
-          app.requests.filter((each) =>
-            each.path.startsWith(`/stream/v1/sessions/${session.id}/frames/`),
-          ).length,
-        ).toBe(frames.size);
+        expect(frames.every((image) => app.frames.has(image))).toBe(true);
 
         expect(eventsOf(session, "attempt-end").every((each) => each.status === "passed")).toBe(
           true,
@@ -268,11 +241,11 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
   }, 300_000);
 
   it("f(broken card) → the failing tile's shrinking, confirming and replay, then the story to paste", async () => {
-    const app = await receiver();
+    const app = await studio();
 
     try {
       const shard = { index: 1, total: 1 };
-      const sink = connect(settingsOf(app.url, shard));
+      const sink = connect(settingsOf(app.url, shard, app.ingest));
       const failure = await Explore.run(
         explorationOf("broken card", <BrokenNoteCard NoteId="n1" title="Ada" />, shard, sink),
       ).then(
@@ -281,6 +254,9 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
       );
 
       expect(failure).toBeInstanceOf(ExploreFailure);
+
+      await sink.close();
+      await app.closed(1);
       expect(app.problems).toEqual([]);
 
       const [session] = app.sessions;
@@ -316,7 +292,7 @@ describe("f(exploration, shards, stream) → every sequence once, as tiles of on
   }, 300_000);
 
   it("f(the app refuses the token) → the stream turns off with one warning; the exploration runs on", async () => {
-    const app = await receiver();
+    const app = await studio();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     try {

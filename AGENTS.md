@@ -33,8 +33,9 @@ parallel, and start no dev servers.
   them. `@lowalch/tanstack-db` is the core (`.`, `./server`, `./react`, `./xstate`,
   `./internal`). `@highalch/story` is the test kit (`.`, `./tanstack-db`, `./lowalch`, `./tanstack-form`,
   `./xstate`, `./screen`, `./takumi`, `./vite`, and the internal `./react-form`);
-  `@highalch/explore` explores stories (`.`, `./xstate`), and `@highalch/stream` streams them to
-  an app (the protocol and its client; it imports only effect). Shared
+  `@highalch/explore` explores stories (`.`, `./xstate`), `@highalch/stream` streams them to an
+  app (the protocol and its client; it imports only effect), and `@highalch/studio` is the
+  relay on this machine behind `highalch studio`. Shared
   versions live in the `catalog` of `pnpm-workspace.yaml`. Peer versions are pinned exactly.
 - **Effect v4** (`effect` 4.1.4, matching `@alchemy.run/domain` 2.0.0-beta.87). Shared code uses
   native guards, `Option` and `Match` instead of ternaries. Preserve narrowing and lazy

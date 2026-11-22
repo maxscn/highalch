@@ -17,6 +17,7 @@
  * ```
  */
 export {
+  Ack,
   Attempt,
   Ended,
   Envelope,
@@ -32,6 +33,12 @@ export {
   Ran,
   Shard,
   Started,
+  Watched,
+  bearer,
+  framed,
+  subprotocol,
+  tokenOf,
+  unframed,
   version,
 } from "./protocol";
 export { checkedUrl, connect, fromEnv, shardOf, streamed } from "./client";

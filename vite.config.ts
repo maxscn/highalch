@@ -63,6 +63,7 @@ const workspace = [
     replacement: source("./packages/explore/src/xstate/index.ts"),
   },
   { find: /^@highalch\/stream$/, replacement: source("./packages/stream/src/index.ts") },
+  { find: /^@highalch\/studio$/, replacement: source("./packages/studio/src/index.ts") },
 ];
 
 export default defineConfig({

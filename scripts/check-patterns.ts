@@ -17,6 +17,7 @@
  * - `@highalch/stream` imports only effect: the console decodes with it, without the test kit.
  * - `@highalch/explore` imports effect, `@highalch/story`'s public entries, `@highalch/stream`
  *   and the node files keeping its corpus; XState only in its `xstate` entry.
+ * - `@highalch/studio` (the relay on this machine) imports effect, `@highalch/stream`, `ws` and node.
  * - `@highalch/story` imports neither `@highalch/explore` nor `@highalch/stream`.
  * - Neither uses React effects: lifetimes are external-store subscriptions and callback refs.
  * - No module exports `then`: `import()` would treat the module as a thenable and hang.
@@ -65,14 +66,16 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
   const story = join(root, "packages/story/src");
   const stream = join(root, "packages/stream/src");
   const explore = join(root, "packages/explore/src");
+  const studio = join(root, "packages/studio/src");
   const inside = (file: string, directory: string) =>
     file === directory || file.startsWith(`${directory}/`);
 
-  for (const file of [...files(stream), ...files(explore)]) {
+  for (const file of [...files(stream), ...files(explore), ...files(studio)]) {
     const text = readFileSync(file, "utf8");
     const { program } = parseSync(file, text);
     const lineOf = (offset: number) => text.slice(0, offset).split("\n").length;
     const inStream = inside(file, stream);
+    const inStudio = inside(file, studio);
     const exploreXstate = inside(file, join(explore, "xstate"));
 
     // SAFETY: oxc's program body; only the fields of `Declaration` are read.
@@ -97,7 +100,20 @@ export const checkPatterns = (root = fileURLToPath(new URL("../", import.meta.ur
         });
 
       if (
+        inStudio &&
+        !effect &&
+        !/^(?:@highalch\/stream|ws|node:[a-z_/]+)$/.test(module) &&
+        !inside(resolved, studio)
+      )
+        problems.push({
+          file: relative(root, file),
+          line: lineOf(node.start),
+          message: `${module}: @highalch/studio imports effect, @highalch/stream, ws and node`,
+        });
+
+      if (
         !inStream &&
+        !inStudio &&
         !effect &&
         !/^@highalch\/(?:story|stream)$/.test(module) &&
         !/^node:(?:fs\/promises|path|url)$/.test(module) &&

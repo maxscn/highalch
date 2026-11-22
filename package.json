@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vp run -r build",
-    "typecheck": "tsc -p packages/tanstack-db && tsc -p packages/story && tsc -p packages/stream && tsc -p packages/explore && tsc -p packages/examples && tsc -p .",
+    "typecheck": "tsc -p packages/tanstack-db && tsc -p packages/story && tsc -p packages/stream && tsc -p packages/studio && tsc -p packages/explore && tsc -p packages/examples && tsc -p .",
     "check:patterns": "node scripts/check-patterns.ts",
     "test": "vp test --maxWorkers=2",
     "ready": "vp check && vp run check:patterns && vp run typecheck && vp run test && vp run build",

@@ -6,22 +6,27 @@ import { Schema } from "effect";
  * exploration (CI jobs that split its sequences) send to the same run and exploration, so the
  * app can lay every shard's tiles out in one grid.
  *
- * Over HTTP, the receiving app implements four endpoints under the stream's URL:
+ * The receiving app (the console, or `highalch studio` on this machine) implements two endpoints
+ * under the stream's URL:
  *
  * - `POST /v1/sessions`: `Authorization: Bearer <ingest token>` (or a GitHub OIDC token, with
  *   `HighAlch-Auth: github-oidc`), body `Open`; answers `201` with `Opened`. The ingest token is
  *   sent here only: everything after uses the session's own token.
- * - `POST /v1/sessions/:session/events`: `Authorization: Bearer <session token>`, body
- *   `application/x-ndjson`, one `Envelope` per line; answers `204`. A batch may be sent again
- *   after a failure: `seq` is unique per session, so the app keeps the first of each.
- * - `PUT /v1/sessions/:session/frames/:sha256`: the session's token, body `image/png`; answers
- *   `204`. Frames are named by the SHA-256 of their bytes (lower-case hex), which the app checks,
- *   and sent before the first event that names them; a frame already sent is not sent again.
- * - `POST /v1/sessions/:session/close`: the session's token; answers `204`. A session that
- *   closes no more takes events; a process that dies leaves it open, so treat a long-idle one as
- *   ended.
+ * - `GET /v1/sessions/:session/socket`: a WebSocket, offered the subprotocols `highalch.v1` and
+ *   `bearer.<session token>` (a browser can't send headers, and a URL ends up in logs); the app
+ *   accepts `highalch.v1`. On it, the process sends, in order:
+ *   - text messages: batches of `Envelope`s, one JSON per line (`seq` is unique per session, so
+ *     a batch sent again after a reconnect is kept once);
+ *   - binary messages: a frame (`framed`): the SHA-256 of its PNG (32 bytes), then the PNG. The
+ *     app checks the hash. A frame comes before the first event that names it, and once.
  *
- * A `401` or `403` turns the stream off for the rest of the process; it never fails a test.
+ *   The app answers with `Ack`s (`{ "type": "ack", "seq": 12 }`: everything up to 12 is kept);
+ *   the process sends again what is not acknowledged when it reconnects. It closes the socket with
+ *   code 1000 when the session ends; a process that dies leaves it open, so treat a session whose
+ *   socket is gone as ended.
+ *
+ * A refused session (`401`, `403`) turns the stream off for the rest of the process; it never
+ * fails a test.
  */
 export const version = 1 as const;
 
@@ -198,3 +203,68 @@ export type Event = typeof Event.Type;
 /** An event as sent: its number in the session (from 1) and when (ms since the epoch). */
 export const Envelope = Schema.Struct({ seq: Schema.Int, at: Schema.Finite, event: Event });
 export type Envelope = typeof Envelope.Type;
+
+/** The app's answer on the socket: every envelope up to `seq` is kept. */
+export const Ack = Schema.Struct({ type: Schema.Literal("ack"), seq: Schema.Int });
+export type Ack = typeof Ack.Type;
+
+/** The subprotocol a stream's socket speaks. */
+export const subprotocol = "highalch.v1";
+
+/** The subprotocol that carries a token to a socket: `bearer.<token>`. */
+export const bearer = (token: string) => `bearer.${token}`;
+
+/** The token among a socket's offered subprotocols (`Sec-WebSocket-Protocol`), if any. */
+export const tokenOf = (offered: string | null | undefined): string | undefined =>
+  (offered ?? "")
+    .split(",")
+    .map((each) => each.trim())
+    .find((each) => each.startsWith("bearer."))
+    ?.slice("bearer.".length);
+
+/**
+ * What a viewer of the studio receives (`GET /v1/watch`, a WebSocket offered `highalch.v1` and
+ * `bearer.<view token>`): first everything kept so far, then everything as it arrives. Text
+ * messages are one of these; binary messages are frames (`unframed`), each before the first
+ * event that names it.
+ */
+export const Watched = Schema.Union([
+  /** A session opened: a shard of a run. */
+  Schema.Struct({ type: Schema.Literal("session"), session: Schema.String, open: Open }),
+  /** Events of a session, in order. */
+  Schema.Struct({
+    type: Schema.Literal("events"),
+    session: Schema.String,
+    envelopes: Schema.Array(Envelope),
+  }),
+  /** A session ended: its process closed it. */
+  Schema.Struct({ type: Schema.Literal("closed"), session: Schema.String }),
+]);
+export type Watched = typeof Watched.Type;
+
+/** A SHA-256 is 32 bytes. */
+const digest = 32;
+
+const hex = (bytes: Uint8Array) =>
+  [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/** A frame as a binary message: its PNG's SHA-256 (lower-case hex) as 32 bytes, then the PNG. */
+export const framed = (image: string, png: Uint8Array): Uint8Array<ArrayBuffer> => {
+  if (!/^[0-9a-f]{64}$/.test(image)) throw new Error(`a frame is named by its SHA-256: ${image}`);
+
+  const message = new Uint8Array(digest + png.byteLength);
+
+  for (let index = 0; index < digest; index += 1)
+    message[index] = Number.parseInt(image.slice(index * 2, index * 2 + 2), 16);
+
+  message.set(png, digest);
+
+  return message;
+};
+
+/** A binary message as a frame: the SHA-256 it is named by (not checked here) and its PNG. */
+export const unframed = (message: Uint8Array) => {
+  if (message.byteLength <= digest) throw new Error("a frame message is a SHA-256 and a PNG");
+
+  return { image: hex(message.subarray(0, digest)), png: message.subarray(digest) };
+};

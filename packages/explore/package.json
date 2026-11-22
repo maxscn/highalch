@@ -49,10 +49,13 @@
   "devDependencies": {
     "@highalch/story": "workspace:*",
     "@highalch/stream": "workspace:*",
+    "@highalch/studio": "workspace:*",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
+    "ws": "catalog:",
     "xstate": "catalog:"
   },
   "peerDependencies": {

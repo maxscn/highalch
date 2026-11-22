@@ -31,7 +31,8 @@
       "@highalch/story/takumi": ["./packages/story/src/takumi/index.ts"],
       "@highalch/explore": ["./packages/explore/src/index.ts"],
       "@highalch/explore/xstate": ["./packages/explore/src/xstate/index.ts"],
-      "@highalch/stream": ["./packages/stream/src/index.ts"]
+      "@highalch/stream": ["./packages/stream/src/index.ts"],
+      "@highalch/studio": ["./packages/studio/src/index.ts"]
     }
   }
 }
