@@ -1,8 +1,8 @@
-import { Option } from "effect";
+import { Option, type Layer } from "effect";
 import type { Hosting } from "./host";
 import { pathOf, readText, slug, write, type Place } from "./files";
 import { due, type Rule } from "./rules";
-import { Mismatch, Stage, type Capture, type Shown } from "./stage";
+import { Mismatch, Stage, type Capture, type CurrentStage, type Shown } from "./stage";
 import { flatten, type Step, type Steps } from "./steps";
 import { describeDefect, World, type Options } from "./world";
 
@@ -81,6 +81,11 @@ export type StoryOptions = Options & {
   readonly traceTo?: string;
   /** Told of each step as it ends (an exploration streaming its tiles). */
   readonly observe?: Observer;
+  /**
+   * Layers added to the host's adapters for this story: what an integration needs the story to
+   * own (`Offline.memory()`: the storage, tabs and network of `@highalch/tanstack-offline`).
+   */
+  readonly adapters?: ReadonlyArray<Layer.Layer<never, never, CurrentStage>>;
 };
 
 /** One step of a trace: its number, label, and what every adapter showed after it. */
@@ -198,6 +203,7 @@ export const play = async (setup: Option.Option<Setup>, steps: ReadonlyArray<Ste
     Option.flatMap(options, (each) => Option.fromUndefinedOr(each.name)),
     Option.match(options, { onNone: () => "compare", onSome: (each) => each.capture ?? "compare" }),
     Option.exists(observer, (each) => each.frames),
+    Option.match(options, { onNone: () => [], onSome: (each) => each.adapters ?? [] }),
   );
 
   const observed = async (step: number, label: string, status: Observed["status"]) => {

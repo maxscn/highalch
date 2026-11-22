@@ -74,6 +74,8 @@ export class Stage {
      * streaming its tiles), even when it captures nothing; it leaves it in `shown`.
      */
     readonly live: boolean = false,
+    /** Layers the story itself adds to its host's adapters (`story.with({ adapters })`). */
+    private readonly adapters: ReadonlyArray<Layer.Layer<never, never, CurrentStage>> = [],
   ) {}
 
   /** The frame a screen painted after the step that just ran, for the story's observer. */
@@ -135,10 +137,13 @@ export class Stage {
   /** The host's adapters (given this stage) and the stage itself, as one Layer. */
   private adapting = () => {
     const stage = Layer.succeed(CurrentStage, this);
-    const provided = Option.match(this.world, {
-      onNone: () => [],
-      onSome: (world) => world.host.adapters ?? [],
-    });
+    const provided = [
+      ...Option.match(this.world, {
+        onNone: () => [],
+        onSome: (world) => world.host.adapters ?? [],
+      }),
+      ...this.adapters,
+    ];
 
     return Layer.mergeAll(stage, ...provided.map((each) => each.pipe(Layer.provide(stage))));
   };

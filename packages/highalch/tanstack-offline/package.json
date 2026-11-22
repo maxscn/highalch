@@ -1,0 +1,56 @@
+{
+  "name": "@highalch/tanstack-offline",
+  "version": "0.0.0",
+  "description": "Offline steps for HighAlch stories on TanStack DB's offline transactions: storage, tabs and a network the story owns.",
+  "keywords": [
+    "effect",
+    "highalch",
+    "offline",
+    "testing"
+  ],
+  "homepage": "https://github.com/maxscn/highalch/tree/main/packages/highalch/tanstack-offline#readme",
+  "bugs": {
+    "url": "https://github.com/maxscn/highalch/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxscn/highalch.git",
+    "directory": "packages/highalch/tanstack-offline"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@highalch/story": "workspace:*",
+    "@highalch/tanstack-db": "workspace:*",
+    "@tanstack/offline-transactions": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@highalch/story": "workspace:^",
+    "@highalch/tanstack-db": "workspace:^",
+    "@tanstack/offline-transactions": "1.2.0",
+    "effect": "^4.1.4"
+  }
+}

@@ -29,6 +29,7 @@
       "@highalch/screen": ["./packages/highalch/screen/src/index.ts"],
       "@highalch/screen/internal": ["./packages/highalch/screen/src/internal.ts"],
       "@highalch/takumi": ["./packages/highalch/takumi/src/index.ts"],
+      "@highalch/tanstack-offline": ["./packages/highalch/tanstack-offline/src/index.ts"],
       "@highalch/tanstack-form": ["./packages/highalch/tanstack-form/src/index.ts"],
       "@highalch/tanstack-form/vite": ["./packages/highalch/tanstack-form/src/vite.ts"],
       "@highalch/tanstack-form/react-form": ["./packages/highalch/tanstack-form/src/react-form.ts"],

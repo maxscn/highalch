@@ -154,6 +154,8 @@ export type Client = {
   readonly db: DbClient;
   readonly wire: Wire;
   readonly observed: Map<string, Observed>;
+  /** Who records the commands the app sends itself through this client's wire. */
+  readonly watcher: Watcher;
 };
 
 /**
@@ -180,12 +182,36 @@ export class Clients {
 
     const db = await this.connector.connect(scope);
     const wire = this.world.wire(scope);
-    const client = { scope, db, wire, observed: new Map<string, Observed>() };
+    const watcher = this.watcher(scope);
+    const client = { scope, db, wire, observed: new Map<string, Observed>(), watcher };
 
     this.clients.set(scope, client);
-    wire.watchers.push(this.watcher(scope));
+    wire.watchers.push(watcher);
 
     return client;
+  };
+
+  /**
+   * Closes the client of `scope`, as a tab that reloads: its sources stop being observed, and the
+   * commands it had not settled go with it (a durable queue may send them again, as the app's).
+   * The next step that needs the client opens a new one.
+   */
+  restart = async (scope = this.world.scope) => {
+    const client = this.clients.get(scope);
+
+    if (!client) return;
+
+    const gone = this.runs.filter((run) => run.scope === scope && pending(run));
+
+    for (const each of client.observed.values()) each.close();
+
+    this.clients.delete(scope);
+    client.wire.watchers.splice(client.wire.watchers.indexOf(client.watcher), 1);
+
+    await this.connector.close(client.db, scope);
+    await Promise.all(gone.map((run) => run.done));
+
+    for (const run of gone) this.runs.splice(this.runs.indexOf(run), 1);
   };
 
   /** The client of `scope`; it must have been opened. */

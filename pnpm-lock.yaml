@@ -298,6 +298,9 @@ importers:
       '@highalch/tanstack-db':
         specifier: workspace:*
         version: link:../tanstack-db
+      '@highalch/tanstack-offline':
+        specifier: workspace:*
+        version: link:../tanstack-offline
       '@lowalch/tanstack-db':
         specifier: workspace:*
         version: link:../../lowalch/tanstack-db
@@ -633,6 +636,30 @@ importers:
       react:
         specifier: 'catalog:'
         version: 19.2.7
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.5.1(@types/node@24.19.2)(@vitest/ui@5.1.0)(happy-dom@20.11.1)(typescript@7.0.2)(yaml@2.9.1)
+
+  packages/highalch/tanstack-offline:
+    devDependencies:
+      '@highalch/story':
+        specifier: workspace:*
+        version: link:../story
+      '@highalch/tanstack-db':
+        specifier: workspace:*
+        version: link:../tanstack-db
+      '@tanstack/offline-transactions':
+        specifier: 'catalog:'
+        version: 1.2.0(@tanstack/db@1.0.0-rc.1.5(typescript@7.0.2))
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      effect:
+        specifier: 'catalog:'
+        version: 4.1.4
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

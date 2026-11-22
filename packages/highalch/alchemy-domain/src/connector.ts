@@ -13,7 +13,8 @@ import {
   type Rows,
 } from "@lowalch/tanstack-db/internal";
 import { Provider } from "@lowalch/tanstack-db/react";
-import type { Rule } from "@highalch/story/internal";
+import { CurrentStage, type Rule } from "@highalch/story/internal";
+import { Devices, type Device } from "@highalch/tanstack-offline";
 import { Connect, type Connector } from "@highalch/tanstack-db/internal";
 import { plain, type Clients, type Observed } from "@highalch/tanstack-db/internal";
 import { isDomainHost } from "./host";
@@ -145,7 +146,12 @@ const cursor = async (world: World, scope: string, stream: string) => {
  * flight through.
  */
 export const lowalch =
-  (settings: ClientSettings, rules: () => ReadonlyArray<Rule>) =>
+  (
+    settings: ClientSettings,
+    rules: () => ReadonlyArray<Rule>,
+    /** The device of a scope, when the story owns devices (`Offline.memory()`). */
+    deviceOf: (scope: string) => Promise<Option.Option<Device>> = async () => Option.none(),
+  ) =>
   (world: World): Connector => ({
     connect: async (scope) => {
       const wire = world.wire(scope);
@@ -159,6 +165,19 @@ export const lowalch =
 
       // SAFETY: the wrapped client has the Api client's endpoints, as its `Client` key yields them.
       const layer = Layer.succeed(api.Client, wire.wrap(raw, world.queries) as never);
+      const device = await deviceOf(scope);
+
+      // A story that owns devices makes clients with a durable queue on them; its entry (and
+      // the offline library) loads only then.
+      const queue = await Option.match(device, {
+        onNone: async () => settings.offline,
+        onSome: async ({ storage, network, tab }) =>
+          (await import("@lowalch/tanstack-db/offline")).offline({
+            storage,
+            onlineDetector: network,
+            leaderElection: tab(),
+          }),
+      });
 
       return LowAlch.make({
         api,
@@ -170,6 +189,7 @@ export const lowalch =
         settleTimeout: settings.settleTimeout ?? 2_000,
         retry: settings.retry ?? retryTransport,
         clock: world.clock.effect(waitKind),
+        ...(queue !== undefined && { offline: queue }),
       });
     },
 
@@ -269,4 +289,13 @@ export const lowalch =
 
 /** The connector as a Layer: what a host's `adapters` (or `story.with`) provide. */
 export const connect = (settings: ClientSettings, rules: () => ReadonlyArray<Rule>) =>
-  Layer.succeed(Connect, lowalch(settings, rules));
+  Layer.effect(
+    Connect,
+    Effect.gen(function* () {
+      const stage = yield* CurrentStage;
+
+      return lowalch(settings, rules, async (scope) =>
+        Option.map(await stage.provided(Devices), (devices) => devices.of(scope)),
+      );
+    }),
+  );

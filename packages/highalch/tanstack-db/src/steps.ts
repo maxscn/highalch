@@ -356,6 +356,18 @@ export const reload = <Row extends object>(source: Source<Row>, options: Scoped 
   });
 
 /**
+ * `restart()` reloads the tab: the step's client (or `as`'s) closes, and the next step that needs
+ * it opens a new one. Sources are opened again by the steps that read them, as a reloaded app
+ * mounts again. Commands the closed client had not settled are gone with it; what a durable queue
+ * sends again is recorded as the app's.
+ */
+export const restart = (options: Scoped = {}) =>
+  dbStep("restart the client", async (db, world) => {
+    await db.restart(options.as);
+    await world.settle();
+  });
+
+/**
  * What a source shows in the step's client (or `as`'s), as a rule reads it: its rows by key, each
  * with `$hasPendingWrites`. A source not observed yet is opened (without settling the world).
  */

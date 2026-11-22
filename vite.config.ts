@@ -59,6 +59,10 @@ const workspace = [
   },
   { find: /^@highalch\/takumi$/, replacement: source("./packages/highalch/takumi/src/index.ts") },
   {
+    find: /^@highalch\/tanstack-offline$/,
+    replacement: source("./packages/highalch/tanstack-offline/src/index.ts"),
+  },
+  {
     find: /^@highalch\/tanstack-form$/,
     replacement: source("./packages/highalch/tanstack-form/src/index.ts"),
   },

@@ -36,7 +36,7 @@ parallel, and start no dev servers.
     `./internal`).
   - `@highalch/story`: the runner, world, rules and the host interface (`.`, `./internal`).
   - `@highalch/tanstack-db` (`Db`), `@highalch/xstate` (`Machine`), `@highalch/screen`
-    (`Screen`), `@highalch/takumi` (`Takumi`), `@highalch/tanstack-form` (`Form`; `./vite`,
+    (`Screen`), `@highalch/takumi` (`Takumi`), `@highalch/tanstack-offline` (`Offline`), `@highalch/tanstack-form` (`Form`; `./vite`,
     `./react-form`) and `@highalch/alchemy-domain` (`Alchemy`: the Domain hosted in memory with
     LowAlch clients, its steps and the feed rules).
   - `@highalch/explore` explores stories (`.`, `./xstate`), `@highalch/stream` streams them to an

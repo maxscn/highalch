@@ -4,16 +4,17 @@ The story runner, and the guide to HighAlch stories: given server history, when 
 another client or the world acts, then what each source shows, its read state and how each
 command settled. Each integration is its own package, adding its steps to the same runner:
 
-| Package                                                   | What                                                                                                |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `@highalch/story`                                         | The runner (`Story.make`), the world (transport faults, held replies, time), rules, `Story.local()` |
-| [`@highalch/tanstack-db`](../tanstack-db/README.md)       | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)       |
-| [`@highalch/alchemy-domain`](../alchemy-domain/README.md) | `Alchemy`: an alchemy Domain hosted in memory with LowAlch clients, `given`, `remote`, feed rules   |
-| [`@highalch/xstate`](../xstate/README.md)                 | `Machine`: XState machines stepped purely or running, in the same story                             |
-| [`@highalch/screen`](../screen/README.md)                 | `Screen`: a mounted component, its frames vs reviewed baselines, its layout for rules               |
-| [`@highalch/takumi`](../takumi/README.md)                 | `Takumi.frames()` and `Takumi.layout()`: takumi's WASM renderer as a screen's frames and layout     |
-| [`@highalch/tanstack-form`](../tanstack-form/README.md)   | `Form`: type into and submit the app's own forms; `./vite`: the `highalch()` plugin that finds them |
-| [`@highalch/explore`](../explore/README.md)               | `Explore`: a story for every sequence of what can happen, run deterministically, sharded, streamed  |
+| Package                                                       | What                                                                                                |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `@highalch/story`                                             | The runner (`Story.make`), the world (transport faults, held replies, time), rules, `Story.local()` |
+| [`@highalch/tanstack-db`](../tanstack-db/README.md)           | `Db`: a client's sources, its commands, their settling, readers and rules (plain TanStack DB)       |
+| [`@highalch/alchemy-domain`](../alchemy-domain/README.md)     | `Alchemy`: an alchemy Domain hosted in memory with LowAlch clients, `given`, `remote`, feed rules   |
+| [`@highalch/xstate`](../xstate/README.md)                     | `Machine`: XState machines stepped purely or running, in the same story                             |
+| [`@highalch/screen`](../screen/README.md)                     | `Screen`: a mounted component, its frames vs reviewed baselines, its layout for rules               |
+| [`@highalch/takumi`](../takumi/README.md)                     | `Takumi.frames()` and `Takumi.layout()`: takumi's WASM renderer as a screen's frames and layout     |
+| [`@highalch/tanstack-offline`](../tanstack-offline/README.md) | `Offline`: take the network away and bring it back; a stored queue that outlives a restarted client |
+| [`@highalch/tanstack-form`](../tanstack-form/README.md)       | `Form`: type into and submit the app's own forms; `./vite`: the `highalch()` plugin that finds them |
+| [`@highalch/explore`](../explore/README.md)                   | `Explore`: a story for every sequence of what can happen, run deterministically, sharded, streamed  |
 
 `@highalch/story` depends on `effect` only. Each package's README names its own peers.
 
@@ -345,6 +346,20 @@ Form.then(renameForm, { values: { title: "locked" } }),
 - Commands the app sends itself (a form's `onSubmit`, a component's handler) are recorded as the
   app's, so `Db.rejected`, `Db.commands()` and rest see them: pending until their reply arrives,
   then `Committed` or `Rejected`.
+
+**Offline.** For apps that queue their commands durably (`offline()` of
+`@lowalch/tanstack-db/offline`, or a plain `startOfflineExecutor`), the story owns the stored
+queue, the tabs and the network: `adapters: [Offline.memory()]` in the story's options, from
+[`@highalch/tanstack-offline`](../tanstack-offline/README.md). A story's `adapters` are Layers
+added to its host's.
+
+```ts
+Offline.down(), // the browser reports no network: calls are stored, not sent
+Db.when(notes.rename, { NoteId: "n1", title: "Abel" }),
+Db.restart(), // the tab reloads: the next step opens a new client over the same queue
+Db.then(one, [{ title: "Abel", $hasPendingWrites: true }]), // the restored call shows again
+Offline.up(), // sent, with the same commandId
+```
 
 **Traces.** `story.with({ name, trace: true, traces, update })` keeps a text snapshot of the story:
 each step, then what every adapter shows after it (each observed source's rows, the commands and

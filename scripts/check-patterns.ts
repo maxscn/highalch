@@ -103,7 +103,22 @@ const packages: ReadonlyArray<Package> = [
   {
     name: "@highalch/alchemy-domain",
     folder: "packages/highalch/alchemy-domain/src",
-    allows: of(effect, react, tanstack, story, db, lowalch, alchemy),
+    allows: of(
+      effect,
+      react,
+      tanstack,
+      story,
+      db,
+      lowalch,
+      alchemy,
+      /^@highalch\/tanstack-offline$/,
+      /^@lowalch\/tanstack-db\/offline$/,
+    ),
+  },
+  {
+    name: "@highalch/tanstack-offline",
+    folder: "packages/highalch/tanstack-offline/src",
+    allows: of(effect, story, db, /^@tanstack\/offline-transactions$/),
   },
   {
     name: "@highalch/stream",
